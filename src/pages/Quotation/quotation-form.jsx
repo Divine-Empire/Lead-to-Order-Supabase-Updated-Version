@@ -58,7 +58,8 @@ const QuotationForm = ({
 
   // Lead number states
   const [showLeadNoDropdown, setShowLeadNoDropdown] = useState(false);
-  const [leadNoOptions, setLeadNoOptions] = useState(["Select Lead No."]);
+  // Each option: { value, label, sourceType, recordId, companyName, contactName, contactNo }
+  const [leadNoOptions, setLeadNoOptions] = useState([]);
   const [leadNoData, setLeadNoData] = useState({});
   const [leadNob, setLeadNob] = useState("");
 
@@ -284,130 +285,83 @@ const QuotationForm = ({
   }, []);
 
 
-  // Fetch lead and enquiry numbers from Supabase tables (leads, enquiry_tracker_for_leads, enquiries, enquiry_tracker)
+  // Lead/Enquiry No. suggestions now come from `enquiry_pending_view` -- the
+  // same Postgres view that backs the Enquiry Tracker's "Pending" tab, and
+  // which already unifies both lead-sourced and direct-enquiry rows via its
+  // `source_type`/`record_id` columns. This avoids ever bulk-loading the
+  // (several-thousand-row) leads/enquiries tables into the browser: only the
+  // latest 25 pending leads + 25 pending enquiries are fetched up front, and
+  // typing in the field re-queries the DB directly (see searchLeadNumbers).
+  const PENDING_VIEW_COLUMNS = "display_no, source_type, record_id, company_name, phone_number, person_name";
+
+  const mapPendingRowsToOptions = (rows) =>
+    (rows || [])
+      .filter((row) => row.display_no)
+      .map((row) => ({
+        value: row.display_no,
+        label: row.company_name ? `${row.display_no} — ${row.company_name}` : row.display_no,
+        sourceType: row.source_type,
+        recordId: row.record_id,
+        companyName: row.company_name || "",
+        contactName: row.person_name || "",
+        contactNo: row.phone_number || "",
+      }));
+
+  // Fetch the latest 25 pending leads + 25 pending enquiries up front.
   useEffect(() => {
-    const fetchLeadNumbers = async () => {
+    const fetchInitialPendingLeadNos = async () => {
       try {
-        const leadNoOptionsData = ["Select Lead No."];
-        const leadNoDataMap = {};
+        const [leadsRes, enquiriesRes] = await Promise.all([
+          supabase
+            .from("enquiry_pending_view")
+            .select(PENDING_VIEW_COLUMNS)
+            .eq("source_type", "lead")
+            .order("last_activity_at", { ascending: false })
+            .limit(25),
+          supabase
+            .from("enquiry_pending_view")
+            .select(PENDING_VIEW_COLUMNS)
+            .eq("source_type", "enquiry")
+            .order("last_activity_at", { ascending: false })
+            .limit(25),
+        ]);
 
-        // 1. Fetch from leads table
-        const { data: leadsData, error: leadsError } = await supabase
-          .from("lto_leads")
-          .select("*");
+        if (leadsRes.error) console.error("Error fetching pending leads:", leadsRes.error);
+        if (enquiriesRes.error) console.error("Error fetching pending enquiries:", enquiriesRes.error);
 
-        if (!leadsError && leadsData) {
-          leadsData.forEach((row) => {
-            const leadNo = row.lead_no || row["LD-Lead-No"];
-            if (leadNo && !leadNoOptionsData.includes(leadNo)) {
-              leadNoOptionsData.push(leadNo);
-              leadNoDataMap[leadNo] = {
-                sheet: "LEADS",
-                companyName: row.company_name || row["Company_Name"] || "",
-                address: row.address || row["Address"] || "",
-                state: row.state || row["State"] || "",
-                contactName: row.person_name || row["Salesperson_Name"] || row.client_name || "",
-                contactNo: row.phone_number || row["Phone_Number"] || "",
-                gstin: row.gst_number || row["GST_Number"] || "",
-                rowData: row,
-              };
-            }
-          });
-        }
-
-        // 2. Fetch from enquiry_tracker_for_leads table (pending leads in enquiry tracker)
-        const { data: leadsTrackerData, error: leadsTrackerError } = await supabase
-          .from("lto_enquiry_tracker_for_leads")
-          .select("*")
-          .order("created_at", { ascending: false });
-
-        if (!leadsTrackerError && leadsTrackerData) {
-          leadsTrackerData.forEach((row) => {
-            const parentLead = leadsData?.find(l => l.id === row.lead_id || l.lead_no === row.lead_no || l["LD-Lead-No"] === row.lead_no) || {};
-            const leadNo = row.lead_no || row.enquiry_no || parentLead.lead_no || parentLead["LD-Lead-No"];
-            if (leadNo) {
-              if (!leadNoOptionsData.includes(leadNo)) {
-                leadNoOptionsData.push(leadNo);
-              }
-              const existing = leadNoDataMap[leadNo] || {};
-              leadNoDataMap[leadNo] = {
-                sheet: "LEADS",
-                companyName: row.company_name || existing.companyName || parentLead.company_name || parentLead["Company_Name"] || "",
-                address: row.address || row.location || existing.address || parentLead.address || parentLead["Address"] || "",
-                state: row.state || row.enquiry_for_state || existing.state || parentLead.state || parentLead["State"] || "",
-                contactName: row.person_name || row.sales_person_name || row.sc_name || existing.contactName || parentLead.person_name || parentLead["Salesperson_Name"] || "",
-                contactNo: row.phone_number || existing.contactNo || parentLead.phone_number || parentLead["Phone_Number"] || "",
-                gstin: row.gst_number || existing.gstin || parentLead.gst_number || parentLead["GST_Number"] || "",
-                rowData: { ...parentLead, ...(existing.rowData || {}), ...row },
-              };
-            }
-          });
-        }
-
-        // 3. Fetch from enquiries table
-        const { data: enquiryData, error: enquiryError } = await supabase
-          .from("lto_enquiries")
-          .select("*");
-
-        if (!enquiryError && enquiryData) {
-          enquiryData.forEach((row) => {
-            const leadNo = row.enquiry_no || row["Enquiry No."];
-            if (leadNo && !leadNoOptionsData.includes(leadNo)) {
-              leadNoOptionsData.push(leadNo);
-              leadNoDataMap[leadNo] = {
-                sheet: "ENQUIRY",
-                companyName: row.company_name || "",
-                address: row.location || row.shipping_address || "",
-                state: row.enquiry_for_state || row.state || "",
-                contactName: row.sales_person_name || row.sales_coordinator_name || "",
-                contactNo: row.phone_number || "",
-                gstin: row.gst_number || "",
-                shipTo: row.shipping_address || "",
-                rowData: row,
-              };
-            }
-          });
-        }
-
-        // 4. Fetch from enquiry_tracker table (pending enquiries in enquiry tracker)
-        const { data: trackerData, error: trackerError } = await supabase
-          .from("lto_enquiry_tracker")
-          .select("*")
-          .order("created_at", { ascending: false });
-
-        if (!trackerError && trackerData) {
-          trackerData.forEach((row) => {
-            const parentEnq = enquiryData?.find(e => e.id === row.enquiry_id || e.enquiry_no === row.enquiry_no || e["Enquiry No."] === row.enquiry_no) || {};
-            const leadNo = row.enquiry_no || row.lead_no || parentEnq.enquiry_no || parentEnq["Enquiry No."];
-            if (leadNo) {
-              if (!leadNoOptionsData.includes(leadNo)) {
-                leadNoOptionsData.push(leadNo);
-              }
-              const existing = leadNoDataMap[leadNo] || {};
-              leadNoDataMap[leadNo] = {
-                sheet: "ENQUIRY",
-                companyName: row.company_name || existing.companyName || parentEnq.company_name || "",
-                address: row.location || row.address || existing.address || parentEnq.location || parentEnq.shipping_address || "",
-                state: row.enquiry_for_state || row.state || existing.state || parentEnq.enquiry_for_state || parentEnq.state || "",
-                contactName: row.sales_person_name || existing.contactName || parentEnq.sales_person_name || parentEnq.sales_coordinator_name || "",
-                contactNo: row.phone_number || existing.contactNo || parentEnq.phone_number || "",
-                gstin: row.gst_number || existing.gstin || parentEnq.gst_number || "",
-                shipTo: row.shipping_address || existing.shipTo || parentEnq.shipping_address || "",
-                rowData: { ...parentEnq, ...(existing.rowData || {}), ...row },
-              };
-            }
-          });
-        }
-
-        setLeadNoOptions(leadNoOptionsData);
-        setLeadNoData(leadNoDataMap);
+        setLeadNoOptions(mapPendingRowsToOptions([...(leadsRes.data || []), ...(enquiriesRes.data || [])]));
       } catch (error) {
-        console.error("Error fetching lead numbers:", error);
+        console.error("Error fetching initial pending lead/enquiry numbers:", error);
       }
     };
 
-    fetchLeadNumbers();
+    fetchInitialPendingLeadNos();
   }, []);
+
+  // Live search, called (debounced) from ConsigneeDetails as the user types.
+  // Restricted to pending records, same as the initial suggestion list.
+  const searchLeadNumbers = async (term) => {
+    const trimmed = (term || "").trim();
+    if (!trimmed) return null; // signal caller to fall back to the initial list
+
+    try {
+      const { data, error } = await supabase
+        .from("enquiry_pending_view")
+        .select(PENDING_VIEW_COLUMNS)
+        .ilike("search_text", `%${trimmed.toLowerCase()}%`)
+        .order("last_activity_at", { ascending: false })
+        .limit(25);
+
+      if (error) {
+        console.error("Error searching pending lead/enquiry numbers:", error);
+        return [];
+      }
+      return mapPendingRowsToOptions(data);
+    } catch (error) {
+      console.error("Error searching pending lead/enquiry numbers:", error);
+      return [];
+    }
+  };
 
   const handleSpecialDiscountChangeWrapper = (value) => {
     const discount = Number(value) || 0;
@@ -427,20 +381,57 @@ const QuotationForm = ({
     return String(value);
   };
 
-  // Handle lead number selection and autofill
-  // Handle lead number selection and autofill
-  const handleLeadNoSelect = async (selectedLeadNo) => {
-    if (
-      !selectedLeadNo ||
-      selectedLeadNo === "Select Lead No." ||
-      !leadNoData[selectedLeadNo]
-    ) {
+  // Handle lead number selection and autofill.
+  // `meta` is the {sourceType, recordId, ...} of the suggestion the user
+  // picked (from the pending-view search) -- we no longer preload every
+  // lead/enquiry's full detail, so the full row is fetched on demand here,
+  // keyed off meta.recordId, then cached into leadNoData for this session.
+  const handleLeadNoSelect = async (selectedLeadNo, meta = null) => {
+    if (!selectedLeadNo || selectedLeadNo === "Select Lead No.") {
       return;
     }
 
-    setIsItemsLoading(true);
+    // Already resolved earlier in this session (e.g. selected twice)? Reuse it.
+    let leadData = leadNoData[selectedLeadNo];
 
-    const leadData = leadNoData[selectedLeadNo];
+    if (!leadData) {
+      if (!meta || !meta.recordId) return; // nothing to look up
+
+      setIsItemsLoading(true);
+      try {
+        const isLeadRecord = meta.sourceType === "lead";
+        const { data: fullRow, error: rowErr } = await supabase
+          .from(isLeadRecord ? "lto_leads" : "lto_enquiries")
+          .select("*")
+          .eq("id", meta.recordId)
+          .maybeSingle();
+
+        if (rowErr || !fullRow) {
+          console.error("Error fetching lead/enquiry detail:", rowErr);
+          setIsItemsLoading(false);
+          return;
+        }
+
+        leadData = {
+          sheet: isLeadRecord ? "LEADS" : "ENQUIRY",
+          companyName: fullRow.company_name || meta.companyName || "",
+          address: fullRow.address || fullRow.location || fullRow.shipping_address || "",
+          state: fullRow.state || fullRow.enquiry_for_state || "",
+          contactName: fullRow.person_name || fullRow.sales_person_name || fullRow.sales_coordinator_name || fullRow.client_name || meta.contactName || "",
+          contactNo: fullRow.phone_number || meta.contactNo || "",
+          gstin: fullRow.gst_number || "",
+          shipTo: fullRow.shipping_address || "",
+          rowData: fullRow,
+        };
+        setLeadNoData((prev) => ({ ...prev, [selectedLeadNo]: leadData }));
+      } catch (error) {
+        console.error("Error resolving selected lead/enquiry:", error);
+        setIsItemsLoading(false);
+        return;
+      }
+    } else {
+      setIsItemsLoading(true);
+    }
 
     // Track NOB for pricing logic
     const nob = leadData.rowData?.nob || leadData.rowData?.NOB || leadData.rowData?.nature_of_business || "";
@@ -813,6 +804,7 @@ const QuotationForm = ({
             showLeadNoDropdown={showLeadNoDropdown}
             setShowLeadNoDropdown={setShowLeadNoDropdown}
             leadNoOptions={leadNoOptions}
+            onSearchLeadNo={searchLeadNumbers}
             handleLeadNoSelect={handleLeadNoSelect}
           />
         </div>

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Building2, Users, UserCheck, Layers, MapPin, Package, Clock, Database, ChevronRight } from "lucide-react";
 import supabase from "../../utils/supabase";
+import { AuthContext } from "../../App";
 
 // Sub-master Components
 import ClientMaster from "./ClientMaster";
@@ -68,6 +69,15 @@ export default function Master() {
   const { substage } = useParams();
   const navigate = useNavigate();
   const [counts, setCounts] = useState({});
+  const authContext = useContext(AuthContext) || {};
+  const { isAdmin = () => false } = authContext;
+
+  // Non-admin (USER role) users may only access the Client Master sub-stage;
+  // every other master-data sub-stage (SC Distribution, CRM Distribution,
+  // Dropdowns, Consignor Details, Items, TAT Configuration) is admin-only.
+  const visibleNavItems = isAdmin()
+    ? masterNavItems
+    : masterNavItems.filter((item) => item.id === "client");
 
   // Resolve current tab (default to 'client' or alias 'tat')
   const currentTab = !substage ? "client" : substage === "tat" ? "tat-config" : substage;
@@ -78,6 +88,15 @@ export default function Master() {
       navigate("/master/client", { replace: true });
     }
   }, [substage, navigate]);
+
+  useEffect(() => {
+    // Non-admins are restricted to Client Master -- bounce any direct/typed
+    // URL to another sub-stage back to the one they're allowed to see.
+    if (!isAdmin() && currentTab !== "client") {
+      navigate("/master/client", { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTab, isAdmin]);
 
   useEffect(() => {
     const fetchCounts = async () => {
@@ -96,7 +115,7 @@ export default function Master() {
       };
 
       const results = await Promise.all(
-        masterNavItems.map(async (item) => ({
+        visibleNavItems.map(async (item) => ({
           id: item.id,
           count: await fetchTableCount(item.table),
         }))
@@ -110,9 +129,17 @@ export default function Master() {
     };
 
     fetchCounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTab]);
 
   const renderActiveComponent = () => {
+    // Belt-and-suspenders: even if a non-admin somehow reaches this point
+    // with a non-client tab (e.g. before the redirect effect above runs),
+    // never render an admin-only sub-master for them.
+    if (!isAdmin() && currentTab !== "client") {
+      return <ClientMaster />;
+    }
+
     switch (currentTab) {
       case "client":
         return <ClientMaster />;
@@ -146,7 +173,7 @@ export default function Master() {
         </div>
 
         <nav className="space-y-1">
-          {masterNavItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentTab === item.id || (currentTab === "tat-config" && item.id === "tat-config" && substage === "tat");
             const count = counts[item.id];

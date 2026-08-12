@@ -9,7 +9,7 @@ import logoSvg from "../assests/logo.jpeg"
 function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     const location = useLocation()
     const authContext = useContext(AuthContext) || {}
-    const { isAdmin = () => false, logout = () => {} } = authContext
+    const { isAdmin = () => false, logout = () => {}, getUsernamesToFilter = () => [] } = authContext
     const [counts, setCounts] = useState({
         callTracker: null,
         enquiryTracker: null,
@@ -31,6 +31,11 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                     }
                 };
 
+                // Role-based access: non-admin (USER) accounts only ever count
+                // rows belonging to their own assigned SC (+ delegated alternate
+                // access); admins see the true system-wide counts.
+                const usernamesToFilter = isAdmin() ? null : getUsernamesToFilter();
+
                 // Call Tracker Pending count
                 let callCount = 0;
                 try {
@@ -38,14 +43,15 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                     let allTrackerData = [];
                     let fetchMore = true;
                     let currentFrom = 0;
-                    
+
                     while (fetchMore) {
-                        const { data, error } = await supabase
+                        let trackerQuery = supabase
                             .from("lto_call_tracker_for_leads")
-                            .select("lead_id, enquiry_received_status, created_at")
-                            .order("created_at", { ascending: false })
-                            .range(currentFrom, currentFrom + 999);
-                        
+                            .select("lead_id, enquiry_received_status, created_at, sc_name")
+                            .order("created_at", { ascending: false });
+                        if (usernamesToFilter) trackerQuery = trackerQuery.in("sc_name", usernamesToFilter);
+                        const { data, error } = await trackerQuery.range(currentFrom, currentFrom + 999);
+
                         if (error) break;
                         if (data && data.length > 0) {
                             allTrackerData = [...allTrackerData, ...data];
@@ -69,6 +75,7 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                         .from("lto_leads")
                         .select("id")
                         .not("planned_at", "is", null);
+                    if (usernamesToFilter) group1Query = group1Query.in("sc_name", usernamesToFilter);
 
                     const { data: g1Leads } = await group1Query;
                     const existingIdsSet = new Set(existingLeadIds);
@@ -97,8 +104,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                     ]);
 
                     const [pendingLeadsCount, pendingDirectCount] = await Promise.all([
-                        countOpenRows("lto_call_tracker_for_leads", "lead_id", closedLeadIds, true),
-                        countOpenRows("lto_enquiries", "id", closedEnquiryIds, false),
+                        countOpenRows("lto_call_tracker_for_leads", "lead_id", closedLeadIds, true, usernamesToFilter),
+                        countOpenRows("lto_enquiries", "id", closedEnquiryIds, false, usernamesToFilter),
                     ]);
 
                     enquiryCount = pendingLeadsCount + pendingDirectCount;
@@ -106,18 +113,25 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                     console.error("Error fetching enquiry tracker count:", e);
                 }
 
+                let clientTotalQuery = supabase.from("lto_client_master").select("*", { count: "exact", head: true });
+                let clientNotRelevantQuery = supabase.from("lto_client_master").select("*", { count: "exact", head: true }).eq("isRelevant", false);
+                if (usernamesToFilter) {
+                    clientTotalQuery = clientTotalQuery.in("sc_name", usernamesToFilter);
+                    clientNotRelevantQuery = clientNotRelevantQuery.in("sc_name", usernamesToFilter);
+                }
+
                 const [
-                    clientTotalRes, 
+                    clientTotalRes,
                     clientNotRelevantRes,
                     itemsRes
                 ] = await Promise.all([
                     // Client Master total clients count
-                    safeFetch(supabase.from("lto_client_master").select("*", { count: "exact", head: true })),
+                    safeFetch(clientTotalQuery),
 
                     // Client Master non-relevant clients count
-                    safeFetch(supabase.from("lto_client_master").select("*", { count: "exact", head: true }).eq("isRelevant", false)),
+                    safeFetch(clientNotRelevantQuery),
 
-                    // Items total count
+                    // Items total count (master data -- not SC-scoped)
                     safeFetch(supabase.from("lto_items").select("*", { count: "exact", head: true }))
                 ]);
 
@@ -172,15 +186,14 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         },
     ]
 
-    // Add admin-only route if needed
-    if (isAdmin && isAdmin()) {
-        routes.push({
-            href: "/report",
-            label: "Report",
-            icon: <ShieldIcon className="h-5 w-5 mr-3" />,
-            active: location.pathname.startsWith("/report"),
-        })
-    }
+    // Report is visible to everyone -- admins see system-wide data, other
+    // users see data scoped to their own assigned SC.
+    routes.push({
+        href: "/report",
+        label: "Report",
+        icon: <ShieldIcon className="h-5 w-5 mr-3" />,
+        active: location.pathname.startsWith("/report"),
+    })
 
     return (
         <>

@@ -49,8 +49,18 @@ const FOS_RECEIVERS = [
 ];
 
 function Report() {
-    const { isAdmin } = useContext(AuthContext);
+    const { isAdmin, getUsernamesToFilter } = useContext(AuthContext);
     const [activeTab, setActiveTab] = useState("calling"); // "calling" or "fos"
+
+    // Non-admins (USER role) are always scoped to their own SC name (plus any
+    // delegated alternate access); admins may additionally narrow further via
+    // the SC filter dropdown. Returns an array of allowed names, or null when
+    // there is no restriction to apply (admin, "All" selected).
+    const getScFilterList = (adminSelectedScName) => {
+        if (!isAdmin()) return getUsernamesToFilter();
+        if (adminSelectedScName && adminSelectedScName !== "all") return [adminSelectedScName];
+        return null;
+    };
 
     // calling report state
     const [metrics, setMetrics] = useState({
@@ -142,7 +152,7 @@ function Report() {
     }, []);
 
     const fetchMetrics = useCallback(async () => {
-        if (!isAdmin()) return;
+        if (activeTab !== "calling") return;
         setIsLoading(true);
         try {
             // Helper to parse dates strictly
@@ -181,7 +191,8 @@ function Report() {
             // 1. Fetch Calls (call_tracker_for_leads)
             const { data: callsData, error: callsError } = await fetchAllRows(() => {
                 let q = supabase.from("lto_call_tracker_for_leads").select("created_at, sc_name");
-                if (filters.scName !== "all") q = q.eq("sc_name", filters.scName);
+                const scList = getScFilterList(filters.scName);
+                if (scList) q = q.in("sc_name", scList);
                 return q;
             });
             if (callsError) console.error("Error fetching calls:", callsError);
@@ -202,8 +213,9 @@ function Report() {
             // itself only has contact/assignment fields, no stage/quotation data.
             const { data: leadsData, error: leadsError } = await fetchAllRows(() => {
                 let q = supabase.from("lto_leads").select("id, created_at, sc_name");
-                if (filters.scName !== "all") {
-                    q = q.eq("sc_name", filters.scName);
+                const scList = getScFilterList(filters.scName);
+                if (scList) {
+                    q = q.in("sc_name", scList);
                 }
                 return q;
             });
@@ -302,13 +314,14 @@ function Report() {
             if (enquiryError) {
                 console.error("Error fetching enquiries:", enquiryError);
             } else if (enquiryData) {
-                const selectedFirstWord = filters.scName !== "all" ? firstWord(filters.scName) : null;
+                const scList = getScFilterList(filters.scName);
+                const scFirstWords = scList ? scList.map(firstWord) : null;
 
                 enquiryData.forEach(row => {
                     // SC Filter check
-                    const matchesSC = selectedFirstWord === null ||
-                        (row.sc_name && firstWord(row.sc_name) === selectedFirstWord) ||
-                        (row.enquiry_assign_to_project && firstWord(row.enquiry_assign_to_project) === selectedFirstWord);
+                    const matchesSC = scFirstWords === null ||
+                        (row.sc_name && scFirstWords.includes(firstWord(row.sc_name))) ||
+                        (row.enquiry_assign_to_project && scFirstWords.includes(firstWord(row.enquiry_assign_to_project)));
 
                     if (!matchesSC) return;
 
@@ -363,11 +376,11 @@ function Report() {
         } finally {
             setIsLoading(false);
         }
-    }, [filters, isAdmin]);
+    }, [filters, activeTab, isAdmin, getUsernamesToFilter]);
 
     // Fetch FOS Data
     const fetchFosMetrics = useCallback(async () => {
-        if (!isAdmin() || activeTab !== "fos") return;
+        if (activeTab !== "fos") return;
         setIsLoading(true);
         try {
             const { data: rawData, error } = await fetchAllRows(() => {
@@ -375,8 +388,9 @@ function Report() {
                     .from("lto_enquiries")
                     .select("id, created_at, enquiry_receiver_name");
 
-                if (fosFilters.receiverName !== "all") {
-                    q = q.eq("enquiry_receiver_name", fosFilters.receiverName);
+                const scList = getScFilterList(fosFilters.receiverName);
+                if (scList) {
+                    q = q.in("enquiry_receiver_name", scList);
                 }
                 if (fosFilters.startDate) {
                     q = q.gte("created_at", fosFilters.startDate);
@@ -549,9 +563,11 @@ function Report() {
                     : 0
             }));
 
-            // If a specific receiver is selected, filter the table to show only that row
-            if (fosFilters.receiverName !== "all") {
-                metricsArray = metricsArray.filter(met => met.name === fosFilters.receiverName);
+            // If a specific receiver is selected (or a non-admin is scoped to their
+            // own name), filter the table to show only allowed row(s).
+            const conversionScList = getScFilterList(fosFilters.receiverName);
+            if (conversionScList) {
+                metricsArray = metricsArray.filter(met => conversionScList.includes(met.name));
             }
 
             setConversionMetrics(metricsArray);
@@ -561,11 +577,11 @@ function Report() {
         } finally {
             setIsLoading(false);
         }
-    }, [fosFilters, activeTab, isAdmin]);
+    }, [fosFilters, activeTab, isAdmin, getUsernamesToFilter]);
 
     // Fetch SC Pipeline Metrics
     const fetchScPipelineMetrics = useCallback(async () => {
-        if (!isAdmin() || activeTab !== "sc_pipeline") return;
+        if (activeTab !== "sc_pipeline") return;
         setIsLoading(true);
         try {
             const parseDate = (dateStr) => {
@@ -598,8 +614,9 @@ function Report() {
 
             const { data: leadsData, error: leadsError } = await fetchAllRows(() => {
                 let q = supabase.from("lto_leads").select("*");
-                if (scPipelineFilters.scName !== "all") {
-                    q = q.eq("sc_name", scPipelineFilters.scName);
+                const scList = getScFilterList(scPipelineFilters.scName);
+                if (scList) {
+                    q = q.in("sc_name", scList);
                 }
                 return q;
             });
@@ -650,17 +667,16 @@ function Report() {
                 // Extract first word of a string, lowercased for partial name matching
                 const firstWord = (str) => String(str || '').trim().toLowerCase().split(/\s+/)[0];
 
-                const selectedFirstWord = scPipelineFilters.scName !== "all"
-                    ? firstWord(scPipelineFilters.scName)
-                    : null;
+                const scList = getScFilterList(scPipelineFilters.scName);
+                const scFirstWords = scList ? scList.map(firstWord) : null;
 
                 enquiryData.forEach(row => {
                     const eDate = parseDate(row.created_at);
 
-                    // Name matching: compare first word of enquiry_assign_to_project with selected SC's first word
-                    const nameMatches = selectedFirstWord === null
-                        ? true // "All" selected — count every record
-                        : firstWord(row.enquiry_assign_to_project) === selectedFirstWord;
+                    // Name matching: compare first word of enquiry_assign_to_project against allowed SC names
+                    const nameMatches = scFirstWords === null
+                        ? true // no restriction — count every record
+                        : scFirstWords.includes(firstWord(row.enquiry_assign_to_project));
 
                     if (!nameMatches) return;
 
@@ -689,7 +705,7 @@ function Report() {
         } finally {
             setIsLoading(false);
         }
-    }, [scPipelineFilters, activeTab, isAdmin]);
+    }, [scPipelineFilters, activeTab, isAdmin, getUsernamesToFilter]);
 
 
     useEffect(() => {
@@ -698,7 +714,7 @@ function Report() {
 
 
     const fetchFilteredVisitCount = useCallback(async () => {
-        if (!isAdmin() || activeTab !== "fos") return;
+        if (activeTab !== "fos") return;
 
         try {
             // 📊 Default logic: Tables tankhwa_patra and total_visit have been removed.
@@ -718,12 +734,6 @@ function Report() {
             fetchScPipelineMetrics();
         }
     }, [fetchMetrics, fetchFosMetrics, fetchFilteredVisitCount, fetchScPipelineMetrics, activeTab]);
-
-    if (!isAdmin()) {
-        return <div className="p-8 text-center text-destructive">Access Denied</div>;
-    }
-
-
 
 
 
@@ -781,19 +791,21 @@ function Report() {
                     <>
                         {/* Filters */}
                         <div className="bg-white p-4 rounded-lg shadow mb-8 flex flex-col md:flex-row gap-4 items-end md:items-center">
-                            <div className="w-full md:w-1/4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">SC Name</label>
-                                <select
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                    value={filters.scName}
-                                    onChange={(e) => setFilters(prev => ({ ...prev, scName: e.target.value }))}
-                                >
-                                    <option value="all">All Sales Coordinators</option>
-                                    {scNames.map(name => (
-                                        <option key={name} value={name}>{name}</option>
-                                    ))}
-                                </select>
-                            </div>
+                            {isAdmin() && (
+                                <div className="w-full md:w-1/4">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">SC Name</label>
+                                    <select
+                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
+                                        value={filters.scName}
+                                        onChange={(e) => setFilters(prev => ({ ...prev, scName: e.target.value }))}
+                                    >
+                                        <option value="all">All Sales Coordinators</option>
+                                        {scNames.map(name => (
+                                            <option key={name} value={name}>{name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                             <div className="w-full md:w-1/4">
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
                                 <input
@@ -946,19 +958,21 @@ function Report() {
                     <>
                         {/* FOS Filters */}
                         <div className="bg-white p-4 rounded-lg shadow mb-8 flex flex-col md:flex-row gap-4 items-end md:items-center">
-                            <div className="w-full md:w-1/3">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Enquiry Receiver Name</label>
-                                <select
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                    value={fosFilters.receiverName}
-                                    onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
-                                >
-                                    <option value="all">All Receivers</option>
-                                    {FOS_RECEIVERS.map(name => (
-                                        <option key={name} value={name}>{name}</option>
-                                    ))}
-                                </select>
-                            </div>
+                            {isAdmin() && (
+                                <div className="w-full md:w-1/3">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Enquiry Receiver Name</label>
+                                    <select
+                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
+                                        value={fosFilters.receiverName}
+                                        onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
+                                    >
+                                        <option value="all">All Receivers</option>
+                                        {FOS_RECEIVERS.map(name => (
+                                            <option key={name} value={name}>{name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                             <div className="w-full md:w-1/4">
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
                                 <input
@@ -1177,19 +1191,21 @@ function Report() {
                     <>
                         {/* Filters */}
                         <div className="bg-white p-4 rounded-lg shadow mb-8 flex flex-col md:flex-row gap-4 items-end md:items-center">
-                            <div className="w-full md:w-1/4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">SC Name</label>
-                                <select
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                    value={scPipelineFilters.scName}
-                                    onChange={(e) => setScPipelineFilters(prev => ({ ...prev, scName: e.target.value }))}
-                                >
-                                    <option value="all">All Sales Coordinators</option>
-                                    {scNames.map(name => (
-                                        <option key={name} value={name}>{name}</option>
-                                    ))}
-                                </select>
-                            </div>
+                            {isAdmin() && (
+                                <div className="w-full md:w-1/4">
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">SC Name</label>
+                                    <select
+                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
+                                        value={scPipelineFilters.scName}
+                                        onChange={(e) => setScPipelineFilters(prev => ({ ...prev, scName: e.target.value }))}
+                                    >
+                                        <option value="all">All Sales Coordinators</option>
+                                        {scNames.map(name => (
+                                            <option key={name} value={name}>{name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
                             <div className="w-full md:w-1/4">
                                 <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
                                 <input

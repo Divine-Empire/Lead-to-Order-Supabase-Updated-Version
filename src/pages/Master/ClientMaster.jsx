@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Plus, Pencil, Trash2, RefreshCw, Eye } from "lucide-react";
 import DataTable from "../../components/DataTable";
@@ -6,8 +6,14 @@ import SearchableDropdown from "../../components/SearchableDropdown";
 import supabase from "../../utils/supabase";
 import ModalForm from "../../components/ModalForm";
 import { TABLES, COLUMNS } from "../../constants/dbSchema";
+import { AuthContext } from "../../App";
 
 function ClientMaster() {
+  const authContext = useContext(AuthContext) || {};
+  const {
+    isAdmin = () => false,
+    getUsernamesToFilter = () => [],
+  } = authContext;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [clientData, setClientData] = useState([]);
@@ -93,6 +99,11 @@ function ClientMaster() {
     if (stateFilter.length > 0) q = q.in("state", stateFilter);
     if (relevanceFilter === "relevant") q = q.eq("isRelevant", true);
     if (relevanceFilter === "not_relevant") q = q.eq("isRelevant", false);
+    // Role-based access: non-admin (USER) accounts only ever see clients
+    // assigned to their own SC name (plus any delegated alternate access).
+    if (!isAdmin()) {
+      q = q.in("sc_name", getUsernamesToFilter());
+    }
     return q;
   };
 
@@ -184,10 +195,14 @@ function ClientMaster() {
       let fetchMore = true;
 
       while (fetchMore) {
-        const { data, error } = await supabase
+        let optionsQuery = supabase
           .from(TABLES.CLIENT_MASTER)
           .select("company_name, state")
           .range(from, from + step - 1);
+        if (!isAdmin()) {
+          optionsQuery = optionsQuery.in("sc_name", getUsernamesToFilter());
+        }
+        const { data, error } = await optionsQuery;
         if (error) throw error;
 
         (data || []).forEach((row) => {
@@ -221,6 +236,7 @@ function ClientMaster() {
   }, []);
 
   const handleOpenModal = (mode, client = null) => {
+    if (!isAdmin()) return; // USER role cannot add/edit clients
     setModalMode(mode);
     setCurrentClient(client);
     if (client && mode === "edit") {
@@ -266,6 +282,8 @@ function ClientMaster() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (!isAdmin()) return; // USER role cannot add/edit clients
 
     if (modalMode === "edit" && !currentClient?.uuid) {
       alert("Cannot save: this client has no uuid. Please refresh and try again.");
@@ -326,6 +344,7 @@ function ClientMaster() {
   };
 
   const handleDelete = async (client) => {
+    if (!isAdmin()) return; // USER role cannot delete clients
     if (!client?.uuid) {
       alert("Cannot delete: this client has no uuid.");
       return;
@@ -371,7 +390,12 @@ function ClientMaster() {
     { key: "creditLimit", label: "Credit Limit" }
   ];
 
-  const visibleHeaders = allHeaders.filter(col => !hiddenColumns.includes(col.key));
+  const visibleHeaders = allHeaders.filter(col => {
+    if (hiddenColumns.includes(col.key)) return false;
+    // USER role: view-only Client Master, no Actions (edit/delete) column
+    if (!isAdmin() && col.key === "actions") return false;
+    return true;
+  });
   const headers = visibleHeaders.map(col => col.label);
 
   const renderRow = (row, index) => {
@@ -699,7 +723,7 @@ function ClientMaster() {
                         Show All
                       </button>
                     </div>
-                    {allHeaders.map(col => (
+                    {allHeaders.filter(col => isAdmin() || col.key !== "actions").map(col => (
                       <label key={col.key} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded text-xs font-medium text-gray-700 cursor-pointer">
                         <input
                           type="checkbox"
@@ -720,10 +744,12 @@ function ClientMaster() {
                 )}
               </div>
 
-              <button onClick={() => handleOpenModal("add")} className="px-3 h-9 bg-primary hover:opacity-90 text-white rounded-md shadow-sm transition-colors flex items-center gap-2">
-                <Plus size={16} />
-                <span className="font-medium text-sm">Add Client</span>
-              </button>
+              {isAdmin() && (
+                <button onClick={() => handleOpenModal("add")} className="px-3 h-9 bg-primary hover:opacity-90 text-white rounded-md shadow-sm transition-colors flex items-center gap-2">
+                  <Plus size={16} />
+                  <span className="font-medium text-sm">Add Client</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

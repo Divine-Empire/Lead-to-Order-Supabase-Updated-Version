@@ -34,16 +34,20 @@ export async function fetchClosedIdSet(table, idColumn) {
 // paginating in chunks of 500 instead of a single unpaginated fetch (which
 // PostgREST silently caps at 1000). dedupeById collapses multiple rows per
 // id (e.g. several call logs against the same lead) down to one.
-export async function countOpenRows(table, idColumn, closedIds, dedupeById = false) {
+// scNames (optional): when provided, restricts counting to rows whose
+// `sc_name` is in this list -- used for role-based access (non-admin/USER
+// accounts only counting their own assigned SC's pending rows).
+export async function countOpenRows(table, idColumn, closedIds, dedupeById = false, scNames = null) {
   let from = 0;
   let count = 0;
   const seen = dedupeById ? new Set() : null;
   while (true) {
-    const { data, error } = await supabase
+    let query = supabase
       .from(table)
-      .select(idColumn)
-      .not("planned_at", "is", null)
-      .range(from, from + CHUNK_SIZE - 1);
+      .select(scNames ? `${idColumn}, sc_name` : idColumn)
+      .not("planned_at", "is", null);
+    if (scNames) query = query.in("sc_name", scNames);
+    const { data, error } = await query.range(from, from + CHUNK_SIZE - 1);
     if (error) {
       console.error(`Error counting open rows in ${table}:`, error.message);
       break;
