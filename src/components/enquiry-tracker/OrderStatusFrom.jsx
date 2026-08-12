@@ -7,7 +7,6 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
   const [acceptanceViaOptions, setAcceptanceViaOptions] = useState(["email", "phone", "in-person", "other"])
   const [paymentModeOptions, setPaymentModeOptions] = useState(["cash", "check", "bank-transfer", "credit-card"])
   const [reasonStatusOptions, setReasonStatusOptions] = useState([])
-  const [, setHoldReasonOptions] = useState(["budget", "approval", "project-delay", "reconsideration", "other"])
   const [paymentTermsOptions, setPaymentTermsOptions] = useState(["30", "45", "60", "90"])
   const [conveyedOptions, setConveyedOptions] = useState(["Yes", "No"])
   const [orderVideoError, setOrderVideoError] = useState("")
@@ -52,7 +51,6 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           { data: avData },
           { data: pmData },
           { data: rsData },
-          { data: hrData },
           { data: ptData },
           { data: tmData },
           { data: cdData },
@@ -60,7 +58,6 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           fetchCategory("acceptance_via"),
           fetchCategory("payment_mode"),
           fetchCategory("if_no_then_get_relavant_status"),
-          fetchCategory("customer_order_hold_reason_category"),
           fetchCategory("payment_terms"),
           fetchCategory("transport_mode"),
           fetchCategory("credit_days"),
@@ -72,7 +69,6 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
         setReasonStatusOptions(toValues(rsData));
         if (avData?.length) setAcceptanceViaOptions(toValues(avData));
         if (pmData?.length) setPaymentModeOptions(toValues(pmData));
-        if (hrData?.length) setHoldReasonOptions(toValues(hrData));
         if (ptData?.length) setPaymentTermsOptions(toValues(ptData));
         if (tmData?.length) setTransportModeOptions(toValues(tmData));
         if (cdData?.length) setCreditDaysOptions(toValues(cdData));
@@ -82,7 +78,6 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
         setAcceptanceViaOptions(["email", "phone", "in-person", "other"]);
         setPaymentModeOptions(["cash", "check", "bank-transfer", "credit-card"]);
         setReasonStatusOptions([]);
-        setHoldReasonOptions(["budget", "approval", "project-delay", "reconsideration", "other"]);
         setPaymentTermsOptions(["30", "45", "60", "90"]);
         setTransportModeOptions(["Road", "Air", "Sea", "Rail"]);
         setCreditDaysOptions(["30", "45", "60", "90"]);

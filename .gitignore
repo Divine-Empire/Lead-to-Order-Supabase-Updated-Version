@@ -26,8 +26,5 @@ dist-ssr
 *.sw?
 
 schema.txt
-task.txt
-
-Claude.md
-DB
+output.txt
 .claude

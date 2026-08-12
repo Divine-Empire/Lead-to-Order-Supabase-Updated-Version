@@ -85,55 +85,9 @@ function NewEnquiryTracker() {
     apologyVideo: null,
     reasonStatus: "",
     reasonRemark: "",
-    holdReason: "",
-    holdingDate: "",
-    holdRemark: "",
     quotationItems: [], // Items fetched from Make_Quotation table
   })
 
-  // Quotation number prefilling logic has been removed as per user request
-
-  // Add this function inside the NewCallTracker component
-  // const fetchLatestQuotationNumber = async (enquiryNo, activeTab) => {
-  //   try {
-  //     let tableName, columnName, filterColumn;
-
-  //     // Determine table and column based on active tab
-  //     if (activeTab === "pending") {
-  //       tableName = "leads_to_order";
-  //       columnName = "Quotation_Number";
-  //       filterColumn = "LD-Lead-No"; // Column name for lead ID in leads_to_order table
-  //     } else if (activeTab === "directEnquiry") {
-  //       tableName = "enquiry_to_order";
-  //       columnName = "quotation_number";
-  //       filterColumn = "enquiry_no"; // Column name for enquiry number in enquiry_to_order table
-  //     } else {
-  //       console.error("Invalid active tab:", activeTab);
-  //       return "";
-  //     }
-
-  //     // Fetch data from Supabase
-  //     const { data, error } = await supabase
-  //       .from(tableName)
-  //       .select(columnName)
-  //       .eq(filterColumn, enquiryNo)
-  //       .limit(1);
-
-  //     if (error) {
-  //       console.error(`Supabase error fetching from ${tableName}:`, error);
-  //       return "";
-  //     }
-
-  //     if (data && data.length > 0) {
-  //       return data[0][columnName];
-  //     }
-
-  //     return "";
-  //   } catch (error) {
-  //     console.error("Error fetching quotation number:", error);
-  //     return "";
-  //   }
-  // };
   // Fetch dropdown options from DROPDOWN sheet column G
   useEffect(() => {
     const fetchDropdownOptions = async () => {
@@ -207,21 +161,7 @@ function NewEnquiryTracker() {
     }
   };
 
-  // useEffect(() => {
-  //   const generateOrderNumber = async () => {
-  //     try {
-  //       const orderNumber = await generateNextOrderNumber();
-  //       console.log("Generated order number:", orderNumber);
-  //       // If you need to store this order number in state, do it here:
-  //       // setGeneratedOrderNumber(orderNumber);
-  //     } catch (error) {
-  //       console.error("Error generating order number:", error);
-  //     }
-  //   };
-
-  //   generateOrderNumber();
-  // }, []); // Empty dependency array means this runs once on mount
-
+ 
   // Update form data when leadId changes
   useEffect(() => {
     if (leadId) {
@@ -232,11 +172,7 @@ function NewEnquiryTracker() {
     }
   }, [leadId])
 
-  // Prefill Enquiry Status & What Did Customer Say from this lead/enquiry's
-  // most recent tracker log, if one exists (i.e. a quotation or follow-up
-  // stage was already logged before) -- saves re-entering the same status
-  // and feedback every time a new stage update is logged for the same
-  // record. Only fills fields that are still blank, so it never clobbers
+ 
   // something the user has already typed/selected.
   useEffect(() => {
     const prefillFromLatestLog = async () => {
@@ -355,16 +291,6 @@ function NewEnquiryTracker() {
     }))
   }
 
-  // Handler for order status form data updates
-  // Handler for order status form data updates
-  // Handler for order status form data updates
-  // const handleOrderStatusChange = (field, value) => {
-  //   // For all fields including creditLimit, store as string (text)
-  //   setOrderStatusData(prev => ({
-  //     ...prev,
-  //     [field]: value // Keep all values as strings
-  //   }));
-  // }
 
   // Function to upload file to Supabase storage
   const uploadFileToSupabase = async (file, bucketName) => {
@@ -445,140 +371,6 @@ function NewEnquiryTracker() {
       }));
     }
   }
-
-
-  //  const updateLeadToOrderTable = async (enquiryNo, formData, currentStage, orderStatusData = {}) => {
-
-
-  //   try {
-  //     // ✅ Helper: safely convert any value to boolean
-  //     const toBoolean = (value) => {
-  //       if (value === null || value === undefined || value === "") return false;
-  //       if (typeof value === "boolean") return value;
-  //       if (typeof value === "string") {
-  //         return value.toLowerCase() === "true" || value === "1";
-  //       }
-  //       return Boolean(value);
-  //     };
-
-  //     // ✅ Base fields
-  //     let updateData = {
-  //       "LD-Lead-No": formData.leadId,
-  //       Enquiry_Status: formData.enquiryStatus,
-  //       What_Did_Customer_Say: formData.customerFeedback,
-  //       Current_Stage: currentStage,
-  //     };
-
-  //     switch (currentStage) {
-  //       case "make-quotation":
-  //         Object.assign(updateData, {
-  //           "Send_Quotation_No.": formData.sendQuotationNo,
-  //           Quotation_Shared_By: formData.quotationSharedBy,
-  //           Quotation_Number: formData.quotationNumber,
-  //           Quotation_Value_Without_Tax: formData.valueWithoutTax,
-  //           Quotation_Value_With_Tax: formData.valueWithTax,
-  //           Quotation_Upload: formData.quotationFileUrl,
-  //           Quotation_Remarks: formData.remarks,
-
-  //           // reset followup + order fields
-  //           // "Next Call Date_1": null,
-  //           // "Next Call Time_1": null,
-  //           // "Is_Order_Received?_Status": null,
-  //           // Acceptance_Via: null,
-  //           // Payment_Mode: null,
-  //           // "Payment_Terms _In_Days": null,
-  //           // Transport_Mode: null,
-  //         });
-  //         break;
-
-  //       case "order-expected":
-  //         Object.assign(updateData, {
-  //           "Next Call Date_1": formData.nextCallDate,
-  //           "Next Call Time_1": formData.nextCallTime,
-
-  //           // reset quotation + order fields
-  //           // "Send_Quotation_No.": null,
-  //           // Quotation_Shared_By: null,
-  //           // Quotation_Number: null,
-  //           // Quotation_Value_Without_Tax: null,
-  //           // Quotation_Value_With_Tax: null,
-  //           // Quotation_Upload: null,
-  //           // Quotation_Remarks: null,
-  //           // "Is_Order_Received?_Status": null,
-  //           // Acceptance_Via: null,
-  //           // Payment_Mode: null,
-  //           // "Payment_Terms _In_Days": null,
-  //           // Transport_Mode: null,
-  //         });
-  //         break;
-
-  //      case "order-status":
-  //   // ✅ FIXED: Use orderStatusData instead of formData
-  //   updateData.Quotation_Number = orderStatusData.orderStatusQuotationNumber || null;
-  //   updateData["Is_Order_Received?_Status"] = orderStatusData.orderStatus; // Changed from formData to orderStatusData
-
-  //   if (orderStatusData.orderStatus?.toLowerCase() === "yes") {
-  //     Object.assign(updateData, {
-  //       Actual1: new Date().toISOString().slice(0, 10),
-  //       Acceptance_Via: orderStatusData.acceptanceVia,
-  //       Payment_Mode: orderStatusData.paymentMode,
-  //       Destination: orderStatusData.destination,
-  //       "Po Number": orderStatusData.poNumber,
-  //       "Payment_Terms _In_Days": orderStatusData.paymentTerms,
-  //       Transport_Mode: orderStatusData.transportMode,
-  //       "Credit_Limit": orderStatusData.creditLimit,
-  //       "Credit_Days": orderStatusData.creditDays,
-  //       CONVEYED_FOR_REGISTRATION_FORM: toBoolean(orderStatusData.conveyedForRegistration),
-  //       Offer: orderStatusData.orderVideo,
-  //       Acceptance_File_Upload: typeof orderStatusData.acceptanceFile === "string" 
-  //         ? orderStatusData.acceptanceFile 
-  //         : "",
-  //       REMARK: orderStatusData.orderRemark,
-  //     });
-  //   } else if (orderStatusData.orderStatus?.toLowerCase() === "no") {
-  //     Object.assign(updateData, {
-  //       Actual1: new Date().toISOString().slice(0, 10),
-  //       Order_Lost_Apology_Video: typeof orderStatusData.apologyVideo === "string" 
-  //         ? orderStatusData.apologyVideo 
-  //         : "",
-  //       If_No_Then_Get_Relevant_Reason_Status: orderStatusData.reasonStatus || null,
-  //       If_No_Then_Get_Relevant_Reason_Remark: orderStatusData.reasonRemark || null,
-  //       CUSTOMER_ORDER_HOLD_REASON_CATEGORY: null,
-  //     });
-  //   } else if (orderStatusData.orderStatus?.toLowerCase() === "hold") {
-  //     Object.assign(updateData, {
-  //       HOLDING_DATE: orderStatusData.holdingDate,
-  //       HOLD_REMARK: orderStatusData.holdRemark,
-  //       CUSTOMER_ORDER_HOLD_REASON_CATEGORY: orderStatusData.holdReason || null,
-  //     });
-  //   }
-  //   break;
-
-  //       default:
-  //         console.warn("Unknown stage:", currentStage);
-  //     }
-
-  //     // ✅ Use enquiryNo (not undefined leadId)
-  //     const { data, error } = await supabase
-  //       .from("leads_to_order")
-  //       .update(updateData)
-  //       .eq("LD-Lead-No", enquiryNo)
-  //       .select()
-  //       .single();
-
-  //     if (error) {
-  //       console.error("Error updating leads_to_order:", error);
-  //       return false;
-  //     }
-
-  //     console.log("✅ Successfully updated leads_to_order:", data);
-  //     return true;
-  //   } catch (error) {
-  //     console.error("❌ Exception updating leads_to_order:", error);
-  //     return false;
-  //   }
-  // };
-
 
 
   const updateLeadToOrderTable = async (enquiryNo, allFormData, currentStage, orderStatusData = {}) => {
@@ -1260,21 +1052,6 @@ function NewEnquiryTracker() {
   };
 
 
-  // Helper function to generate the next order number
-  // const generateNextOrderNumber = (latestOrderNumber) => {
-  //   // Extract the numeric part
-  //   const match = latestOrderNumber.match(/DO-(\d+)/);
-  //   let nextNumber = 1;
-
-  //   if (match && match[1]) {
-  //     nextNumber = parseInt(match[1], 10) + 1;
-  //   }
-
-  //   // Format with leading zeros
-  //   const paddedNumber = String(nextNumber).padStart(2, "0");
-  //   return `DO-${paddedNumber}`;
-  // };
-
   return (
     <div className="container mx-auto py-1 px-2">
       <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-sm border border-slate-200">
@@ -1359,34 +1136,7 @@ function NewEnquiryTracker() {
                     Make Quotation
                   </label>
                 </div>
-                {/* <div className="flex items-center space-x-2">
-      <input
-        type="radio"
-        id="quotation-validation"
-        name="currentStage"
-        value="quotation-validation"
-        checked={currentStage === "quotation-validation"}
-        onChange={async (e) => {
-          const stage = e.target.value
-          setCurrentStage(stage)
-          
-          if (formData.enquiryNo) {
-            // Fetch the latest quotation number for this enquiry
-            const quotationNumber = await fetchLatestQuotationNumber(formData.enquiryNo)
-            if (quotationNumber) {
-              setValidationData(prev => ({
-                ...prev,
-                validationQuotationNumber: quotationNumber
-              }))
-            }
-          }
-        }}
-        className="h-4 w-4 text-primary focus:ring-primary"
-      />
-      <label htmlFor="quotation-validation" className="text-sm text-gray-700">
-        Quotation Validation
-      </label>
-    </div> */}
+                
                 <div className="flex items-center space-x-2">
                   <input
                     type="radio"

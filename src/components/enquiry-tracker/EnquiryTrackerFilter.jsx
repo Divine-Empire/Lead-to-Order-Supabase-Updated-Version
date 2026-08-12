@@ -7,7 +7,7 @@ const EnquiryTrackerFilter = ({
   activeTab, setActiveTab,
   searchTerm, setSearchTerm,
   callingDaysFilter, setCallingDaysFilter,
-  enquiryNoFilter, setEnquiryNoFilter,
+  valueFilter, setValueFilter,
   currentStageFilter, setCurrentStageFilter,
   filterCounts,
   showColumnDropdown, setShowColumnDropdown,
@@ -67,16 +67,15 @@ const EnquiryTrackerFilter = ({
         </div>
 
         <div className="flex-1 min-w-[120px] z-[50]">
-          <SearchableDropdown
-            isMulti={true}
-            options={Array.from(new Set(activeData.map(c => activeTab === "history" ? c.enquiryNo : c.leadNo).filter(Boolean))).map(l => ({ value: l, label: l, count: activeData.filter(d => (activeTab === "history" ? d.enquiryNo : d.leadNo) === l).length }))}
-            value={enquiryNoFilter}
-            onChange={setEnquiryNoFilter}
-            placeholder="Lead No."
-            height="h-9"
-            rounded="rounded-md"
-            className="dropdown-container"
-          />
+          <select
+            value={valueFilter}
+            onChange={(e) => setValueFilter(e.target.value)}
+            className="w-full h-9 px-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sky-500 bg-white text-sm"
+          >
+            <option value="">Value: All</option>
+            <option value="gte100000">Value greater than 1,00,000</option>
+            <option value="lt100000">Value less than 1,00,000</option>
+          </select>
         </div>
 
         <div className="flex-1 min-w-[120px] z-[40]">
@@ -161,10 +160,10 @@ const EnquiryTrackerFilter = ({
           </div>
         )}
 
-        {(callingDaysFilter.length > 0 || enquiryNoFilter.length > 0 || currentStageFilter.length > 0 || searchTerm) && (
+        {(callingDaysFilter.length > 0 || valueFilter || currentStageFilter.length > 0 || searchTerm) && (
           <button
             className="px-3 h-9 text-sm border border-red-200 rounded-md text-red-600 hover:bg-red-50 focus:outline-none shrink-0"
-            onClick={() => { setCallingDaysFilter([]); setEnquiryNoFilter([]); setCurrentStageFilter([]); setSearchTerm(""); }}
+            onClick={() => { setCallingDaysFilter([]); setValueFilter(""); setCurrentStageFilter([]); setSearchTerm(""); }}
           >
             Clear Filters
           </button>

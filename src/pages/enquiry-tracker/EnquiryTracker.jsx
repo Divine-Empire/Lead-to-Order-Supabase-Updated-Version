@@ -59,9 +59,6 @@ const columnsConfig = [
   { key: "orderStatus", label: "Order Received Status" },
   { key: "reasonStatus", label: "If No Reason Status" },
   { key: "reasonRemark", label: "If No Reason Remark" },
-  { key: "holdReason", label: "Customer Order Hold Reason Category" },
-  { key: "holdingDate", label: "Holding Date" },
-  { key: "holdRemark", label: "Hold Remark" },
   { key: "transportMode", label: "Transport Mode" },
   { key: "conveyedForRegistration", label: "Conveyed For Registration Form" },
   { key: "orderNo", label: "Order No" },
@@ -113,9 +110,6 @@ const defaultVisibility = {
   orderStatus: false,
   reasonStatus: false,
   reasonRemark: false,
-  holdReason: false,
-  holdingDate: false,
-  holdRemark: false,
   transportMode: false,
   conveyedForRegistration: false,
   orderNo: false,
@@ -225,10 +219,12 @@ function EnquiryTracker() {
   const [historyData, setHistoryData] = useState([]);
   const [directEnquiryData, setDirectEnquiryData] = useState([]);
   const [showNewCallTrackerForm, setShowNewCallTrackerForm] = useState(false);
+  const [newEnquiryPrefill, setNewEnquiryPrefill] = useState(null);
   const [showPopup, setShowPopup] = useState(false);
   const [selectedTracker, setSelectedTracker] = useState(null);
   const [callingDaysFilter, setCallingDaysFilter] = useState([]);
-  const [enquiryNoFilter, setEnquiryNoFilter] = useState([]);
+  // Value filter over "Quotation Value Without Tax": "" (all) | "gte100000" | "lt100000"
+  const [valueFilter, setValueFilter] = useState("");
   const [currentStageFilter, setCurrentStageFilter] = useState([]);
   const [scNameFilter] = useState("all");
   const [, setAvailableEnquiryNos] = useState([]);
@@ -331,6 +327,26 @@ function EnquiryTracker() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("action") === "new-enquiry") {
+      // Prefill data forwarded from Client Master's "Enquiry" action button
+      // (see ClientMaster.jsx's `urlParams`) -- only set fields that are
+      // actually present so DirectEnquiryForm's own defaults still apply
+      // to anything not passed.
+      const prefill = {};
+      const paramToField = {
+        companyName: "companyName",
+        phoneNumber: "phoneNumber",
+        personName: "salesPersonName",
+        groupName: "groupName",
+        gstNumber: "gstNumber",
+        billingAddress: "location",
+        scName: "scName",
+        state: "enquiryState",
+      };
+      Object.entries(paramToField).forEach(([param, field]) => {
+        const val = params.get(param);
+        if (val) prefill[field] = val;
+      });
+      setNewEnquiryPrefill(prefill);
       setShowNewCallTrackerForm(true);
     }
   }, []);
@@ -733,9 +749,6 @@ const handleSaveClick = async () => {
       order_lost_apology_video: editedData.apologyVideo,
       if_no_reason_status: editedData.reasonStatus,
       if_no_reason_remark: editedData.reasonRemark,
-      customer_order_hold_reason_category: editedData.holdReason,
-      holding_date: convertDateToYYYYMMDD(editedData.holdingDate),
-      hold_remark: editedData.holdRemark,
     };
 
     // Remove undefined/null values
@@ -1301,7 +1314,7 @@ const handleSaveClick = async () => {
     itemsPerPage,
     searchTerm,
     currentStageFilter,
-    enquiryNoFilter,
+    valueFilter,
     callingDaysFilter,
     scNameFilter,
     isAdmin: isAdmin(),
@@ -1314,7 +1327,7 @@ const handleSaveClick = async () => {
     itemsPerPage,
     searchTerm,
     currentStageFilter,
-    enquiryNoFilter,
+    valueFilter,
     callingDaysFilter,
     scNameFilter,
     isAdmin: isAdmin(),
@@ -1325,6 +1338,13 @@ const handleSaveClick = async () => {
   const mapPendingRow = (row) => {
     const isEnquiry = row.source_type === "enquiry";
     return {
+      // Spread the raw view row first so ANY column the view exposes (even
+      // ones not explicitly listed below) still reaches renderRowCells via
+      // its own snake_case key -- the generic camelCase->snake_case fallback
+      // in renderRowCells picks those up automatically. Everything below
+      // this line is either a rename (camelCase key the columns config
+      // actually reads) or a formatted/derived value.
+      ...row,
       id: row.record_id,
       dbId: row.record_id,
       leadIdVal: !isEnquiry ? row.record_id : undefined,
@@ -1339,7 +1359,7 @@ const handleSaveClick = async () => {
       companyName: row.company_name || "",
       phoneNumber: row.phone_number || "",
       phoneNo: row.phone_number || "",
-      salespersonName: row.person_name || "",
+      salespersonName: row.person_name || row.sales_person_name || row.assigned_to || "",
       leadSource: row.lead_source || "",
       currentStage: row.current_stage || "",
       callingDate: formatDateToDDMMYYYY(row.last_activity_at) || "",
@@ -1353,10 +1373,53 @@ const handleSaveClick = async () => {
       plannedAt: row.planned_at ? formatDateToDDMMYYYY(row.planned_at) : "",
       itemQty: row.item_qty || "",
       priority: determinePriority(row.lead_source || ""),
+      // Columns that only ever get populated once the record reaches that
+      // stage (make-quotation / quotation-validation / order-expected /
+      // order-status) -- previously dropped entirely because this object
+      // was built from a fixed literal instead of carrying the full row.
+      totalQty: row.total_qty || "",
+      shippingAddress: row.shipping_address || "",
+      enquiryReceiverName: row.enquiry_receiver_name || "",
+      enquiryAssignToProject: row.enquiry_assign_to_project || "",
+      gstNumber: row.gst_number || "",
+      enquiryDate: row.enquiry_date ? formatDateToDDMMYYYY(row.enquiry_date) : "",
+      enquiryState: row.enquiry_for_state || "",
+      projectName: row.project_name || "",
+      salesType: row.sales_type || "",
+      enquiryApproach: row.enquiry_approach || "",
+      sendQuotationNo: row.send_quotation_no || "",
+      quotationSharedBy: row.quotation_shared_by || "",
+      quotationNumber: row.quotation_number || "",
+      valueWithoutTax: row.quotation_value_without_tax ?? "",
+      valueWithTax: row.quotation_value_with_tax ?? "",
+      quotationUpload: row.quotation_upload || "",
+      quotationRemarks: row.quotation_remarks || "",
+      validatorName: row.quotation_validator_name || "",
+      sendStatus: row.quotation_send_status || "",
+      validationRemark: row.quotation_validation_remark || "",
+      faqVideo: row.send_faq_video ?? "",
+      productVideo: row.send_product_video ?? "",
+      offerVideo: row.send_offer_video ?? "",
+      productCatalog: row.send_product_catalog ?? "",
+      productImage: row.send_product_image ?? "",
+      orderStatus: row.is_order_received_status || "",
+      reasonStatus: row.if_no_reason_status || "",
+      reasonRemark: row.if_no_reason_remark || "",
+      transportMode: row.transport_mode || "",
+      conveyedForRegistration: row.conveyed_for_registration_form ?? "",
+      orderNo: row.order_no || "",
+      destination: row.destination || "",
+      poNumber: row.po_number || "",
+      acceptanceVia: row.acceptance_via || "",
+      acceptanceFile: row.acceptance_file_upload || "",
     };
   };
 
   const mapHistoryRow = (row) => ({
+    // Same rationale as mapPendingRow: carry the full view row through first
+    // so every column the view exposes reaches renderRowCells, then rename/
+    // format the specific ones the columns config actually reads by key.
+    ...row,
     id: row.record_id,
     uuid: row.record_id,
     sourceType: row.source_type,
@@ -1367,15 +1430,44 @@ const handleSaveClick = async () => {
     lead_no: row.display_no || "",
     companyName: row.company_name || "",
     Company_Name: row.company_name || "",
+    phoneNumber: row.phone_number || "",
+    phoneNo: row.phone_number || "",
+    leadSource: row.lead_source || "",
     currentStage: row.current_stage || "",
     callingDate: row.calling_days || formatDateToDDMMYYYY(row.created_at) || "",
+    totalQty: row.total_qty || "",
+    shippingAddress: row.shipping_address || "",
+    enquiryReceiverName: row.enquiry_receiver_name || "",
+    enquiryAssignToProject: row.enquiry_assign_to_project || "",
+    gstNumber: row.gst_number || "",
+    enquiryDate: row.enquiry_date ? formatDateToDDMMYYYY(row.enquiry_date) : "",
+    enquiryState: row.enquiry_for_state || "",
+    projectName: row.project_name || "",
+    salesType: row.sales_type || "",
+    enquiryApproach: row.enquiry_approach || "",
+    sendQuotationNo: row.send_quotation_no || "",
+    quotationSharedBy: row.quotation_shared_by || "",
     quotationNumber: row.quotation_number || "",
     valueWithTax: row.quotation_value_with_tax ?? "",
     valueWithoutTax: row.quotation_value_without_tax ?? "",
     quotationUpload: row.quotation_upload || "",
+    quotationRemarks: row.quotation_remarks || "",
+    validatorName: row.quotation_validator_name || "",
     sendStatus: row.quotation_send_status || "",
-    orderStatus: row.order_status || "",
+    validationRemark: row.quotation_validation_remark || "",
+    faqVideo: row.send_faq_video ?? "",
+    productVideo: row.send_product_video ?? "",
+    offerVideo: row.send_offer_video ?? "",
+    productCatalog: row.send_product_catalog ?? "",
+    productImage: row.send_product_image ?? "",
+    // "Order Received Status" is written as `is_order_received_status`
+    // (see handleSaveClick's updateData) -- `order_status` isn't a real
+    // column, so this was always blank.
+    orderStatus: row.is_order_received_status || "",
+    reasonStatus: row.if_no_reason_status || "",
+    reasonRemark: row.if_no_reason_remark || "",
     order_no: row.order_no || "",
+    orderNo: row.order_no || "",
     poNumber: row.po_number || "",
     po_number: row.po_number || "",
     destination: row.destination || "",
@@ -1388,7 +1480,9 @@ const handleSaveClick = async () => {
     acceptanceVia: row.acceptance_via || "",
     acceptanceFile: row.acceptance_file_upload || "",
     sc_name: row.assigned_to || "",
-    salespersonName: row.assigned_to || "",
+    // "Person Name" should be the enquiry's contact person, not the SC --
+    // fall back to assigned_to only if no contact-person field is present.
+    salespersonName: row.person_name || row.sales_person_name || row.assigned_to || "",
     calling_days: row.calling_days || "",
     itemQty: row.item_qty || "",
     priority: determinePriority(row.enquiry_status || ""),
@@ -1527,9 +1621,6 @@ const handleSaveClick = async () => {
         is_order_received_status: item.is_order_received_status || "",
         if_no_reason_status: item.if_no_reason_status || "",
         if_no_reason_remark: item.if_no_reason_remark || "",
-        customer_order_hold_reason_category: item.customer_order_hold_reason_category || "",
-        holding_date: formatDateToDDMMYYYY(item.holding_date) || "",
-        hold_remark: item.hold_remark || "",
         transport_mode: item.transport_mode || "",
         conveyed_for_registration_form: item.conveyed_for_registration_form || false,
         sales_coordinator_name: item.sales_coordinator_name || "",
@@ -1790,7 +1881,7 @@ const handleSaveClick = async () => {
   useEffect(() => {
     if (
       callingDaysFilter.length > 0 ||
-      enquiryNoFilter.length > 0 ||
+      valueFilter ||
       currentStageFilter.length > 0
     ) {
       setCurrentPage(1);
@@ -1798,7 +1889,7 @@ const handleSaveClick = async () => {
       setHasMoreHistory(true);
       setHasMoreDirectEnquiry(true);
     }
-  }, [callingDaysFilter, enquiryNoFilter, currentStageFilter]);
+  }, [callingDaysFilter, valueFilter, currentStageFilter]);
 
   // NEW: Update available enquiry numbers when data changes or tab changes
   useEffect(() => {
@@ -2372,9 +2463,12 @@ const handleSaveClick = async () => {
       const t = searchTerm.toLowerCase();
       if (!Object.values(tracker).some(v => v && v.toString().toLowerCase().includes(t))) return false;
     }
-    if (enquiryNoFilter.length > 0) {
-      const no = tab === "history" ? tracker.enquiryNo : tracker.leadNo;
-      if (!enquiryNoFilter.includes(no)) return false;
+    if (valueFilter) {
+      const rawValue = tracker.valueWithoutTax;
+      const numericValue = rawValue !== "" && rawValue !== null && rawValue !== undefined ? parseFloat(rawValue) : NaN;
+      if (isNaN(numericValue)) return false;
+      if (valueFilter === "gte100000" && numericValue < 100000) return false;
+      if (valueFilter === "lt100000" && numericValue >= 100000) return false;
     }
     if (currentStageFilter.length > 0) {
       if (!currentStageFilter.includes(tracker.currentStage || "")) return false;
@@ -2406,7 +2500,7 @@ const handleSaveClick = async () => {
 
   // ─── Pagination ───────────────────────────────────────────────────────────
 
-  useEffect(() => { setCurrentPage(1); }, [activeTab, searchTerm, callingDaysFilter, enquiryNoFilter, currentStageFilter]);
+  useEffect(() => { setCurrentPage(1); }, [activeTab, searchTerm, callingDaysFilter, valueFilter, currentStageFilter]);
 
   useEffect(() => {
     const dateFilters = getDateFiltersFromCallingDays();
@@ -2521,7 +2615,7 @@ const handleSaveClick = async () => {
             {opt.key === "apologyVideo" ? "View Video" : "View File"}
           </a>
         ) : "—";
-      } else if (opt.key === "customerFeedback" || opt.key === "quotationRemarks" || opt.key === "validationRemark" || opt.key === "reasonRemark" || opt.key === "holdRemark") {
+      } else if (opt.key === "customerFeedback" || opt.key === "quotationRemarks" || opt.key === "validationRemark" || opt.key === "reasonRemark") {
         cellContent = (
           <div className="max-w-[200px] truncate" title={val}>
             {val || "—"}
@@ -2663,8 +2757,8 @@ const handleSaveClick = async () => {
         setSearchTerm={setSearchTerm}
         callingDaysFilter={callingDaysFilter}
         setCallingDaysFilter={setCallingDaysFilter}
-        enquiryNoFilter={enquiryNoFilter}
-        setEnquiryNoFilter={setEnquiryNoFilter}
+        valueFilter={valueFilter}
+        setValueFilter={setValueFilter}
         currentStageFilter={currentStageFilter}
         setCurrentStageFilter={setCurrentStageFilter}
         filterCounts={filterCounts}
@@ -2711,8 +2805,10 @@ const handleSaveClick = async () => {
       {/* New Enquiry Form Modal */}
       {showNewCallTrackerForm && (
         <DirectEnquiryForm
+          initialData={newEnquiryPrefill}
           onClose={(shouldRefresh) => {
             setShowNewCallTrackerForm(false);
+            setNewEnquiryPrefill(null);
             if (shouldRefresh) {
               const dateFilters = getDateFiltersFromCallingDays();
               fetchPendingData(1, searchTerm, false, dateFilters);

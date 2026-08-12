@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import supabase from "../../utils/supabase"
 import { TABLES, COLUMNS } from "../../constants/dbSchema"
 
-const CallTrackerForm = ({ onClose = () => window.history.back() }) => {
+const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = null }) => {
   const [leadSources, setLeadSources] = useState([])
   const [, setScNameOptions] = useState([])
   const [enquiryStates, setEnquiryStates] = useState([])
@@ -22,27 +22,30 @@ const CallTrackerForm = ({ onClose = () => window.history.back() }) => {
   const [groupOptions, setGroupOptions] = useState([])
   const [clientMasterRecords, setClientMasterRecords] = useState([])
 
+  // Prefill forwarded from Client Master's "Enquiry" action button (via
+  // EnquiryTracker.jsx's `newEnquiryPrefill`) -- only present when this form
+  // was opened from there, otherwise every field starts blank as before.
   const [newCallTrackerData, setNewCallTrackerData] = useState({
     enquiryNo: "",
     leadSource: "",
-    scName: "",
-    companyName: "",
-    groupName: "",
+    scName: initialData?.scName || "",
+    companyName: initialData?.companyName || "",
+    groupName: initialData?.groupName || "",
     stateCode: "",
-    phoneNumber: "",
-    salesPersonName: "",
-    location: "",
+    phoneNumber: initialData?.phoneNumber || "",
+    salesPersonName: initialData?.salesPersonName || "",
+    location: initialData?.location || "",
     emailAddress: "",
     shippingAddress: "",
     enquiryReceiverName: "",
     enquiryAssignToProject: "",
-    gstNumber: "",
-    isCompanyAutoFilled: false
+    gstNumber: initialData?.gstNumber || "",
+    isCompanyAutoFilled: !!initialData
   })
 
   const [enquiryFormData, setEnquiryFormData] = useState({
     enquiryDate: "",
-    enquiryState: "",
+    enquiryState: initialData?.enquiryState || "",
     nob: "",
     salesType: "",
     enquiryApproach: "",

@@ -5,7 +5,7 @@ import supabase from "../../utils/supabase";
 // filter is a real WHERE clause against the view, not a client-side re-scan
 // of whatever rows happen to already be loaded -- this is what lets a
 // filter surface matches that haven't been paged into the UI yet.
-function applySharedFilters(query, { searchTerm, currentStageFilter, enquiryNoFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter }) {
+function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter }) {
   let q = query;
 
   if (searchTerm) {
@@ -14,8 +14,10 @@ function applySharedFilters(query, { searchTerm, currentStageFilter, enquiryNoFi
   if (currentStageFilter && currentStageFilter.length > 0) {
     q = q.in("current_stage", currentStageFilter);
   }
-  if (enquiryNoFilter && enquiryNoFilter.length > 0) {
-    q = q.in("display_no", enquiryNoFilter);
+  if (valueFilter === "gte100000") {
+    q = q.gte("quotation_value_without_tax", 100000);
+  } else if (valueFilter === "lt100000") {
+    q = q.lt("quotation_value_without_tax", 100000);
   }
   if (callingDaysFilter && callingDaysFilter.length > 0) {
     const today = new Date().toISOString().split("T")[0];
@@ -41,7 +43,7 @@ export function usePendingEnquiries({
   itemsPerPage,
   searchTerm,
   currentStageFilter,
-  enquiryNoFilter,
+  valueFilter,
   callingDaysFilter,
   scNameFilter,
   isAdmin,
@@ -56,7 +58,7 @@ export function usePendingEnquiries({
       itemsPerPage,
       searchTerm,
       currentStageFilter,
-      enquiryNoFilter,
+      valueFilter,
       callingDaysFilter,
       scNameFilter,
       isAdmin,
@@ -72,7 +74,7 @@ export function usePendingEnquiries({
         .order("last_activity_at", { ascending: false })
         .range(from, to);
 
-      query = applySharedFilters(query, { searchTerm, currentStageFilter, enquiryNoFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter });
+      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter });
 
       const { data, error, count } = await query;
       if (error) throw error;
@@ -88,7 +90,7 @@ export function useHistoryEnquiries({
   itemsPerPage,
   searchTerm,
   currentStageFilter,
-  enquiryNoFilter,
+  valueFilter,
   callingDaysFilter,
   scNameFilter,
   isAdmin,
@@ -103,7 +105,7 @@ export function useHistoryEnquiries({
       itemsPerPage,
       searchTerm,
       currentStageFilter,
-      enquiryNoFilter,
+      valueFilter,
       callingDaysFilter,
       scNameFilter,
       isAdmin,
@@ -119,7 +121,7 @@ export function useHistoryEnquiries({
         .order("created_at", { ascending: false })
         .range(from, to);
 
-      query = applySharedFilters(query, { searchTerm, currentStageFilter, enquiryNoFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter });
+      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter });
 
       const { data, error, count } = await query;
       if (error) throw error;
