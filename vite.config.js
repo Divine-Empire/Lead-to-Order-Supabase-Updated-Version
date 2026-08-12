@@ -8,7 +8,9 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
-  base: "./", // Add this if assets are not loading
+  base: "/", // Root-absolute -- required so asset URLs still resolve correctly
+            // when the SPA is deep-linked/refreshed on a nested route
+            // (e.g. /leads) behind Vercel's catch-all rewrite to index.html.
   build: {
     outDir: "dist",
   },
