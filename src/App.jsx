@@ -54,42 +54,47 @@ function App() {
       setCurrentUser(parsedUser)
       setUserType(storedUserType)
       
-      // Fetch latest alternate_access from database to ensure it's always up-to-date
+      // Fetch latest alternate_access + full_name from database to ensure it's always up-to-date
       const fetchLatestAlternateAccess = async () => {
         try {
           const { data, error } = await supabase
             .from('login')
-            .select('alternate_access')
+            .select('alternate_access, full_name')
             .eq('username', parsedUser.username)
             .single()
-          
+
           if (!error && data) {
             const latestAlternateAccess = data.alternate_access || null
+            const latestFullName = data.full_name || parsedUser.fullName || null
             setAlternateAccess(latestAlternateAccess)
+            setCurrentUser(prev => ({ ...(prev || parsedUser), fullName: latestFullName }))
             localStorage.setItem("alternateAccess", latestAlternateAccess || '')
-            // Fetch data with latest alternate_access
-            fetchUserData(parsedUser.username, storedUserType, latestAlternateAccess)
+            localStorage.setItem("currentUser", JSON.stringify({ ...parsedUser, fullName: latestFullName }))
+            // Fetch data with latest alternate_access, scoped by full_name (matches SC Assigned)
+            fetchUserData(latestFullName, storedUserType, latestAlternateAccess)
           } else {
             // Fallback to stored value if database fetch fails
             const storedAlternateAccess = localStorage.getItem("alternateAccess")
             setAlternateAccess(storedAlternateAccess || null)
-            fetchUserData(parsedUser.username, storedUserType, storedAlternateAccess)
+            fetchUserData(parsedUser.fullName, storedUserType, storedAlternateAccess)
           }
         } catch (err) {
           console.error("Error fetching alternate_access:", err)
           // Fallback to stored value
           const storedAlternateAccess = localStorage.getItem("alternateAccess")
           setAlternateAccess(storedAlternateAccess || null)
-          fetchUserData(parsedUser.username, storedUserType, storedAlternateAccess)
+          fetchUserData(parsedUser.fullName, storedUserType, storedAlternateAccess)
         }
       }
-      
+
       fetchLatestAlternateAccess()
     }
   }, [])
 
-  // Function to fetch data based on user type FROM SUPABASE
-  const fetchUserData = async (username, userType, altAccess = null) => {
+  // Function to fetch data based on user type FROM SUPABASE.
+  // For non-admins, `fullName` (the user's Full Name, matched against the
+  // "SC Assigned" / sales coordinator name on leads & enquiries) scopes the data.
+  const fetchUserData = async (fullName, userType, altAccess = null) => {
     try {
       if (userType === "admin") {
         // Admin sees all data - fetch from appropriate Supabase tables
@@ -119,29 +124,29 @@ function App() {
         
         setUserData(combinedData);
       } else {
-        // Regular user sees their own data + data from alternate_access users
-        // Build a list of usernames to fetch data for
-        let usernamesToFetch = [username];
-        
-        // If alternate_access has comma-separated values, add them to the list
+        // Regular user sees data assigned to their Full Name + any alternate_access names
+        // Build a list of full names to fetch data for
+        let namesToFetch = [fullName].filter(Boolean);
+
+        // If alternate_access has comma-separated full names, add them to the list
         if (altAccess && altAccess.trim() !== '') {
-          const alternateUsers = altAccess.split(',').map(u => u.trim()).filter(u => u !== '');
-          usernamesToFetch = [...new Set([...usernamesToFetch, ...alternateUsers])];
+          const alternateNames = altAccess.split(',').map(u => u.trim()).filter(u => u !== '');
+          namesToFetch = [...new Set([...namesToFetch, ...alternateNames])];
         }
 
-        // Fetch leads for all usernames in the list
+        // Fetch leads assigned (sc_name) to any of the names in the list
         const { data: userLeads, error: userLeadsError } = await supabase
           .from('lto_leads')
           .select('*')
-          .in('sc_name', usernamesToFetch)
+          .in('sc_name', namesToFetch)
           .order('created_at', { ascending: false })
           .limit(100);
 
-        // Fetch enquiries for all usernames in the list
+        // Fetch enquiries assigned (sales_person_name) to any of the names in the list
         const { data: userEnquiries, error: userEnquiriesError } = await supabase
           .from('lto_enquiries')
           .select('*')
-          .in('sales_person_name', usernamesToFetch)
+          .in('sales_person_name', namesToFetch)
           .order('created_at', { ascending: false })
           .limit(100);
 
@@ -166,39 +171,40 @@ function App() {
 
   const login = async (username, password) => {
     try {
-      // Query Supabase login table - now also fetching alternate_access
+      // Query Supabase login table - now also fetching alternate_access + full_name
       const { data, error } = await supabase
         .from('login')
-        .select('username, usertype, alternate_access')
+        .select('username, usertype, alternate_access, full_name')
         .eq('username', username)
         .eq('password', password)
         .single()
-      
+
       if (error) {
         console.error("Login error:", error);
         showNotification("Invalid credentials", "error");
         return false;
       }
-      
+
       if (data) {
         // Store user info
         const userInfo = {
           username: data.username,
+          fullName: data.full_name || null,
           loginTime: new Date().toISOString()
         }
-        
+
         setIsAuthenticated(true);
         setCurrentUser(userInfo);
         setUserType(data.usertype);
         setAlternateAccess(data.alternate_access || null);
-        
+
         localStorage.setItem("isAuthenticated", "true");
         localStorage.setItem("currentUser", JSON.stringify(userInfo));
         localStorage.setItem("userType", data.usertype);
         localStorage.setItem("alternateAccess", data.alternate_access || '');
-        
-        // Fetch data based on user type FROM SUPABASE, passing alternate_access
-        await fetchUserData(data.username, data.usertype, data.alternate_access);
+
+        // Fetch data based on user type FROM SUPABASE, scoped by full_name + alternate_access
+        await fetchUserData(data.full_name, data.usertype, data.alternate_access);
         
         showNotification(`Welcome, ${username}! (${data.usertype})`, "success");
         return true;
@@ -239,14 +245,18 @@ function App() {
     return userType === "admin";
   }
 
-  // Get list of usernames to filter by (current user + alternate access users)
+  // Get list of Full Names to filter by (current user's Full Name + alternate access names).
+  // Leads/enquiries are scoped by matching this against the "SC Assigned"
+  // column (sc_name / sales_person_name / sales_coordinator_name).
+  // Name kept as `getUsernamesToFilter` since it's used throughout the app as
+  // the generic "names to scope this user's data by" helper.
   const getUsernamesToFilter = () => {
-    let usernames = [currentUser?.username].filter(Boolean);
+    let names = [currentUser?.fullName].filter(Boolean);
     if (alternateAccess && alternateAccess.trim() !== '') {
-      const alternateUsers = alternateAccess.split(',').map(u => u.trim()).filter(u => u !== '');
-      usernames = [...new Set([...usernames, ...alternateUsers])];
+      const alternateNames = alternateAccess.split(',').map(u => u.trim()).filter(u => u !== '');
+      names = [...new Set([...names, ...alternateNames])];
     }
-    return usernames;
+    return names;
   }
 
   // Protected route component

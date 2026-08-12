@@ -1043,9 +1043,9 @@ const handleSaveClick = async () => {
 
             const isUserRow =
               isAdmin() ||
-              (currentUser?.username &&
+              (currentUser?.fullName &&
                 ciValue &&
-                ciValue.toString().trim() === currentUser.username.trim());
+                ciValue.toString().trim() === currentUser.fullName.trim());
             // Debug for DO-6 specifically - check if it exists at all
 
             // Check if order is not dispatched/completed

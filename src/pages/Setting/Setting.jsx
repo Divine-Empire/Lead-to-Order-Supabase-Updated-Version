@@ -24,12 +24,31 @@ function Setting() {
   const [formData, setFormData] = useState({
     username: '',
     password: '',
-    userType: 'user'
+    userType: 'user',
+    fullName: ''
   })
+  const [employeeOptions, setEmployeeOptions] = useState([])
 
   useEffect(() => {
     fetchUsers()
+    fetchEmployeeOptions()
   }, [])
+
+  const fetchEmployeeOptions = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('lto_dropdown')
+        .select('value')
+        .eq('category', 'employees')
+        .order('value', { ascending: true })
+
+      if (error) throw error
+      setEmployeeOptions((data || []).map(d => d.value).filter(Boolean))
+    } catch (error) {
+      console.error("Error fetching employee options:", error)
+      showNotification("Failed to fetch employee list", "error")
+    }
+  }
 
   const fetchUsers = async () => {
     setIsLoading(true)
@@ -42,7 +61,8 @@ function Setting() {
       if (error) throw error
       const normalizedUsers = (data || []).map(u => ({
         ...u,
-        userType: u.usertype || u.userType || 'user'
+        userType: u.usertype || u.userType || 'user',
+        fullName: u.full_name || u.fullName || ''
       }))
       setUsers(normalizedUsers)
     } catch (error) {
@@ -107,14 +127,19 @@ function Setting() {
 
   const openAddModal = () => {
     setModalMode('add')
-    setFormData({ username: '', password: '', userType: 'user' })
+    setFormData({ username: '', password: '', userType: 'user', fullName: '' })
     setIsModalOpen(true)
   }
 
   const openEditModal = (user) => {
     setModalMode('edit')
     setEditingUsername(user.username)
-    setFormData({ username: user.username, password: user.password || '', userType: user.userType || user.usertype || 'user' })
+    setFormData({
+      username: user.username,
+      password: user.password || '',
+      userType: user.userType || user.usertype || 'user',
+      fullName: user.fullName || user.full_name || ''
+    })
     setIsModalOpen(true)
   }
 
@@ -128,6 +153,10 @@ function Setting() {
       showNotification("Password is required for new users", "error")
       return
     }
+    if (!formData.fullName) {
+      showNotification("Full Name is required", "error")
+      return
+    }
 
     setIsUpdating(true)
     try {
@@ -137,14 +166,16 @@ function Setting() {
           .insert([{
             username: formData.username,
             password: formData.password,
-            usertype: formData.userType
+            usertype: formData.userType,
+            full_name: formData.fullName
           }])
         if (error) throw error
         showNotification("User added successfully", "success")
       } else {
         const updatePayload = {
           username: formData.username,
-          usertype: formData.userType
+          usertype: formData.userType,
+          full_name: formData.fullName
         }
         if (formData.password) {
           updatePayload.password = formData.password
@@ -237,7 +268,7 @@ function Setting() {
                             </div>
                             <div>
                               <div className="font-medium text-gray-900">{user.username}</div>
-                              <div className="text-xs text-gray-500">System User</div>
+                              <div className="text-xs text-gray-500">{user.fullName || "No Full Name set"}</div>
                             </div>
                           </div>
                         </td>
@@ -351,8 +382,25 @@ function Setting() {
                         />
                     </div>
                     <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+                        <select
+                            value={formData.fullName}
+                            onChange={(e) => setFormData({...formData, fullName: e.target.value})}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-shadow bg-white"
+                            required
+                        >
+                            <option value="" disabled>Select employee</option>
+                            {employeeOptions.map((name) => (
+                                <option key={name} value={name}>{name}</option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-slate-400 mt-1">
+                            Must match the "SC Assigned" name on leads/enquiries so this user only sees records assigned to them.
+                        </p>
+                    </div>
+                    <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
-                        <select 
+                        <select
                             value={formData.userType}
                             onChange={(e) => setFormData({...formData, userType: e.target.value})}
                             className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-shadow bg-white"
@@ -361,7 +409,7 @@ function Setting() {
                             <option value="admin">Administrator</option>
                         </select>
                     </div>
-                    
+
                     <div className="pt-4 mt-6 border-t border-slate-100 flex justify-end gap-3">
                         <button 
                             type="button"
