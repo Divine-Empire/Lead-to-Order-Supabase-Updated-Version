@@ -36,11 +36,11 @@ const TermsAndConditions = ({
               field === "warranty" ? (
                 <div className="space-y-2">
                   <select
-                    value={quotationData[field] || "6 months warranty applicable against Manufacturing defects."}
+                    value={quotationData[field] || "The equipment is warranted against manufacturing defects for a period of 6 months from the date of invoice. An unconditional warranty of 1 month is provided, during which service and spare parts will be provided free of charge."}
                     onChange={(e) => handleInputChange(field, e.target.value)}
                     className="w-full p-2 border border-gray-300 rounded-md bg-white text-sm"
                   >
-                    <option value="6 months warranty applicable against Manufacturing defects.">
+                    <option value="The equipment is warranted against manufacturing defects for a period of 6 months from the date of invoice. An unconditional warranty of 1 month is provided, during which service and spare parts will be provided free of charge.">
                       Standard 6 Months Warranty
                     </option>
                     <option value="The equipment is warranted against manufacturing defects for a period of 12 months from the date of invoice. whichever is earlier. The rubber parts, wire rope and electric components are not covered under this warranty. Warranty is specifically for manufacturing defects only.">

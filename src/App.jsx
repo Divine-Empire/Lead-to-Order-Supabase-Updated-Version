@@ -233,11 +233,17 @@ function App() {
     showNotification("Logged out successfully", "success");
   }
 
-  const showNotification = (message, type = "info") => {
+  // duration is in ms; pass 0 (or null) to keep the toast up until the
+  // next showNotification call replaces/clears it -- used for "syncing,
+  // don't close this window" indicators that should stay visible for the
+  // whole duration of a background operation, not just 3 seconds.
+  const showNotification = (message, type = "info", duration = 3000) => {
     setNotification({ message, type });
-    setTimeout(() => {
-      setNotification(null);
-    }, 3000);
+    if (duration) {
+      setTimeout(() => {
+        setNotification((current) => (current?.message === message ? null : current));
+      }, duration);
+    }
   }
   
   // Check if user has admin privileges

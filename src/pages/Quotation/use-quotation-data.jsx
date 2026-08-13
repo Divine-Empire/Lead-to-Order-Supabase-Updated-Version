@@ -172,7 +172,7 @@ export const INITIAL_QUOTATION_DATA = {
     "Within 7-10 working days after received purchase order and 100% advance payment",
   freight: "Extra as per actual.",
   insurance: "Transit insurance for all shipment is at Buyer's scope.",
-  warranty: "6 months warranty applicable against Manufacturing defects.",
+  warranty: "The equipment is warranted against manufacturing defects for a period of 6 months from the date of invoice. An unconditional warranty of 1 month is provided, during which service and spare parts will be provided free of charge.",
   taxes: "Extra as per actual.",
   afterReceiptOfMaterial: "In case of any discrepancy in the material, please inform us within 24 hours with supporting images attached. After this period, the company will not be responsible for any discrepancies.",
   technicalSupport: "Video call assistance for installation and troubleshooting of the machine is FOC. For physical assistance: Service charges are free during the warranty period; however, TA & DA will be charged extra as per actuals.",

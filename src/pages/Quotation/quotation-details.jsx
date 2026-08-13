@@ -259,7 +259,20 @@ const handleScroll = (e) => {
             onChange={handleStateChange}
             className="w-full p-2 border border-gray-300 rounded-md"
           >
-            {stateOptions.map((option) => (
+            {/*
+              stateOptions comes from a de-duplicated (exact-string-match)
+              scan of lto_consignor_details -- when revising an older
+              quotation, its own consignorState value can be missing from
+              that list (e.g. the consignor row was since edited/removed),
+              which makes a controlled native <select> render blank even
+              though quotationData.consignorState is set correctly. Ensure
+              the currently loaded value always has a matching <option> so
+              it's never silently hidden.
+            */}
+            {(quotationData.consignorState && !stateOptions.includes(quotationData.consignorState)
+              ? [quotationData.consignorState, ...stateOptions]
+              : stateOptions
+            ).map((option) => (
               <option key={option} value={option}>
                 {option}
               </option>

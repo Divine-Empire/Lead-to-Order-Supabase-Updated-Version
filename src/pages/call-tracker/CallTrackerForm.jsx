@@ -394,6 +394,27 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
         throw insertError;
       }
 
+      // The Items section above was being collected in the `items` state
+      // but never actually persisted -- lto_lead_items had no insert path
+      // at all. Only rows with a name filled in are worth saving.
+      const itemRows = items
+        .filter((item) => item.name && item.name.trim())
+        .map((item) => ({
+          lead_id: leadRecord.id,
+          item_name: item.name.trim(),
+          quantity: Number(item.quantity) || 1,
+        }));
+
+      if (itemRows.length > 0) {
+        const { error: itemsError } = await supabase
+          .from('lto_lead_items')
+          .insert(itemRows);
+
+        if (itemsError) {
+          console.error("Error inserting lead items:", itemsError);
+        }
+      }
+
       // 3. Prepare update data for leads table
       const updateData = {
         lead_source: leadSource || null,

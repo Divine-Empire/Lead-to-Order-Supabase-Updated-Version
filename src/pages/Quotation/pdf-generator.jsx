@@ -1210,7 +1210,7 @@ const QuotationPDFDocument = ({
                 <Text style={styles.termLabel}>Warranty</Text>
                 <Text style={styles.termValue}>
                   {quotationData.warranty ||
-                    "6 months warranty applicable against Manufacturing defects."}
+                    "The equipment is warranted against manufacturing defects for a period of 6 months from the date of invoice. An unconditional warranty of 1 month is provided, during which service and spare parts will be provided free of charge."}
                 </Text>
               </View>
             )}

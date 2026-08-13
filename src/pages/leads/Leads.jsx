@@ -943,8 +943,34 @@ function Leads() {
         company_group_name: formData.groupName || "",
       };
 
-      const { error } = await supabase.from("lto_leads").insert([leadData]);
+      const { data: insertedLead, error } = await supabase
+        .from("lto_leads")
+        .insert([leadData])
+        .select("id")
+        .single();
       if (error) throw error;
+
+      // Contact persons were being collected in the form but never actually
+      // persisted -- lto_lead_contacts had no insert path at all. Only
+      // rows with a name filled in are worth saving.
+      const contactRows = (formData.contactPersons || [])
+        .filter((person) => person.name && person.name.trim())
+        .map((person) => ({
+          lead_id: insertedLead.id,
+          person_name: person.name.trim(),
+          designation: person.designation ? person.designation.trim() : null,
+          phone_number: person.number ? person.number.trim() : null,
+        }));
+
+      if (contactRows.length > 0) {
+        const { error: contactsError } = await supabase
+          .from("lto_lead_contacts")
+          .insert(contactRows);
+
+        if (contactsError) {
+          console.error("Error inserting lead contacts:", contactsError);
+        }
+      }
 
       if (compNameTrimmed) {
         await supabase

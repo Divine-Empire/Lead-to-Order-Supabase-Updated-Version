@@ -13,6 +13,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AuthContext } from "../../App";
 import DirectEnquiryForm from "./DirectEnquiryForm";
 import supabase from "../../utils/supabase";
+import { syncEnquiryToSheetInBackground } from "../../utils/sheetSync";
+import { syncLeadToSheetInBackground } from "../../utils/sheetSyncLeads";
 import DataTable from "../../components/DataTable";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import { usePendingEnquiries, useHistoryEnquiries, CURRENT_STAGE_OPTIONS } from "./queries";
@@ -199,7 +201,8 @@ function EnquiryTracker() {
   const {
     currentUser = null,
     isAdmin = () => false,
-    getUsernamesToFilter = () => []
+    getUsernamesToFilter = () => [],
+    showNotification = () => {}
   } = authContext;
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTabState] = useState(() => {
@@ -578,6 +581,23 @@ const handleSaveClick = async () => {
         }
 
         alert("Updated successfully!");
+
+        // Only order-received enquiries get pushed to the sheet, and the
+        // sync itself must never block this save flow — fired here without
+        // an await; its own success/failure just gets logged.
+        if (editedData.orderStatus?.toLowerCase() === "yes") {
+          syncEnquiryToSheetInBackground(
+            { enquiryNo: editedData.enquiry_no || directEnquiryUpdateData.enquiry_no },
+            (success) => {
+              if (success) {
+                showNotification("Data synced to Google Sheets", "success");
+              } else {
+                showNotification("Enquiry updated but Google Sheets sync may be delayed", "warning");
+              }
+            }
+          );
+        }
+
         fetchPendingData(currentPage, searchTerm, getDateFiltersFromCallingDays());
         setEditingRowId(null);
         setEditedData({});
@@ -782,6 +802,29 @@ const handleSaveClick = async () => {
     }
 
     alert("Updated successfully!");
+
+    // Only order-received enquiries/leads get pushed to the sheet, and the
+    // sync itself must never block this save flow — fired here without an
+    // await. trackerId pins the sync to the exact row just updated, since
+    // History rows are an append-only log and there can be several per
+    // enquiry/lead.
+    if (editedData.orderStatus?.toLowerCase() === "yes") {
+      const onSettled = (success) => {
+        if (success) {
+          showNotification("Data synced to Google Sheets", "success");
+        } else {
+          showNotification("Enquiry updated but Google Sheets sync may be delayed", "warning");
+        }
+      };
+
+      showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
+
+      if (isLeadNumber) {
+        syncLeadToSheetInBackground({ leadNo: identifier, trackerId: editedData.id }, onSettled);
+      } else {
+        syncEnquiryToSheetInBackground({ enquiryNo: identifier, trackerId: editedData.id }, onSettled);
+      }
+    }
 
     // Refresh data
     fetchHistoryData(1, searchTerm, false, getDateFiltersFromCallingDays());

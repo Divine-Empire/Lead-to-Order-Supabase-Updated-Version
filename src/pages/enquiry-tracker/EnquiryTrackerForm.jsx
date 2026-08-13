@@ -9,6 +9,8 @@ import OrderExpectedForm from "../../components/enquiry-tracker/OrderExpectedFor
 import OrderStatusForm from "../../components/enquiry-tracker/OrderStatusFrom"
 import supabase from "../../utils/supabase"
 import { generateAndAssignClientCode } from "../Master/ClientCodeGen"
+import { syncEnquiryToSheetInBackground } from "../../utils/sheetSync"
+import { syncLeadToSheetInBackground } from "../../utils/sheetSyncLeads"
 
 function NewEnquiryTracker() {
   const navigate = useNavigate()
@@ -425,45 +427,6 @@ function NewEnquiryTracker() {
     }
   };
 
-
-  const triggerWebhookManually = async (enquiryNo, tableName) => {
-    try {
-      const colName = tableName === 'lto_leads' ? 'lead_no' : (tableName === 'lto_enquiries' ? 'enquiry_no' : 'id');
-      const { data, error } = await supabase
-        .from(tableName)
-        .select('*')
-        .eq(colName, enquiryNo)
-        .maybeSingle();
-
-      if (error || !data) {
-        console.error("Error fetching updated record:", error);
-        return false;
-      }
-
-      // Simulate a webhook call
-      const webhookUrl = "";
-
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=utf-8',
-        },
-        body: JSON.stringify({
-          table: tableName,
-          type: 'UPDATE',
-          record: data,
-          old_record: {} // You might want to store old record for comparison
-        })
-      });
-
-      const result = await response.json();
-      return result.success;
-
-    } catch (error) {
-      console.error("Error triggering webhook:", error);
-      return false;
-    }
-  };
 
 
   const updateEnquiryToOrderTable = async (enquiryNo, allFormData, currentStage) => {
@@ -951,12 +914,23 @@ function NewEnquiryTracker() {
 
         if (updateSuccess) {
           showNotification("Call tracker updated successfully and enquiry record updated", "success");
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          const webhookSuccess = await triggerWebhookManually(formData.enquiryNo, "lto_enquiries");
-          if (webhookSuccess) {
-            showNotification("Data synced to Google Sheets", "success");
-          } else {
-            showNotification("Database updated but Google Sheets sync may be delayed", "warning");
+
+          // Only order-received enquiries get pushed to the sheet, and the
+          // sync itself must never block the save flow — it's fired here
+          // without an await; the follow-up toast fires whenever it settles.
+          if (isOrderStatusStage && orderStatusData.orderStatus?.toLowerCase() === "yes") {
+            // Persistent (duration 0) so it stays up for the whole sync —
+            // the fetch can take a few seconds, and if the tab is closed
+            // before it resolves the sheet update is lost, so the user
+            // needs a clear signal to wait for the follow-up toast.
+            showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
+            syncEnquiryToSheetInBackground(
+              { enquiryNo: formData.enquiryNo },
+              (webhookSuccess) => showNotification(
+                webhookSuccess ? "Data synced to Google Sheets" : "Database updated but Google Sheets sync may be delayed",
+                webhookSuccess ? "success" : "warning"
+              )
+            );
           }
         } else {
           showNotification("Call tracker updated but enquiry record could not be updated", "warning");
@@ -998,12 +972,19 @@ function NewEnquiryTracker() {
 
         if (updateSuccess) {
           showNotification("Call tracker updated successfully and lead record updated", "success");
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          const webhookSuccess = await triggerWebhookManually(formData.enquiryNo, "lto_leads");
-          if (webhookSuccess) {
-            showNotification("Data synced to Google Sheets", "success");
-          } else {
-            showNotification("Database updated but Google Sheets sync may be delayed", "warning");
+
+          // Only order-received leads get pushed to the sheet, and the
+          // sync itself must never block the save flow — fired here
+          // without an await, same pattern as the enquiry path above.
+          if (isOrderStatusStage && orderStatusData.orderStatus?.toLowerCase() === "yes") {
+            showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
+            syncLeadToSheetInBackground(
+              { leadNo: formData.enquiryNo },
+              (webhookSuccess) => showNotification(
+                webhookSuccess ? "Data synced to Google Sheets" : "Database updated but Google Sheets sync may be delayed",
+                webhookSuccess ? "success" : "warning"
+              )
+            );
           }
         } else {
           showNotification("Call tracker updated but lead record could not be updated", "warning");

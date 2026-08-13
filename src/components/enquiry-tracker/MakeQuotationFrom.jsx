@@ -37,11 +37,16 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
         return;
       }
       try {
+        // Revisions are just additional rows here -- a revision reuses the
+        // same enquiry_reference_no and gets a "-01", "-02"... suffix
+        // appended to the base quotation_no (see Quotation.jsx's
+        // nextRevision helper) -- so this fetch already returns the root
+        // AND every revision for this enquiry, oldest first.
         const { data, error } = await supabase
           .from("lto_make_quotations")
           .select("quotation_no, grand_total, pdf_url, created_at")
           .eq("enquiry_reference_no", enquiryNo)
-          .order("created_at", { ascending: false });
+          .order("created_at", { ascending: true });
 
         if (error) throw error;
         setGeneratedQuotations(data || []);
@@ -54,26 +59,64 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
     fetchGeneratedQuotations();
   }, [enquiryNo]);
 
-  // "Send Quotation No." represents how many times a quotation has already
-  // been sent for THIS specific enquiry/lead -- i.e. this enquiry's own
-  // quotation count + 1 for the one about to be sent now. generatedQuotations
-  // is already scoped to this enquiryNo via enquiry_reference_no above, so
-  // it's the correct source of truth (previously this counted ALL
-  // lto_enquiry_tracker rows app-wide, which produced meaningless numbers).
+  // "Send Quotation No." tracks how many times a quotation has already been
+  // sent (i.e. submitted through this "Make Quotation" stage) for THIS
+  // specific enquiry/lead. It's derived from the tracker history rather
+  // than from lto_make_quotations, since sending the same quotation number
+  // twice still counts as a separate "send". Looks up this enquiry/lead's
+  // UUID, finds the most recent tracker row whose current_stage is the
+  // make-quotation stage, and shows last send_quotation_no + 1 (or 1 if
+  // no prior send exists).
   useEffect(() => {
-    if (!enquiryNo) return;
-    onFieldChange('sendQuotationNo', String(generatedQuotations.length + 1));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enquiryNo, generatedQuotations]);
+    const fetchNextSendQuotationNo = async () => {
+      if (!enquiryNo) return;
 
-// Also modify the Send Quotation No. input field to be readonly:
-// Change this line in the JSX:
-// className="w-full p-2 border border-gray-300 rounded-md"
-// To:
-// className="w-full p-2 border border-gray-300 rounded-md bg-gray-100"
-// And add:
-// readOnly
-  
+      try {
+        const isLead = enquiryNo.toUpperCase().startsWith("LD-");
+        const parentTable = isLead ? "lto_leads" : "lto_enquiries";
+        const parentIdColumn = isLead ? "lead_no" : "enquiry_no";
+        const trackerTable = isLead ? "lto_enquiry_tracker_for_leads" : "lto_enquiry_tracker";
+        const trackerFkColumn = isLead ? "lead_id" : "enquiry_id";
+
+        const { data: parentRecord, error: parentError } = await supabase
+          .from(parentTable)
+          .select("id")
+          .eq(parentIdColumn, enquiryNo)
+          .maybeSingle();
+
+        if (parentError || !parentRecord?.id) {
+          onFieldChange("sendQuotationNo", "1");
+          return;
+        }
+
+        // current_stage has been written as both "make-quotation" (current)
+        // and "Make Quotation" (legacy) across rows -- check both.
+        const { data: lastMakeQuotationRow, error: trackerError } = await supabase
+          .from(trackerTable)
+          .select("send_quotation_no")
+          .eq(trackerFkColumn, parentRecord.id)
+          .in("current_stage", ["make-quotation", "Make Quotation"])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (trackerError) throw trackerError;
+
+        const lastNo = parseInt(lastMakeQuotationRow?.send_quotation_no, 10);
+        onFieldChange(
+          "sendQuotationNo",
+          String(Number.isFinite(lastNo) && lastNo > 0 ? lastNo + 1 : 1)
+        );
+      } catch (err) {
+        console.error("Error computing next Send Quotation No.:", err);
+        onFieldChange("sendQuotationNo", "1");
+      }
+    };
+
+    fetchNextSendQuotationNo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enquiryNo]);
+
   const handleChange = (e) => {
     const { name, value } = e.target
     if (name === "quotationNumber") {
@@ -190,24 +233,21 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
             <label htmlFor="quotationNumber" className="block text-sm font-medium">
               Quotation Number
              <span className="text-destructive">*</span></label>
-            <input
+            <select
               id="quotationNumber"
               name="quotationNumber"
-              type="text"
-              list="generatedQuotationsList"
-              placeholder="Select or type quotation number"
               value={formData.quotationNumber}
               onChange={handleChange}
               className="w-full p-2 border border-gray-300 rounded-md"
               required
-            />
-            <datalist id="generatedQuotationsList">
+            >
+              <option value="">Select quotation number</option>
               {generatedQuotations.map((q) => (
                 <option key={q.quotation_no} value={q.quotation_no}>
-                  {q.grand_total ? `Value: ₹${q.grand_total}` : ""}
+                  {q.quotation_no}{q.grand_total ? ` — ₹${q.grand_total}` : ""}
                 </option>
               ))}
-            </datalist>
+            </select>
           </div>
 
           <div className="space-y-2">
