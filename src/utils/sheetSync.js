@@ -226,11 +226,26 @@ export const syncEnquiryToSheet = async ({ enquiryNo, trackerId }) => {
 
     // text/plain avoids a CORS preflight against the Apps Script Web App,
     // matching the content-type already used elsewhere in this codebase.
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ secret, sheetTab: "ENQUIRY TO ORDER", row }),
-    });
+    //
+    // The Apps Script webhook can cold-start or occasionally hang; with no
+    // timeout at all, the persistent "Syncing..." loading toast this feeds
+    // (see call sites in EnquiryTracker.jsx/EnquiryTrackerForm.jsx) stayed
+    // up and visibly spinning for however long that took, unbounded --
+    // capping it here means callers always get an answer within 30s either
+    // way, resolving false (treated as "sync may be delayed") on timeout.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    let response;
+    try {
+      response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ secret, sheetTab: "ENQUIRY TO ORDER", row }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const result = await response.json();
     return !!result.success;

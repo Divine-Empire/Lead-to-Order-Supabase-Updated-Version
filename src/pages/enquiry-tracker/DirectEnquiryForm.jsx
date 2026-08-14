@@ -7,7 +7,6 @@ import { resolveScAndCreForNewCompany } from "../../utils/scAssignment"
 
 const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = null }) => {
   const [leadSources, setLeadSources] = useState([])
-  const [, setScNameOptions] = useState([])
   const [enquiryStates, setEnquiryStates] = useState([])
   const [nobOptions, setNobOptions] = useState([])
   const [salesTypes, setSalesTypes] = useState([])
@@ -154,7 +153,6 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
     try {
       const [
         { data: leadSourcesData, error: leadSourcesError },
-        { data: scNamesData, error: scNamesError },
         { data: statesData, error: statesError },
         { data: nobData, error: nobError },
         { data: salesTypeData, error: salesTypeError },
@@ -164,7 +162,6 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
         { data: itemsData, error: itemsError }
       ] = await Promise.all([
         fetchCategory("lead_source"),
-        fetchCategory("sc_name"),
         fetchCategory("state"),
         fetchCategory("nob"),
         fetchCategory("sales_type"),
@@ -175,7 +172,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
       ]);
 
       const errors = [
-        leadSourcesError, scNamesError, statesError, nobError,
+        leadSourcesError, statesError, nobError,
         salesTypeError, approachError, receiversError, assignToError, itemsError
       ].filter(Boolean);
 
@@ -187,7 +184,6 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
       const toItemValues = (arr) => [...new Set((arr || []).map(item => item.item_name).filter(Boolean))].sort();
 
       setLeadSources([...new Set(toValues(leadSourcesData))]);
-      setScNameOptions([...new Set(toValues(scNamesData))]);
       setEnquiryStates([...new Set(toValues(statesData))]);
       setNobOptions([...new Set(toValues(nobData))]);
       setSalesTypes([...new Set(toValues(salesTypeData))]);
@@ -199,7 +195,6 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
     } catch (error) {
       console.error("Error fetching dropdown values:", error);
       setLeadSources(["Website", "Justdial", "Sulekha", "Indiamart", "Referral", "Other"]);
-      setScNameOptions(["SC 1", "SC 2", "SC 3"]);
       setCompanyOptions([]);
       setEnquiryStates(["Maharashtra", "Gujarat", "Karnataka", "Tamil Nadu", "Delhi"]);
       setNobOptions(["NOB 1", "NOB 2", "NOB 3"]);

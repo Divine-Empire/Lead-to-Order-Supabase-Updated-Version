@@ -12,12 +12,13 @@ import { generateAndAssignClientCode } from "../Master/ClientCodeGen"
 import { syncEnquiryToSheetInBackground } from "../../utils/sheetSync"
 import { syncLeadToSheetInBackground } from "../../utils/sheetSyncLeads"
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync"
+import { generateNextOrderNumber as generateNextOrderNumberShared } from "../../utils/orderNumberGenerator"
 
 function NewEnquiryTracker() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const leadId = searchParams.get("leadId")
-  const { showNotification } = useContext(AuthContext)
+  const { showNotification, dismissNotification } = useContext(AuthContext)
   const [customerFeedbackOptions, setCustomerFeedbackOptions] = useState([])
 
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -124,45 +125,14 @@ function NewEnquiryTracker() {
   }, [])
 
 
-  // Function to generate the next order number via Supabase RPC (Option B)
-  const generateNextOrderNumber = async () => {
-    try {
-      // Option B: Generate order number directly via Supabase Postgres RPC function
-      const { data, error } = await supabase.rpc('lto_get_next_order_number');
-      if (error) throw error;
-      if (data && typeof data === 'string' && data.trim() !== '') {
-        return data.trim();
-      }
-      throw new Error('RPC returned empty or invalid value');
-    } catch (error) {
-      console.error("Error generating order number via RPC, falling back to local query:", error);
-      // Safe fallback if RPC function is not created yet or fails
-      try {
-        const [trackerEnqRes, trackerLeadsRes] = await Promise.all([
-          supabase.from("lto_enquiry_tracker").select('order_no').not('order_no', 'is', null).order('created_at', { ascending: false }).limit(500),
-          supabase.from("lto_enquiry_tracker_for_leads").select('order_no').not('order_no', 'is', null).order('created_at', { ascending: false }).limit(500)
-        ]);
-
-        const allNumbers = [
-          ...(trackerEnqRes.data || []).map(item => item.order_no),
-          ...(trackerLeadsRes.data || []).map(item => item.order_no)
-        ];
-
-        const orderNumbers = allNumbers
-          .map(orderNo => {
-            const match = String(orderNo || '').match(/DO-(\d+)/i);
-            return match ? parseInt(match[1], 10) : 0;
-          })
-          .filter(num => !isNaN(num) && num > 0);
-
-        const maxOrderNumber = orderNumbers.length > 0 ? Math.max(...orderNumbers) : 0;
-        return `DO-${String(maxOrderNumber + 1).padStart(3, "0")}`;
-      } catch {
-        const timestamp = Date.now().toString().slice(-4);
-        return `DO-${timestamp}`;
-      }
-    }
-  };
+  // Generates via the atomic public.lto_order_number_seq sequence, with
+  // retries -- see src/utils/orderNumberGenerator.js for why the fallback
+  // this used to have (a non-atomic MAX(order_no)+1 over a stale, limited
+  // snapshot) was actively unsafe and has been removed rather than kept as
+  // a "safety net". Throws if every retry fails; callers must let that
+  // propagate and abort the submission rather than proceed without a real
+  // order number.
+  const generateNextOrderNumber = () => generateNextOrderNumberShared(supabase);
 
  
   // Update form data when leadId changes
@@ -175,8 +145,6 @@ function NewEnquiryTracker() {
     }
   }, [leadId])
 
- 
-  // something the user has already typed/selected.
   useEffect(() => {
     const prefillFromLatestLog = async () => {
       if (!formData.enquiryNo) return;
@@ -325,15 +293,18 @@ function NewEnquiryTracker() {
 
   const handleOrderStatusChange = async (field, value) => {
 
-
-    if (field === "orderStatus" && value === "yes") {
-      // Pre-generate order number for display
-      const orderNumber = await generateNextOrderNumber();
-      setOrderStatusData(prev => ({
-        ...prev,
-        generatedOrderNumber: orderNumber
-      }));
-    }
+    // No longer pre-generates an order number here when orderStatus flips
+    // to "yes". That number was never actually shown anywhere in
+    // OrderStatusFrom.jsx's UI -- it existed purely so two save paths
+    // could reuse the same value -- which meant every time a user opened
+    // this form and toggled to "Yes" (even without ever submitting), a
+    // real, permanent nextval() call on the atomic sequence was burned for
+    // nothing. That's what produced visible gaps in the order number
+    // sequence (e.g. real orders at DO-4555 while the sequence had already
+    // advanced to DO-4570). The number is now generated exactly once, only
+    // at actual submission time, in handleSubmit below -- see where
+    // `orderNumber` is generated there and threaded through to both
+    // trackerPayload.order_no and updateLeadToOrderTable's payload.
 
     // Handle file upload for acceptance file
     if (field === "acceptanceFile" && value) {
@@ -484,8 +455,16 @@ function NewEnquiryTracker() {
     const isOrderStatusStage = currentStage === "order-status" || currentStage === "Order Status";
     try {
 
-      let orderNumber = "";
-      if (isOrderStatusStage && orderStatusData.orderStatus === "yes") {
+      // Reuse the number handleOrderStatusChange already pre-generated
+      // (and showed the user) when they flipped Order Status to "yes",
+      // instead of generating a second, different one here -- this used to
+      // be a fresh, independent generateNextOrderNumber() call, meaning a
+      // lead submission could end up with lto_enquiry_tracker_for_leads.
+      // order_no holding a DIFFERENT number than the legacy Order_No
+      // column (set inside updateLeadToOrderTable below, which already did
+      // reuse generatedOrderNumber) for the exact same real-world order.
+      let orderNumber = orderStatusData.generatedOrderNumber || "";
+      if (isOrderStatusStage && orderStatusData.orderStatus === "yes" && !orderNumber) {
         orderNumber = await generateNextOrderNumber();
       }
 
@@ -654,13 +633,20 @@ function NewEnquiryTracker() {
             // the fetch can take a few seconds, and if the tab is closed
             // before it resolves the sheet update is lost, so the user
             // needs a clear signal to wait for the follow-up toast.
-            showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
+            // Each sync gets its OWN toast id -- dismissing this exact one
+            // before showing the result means two overlapping syncs (e.g.
+            // saving another row while this one is still in flight) no
+            // longer stomp each other's loading/result toast.
+            const syncToastId = showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
             syncEnquiryToSheetInBackground(
               { enquiryNo: formData.enquiryNo },
-              (webhookSuccess) => showNotification(
-                webhookSuccess ? "Data synced to Google Sheets" : "Database updated but Google Sheets sync may be delayed",
-                webhookSuccess ? "success" : "warning"
-              )
+              (webhookSuccess) => {
+                dismissNotification(syncToastId);
+                showNotification(
+                  webhookSuccess ? "Data synced to Google Sheets" : "Database updated but Google Sheets sync may be delayed",
+                  webhookSuccess ? "success" : "warning"
+                );
+              }
             );
           }
         } else {
@@ -698,7 +684,13 @@ function NewEnquiryTracker() {
             ...orderStatusData
           },
           currentStage,
-          orderStatusData
+          // Pass through the number already generated above (if any) so
+          // this reuses it instead of generating its own -- orderStatusData
+          // itself is a stale closure value here (state updates from this
+          // same submit wouldn't be visible yet), so without this override
+          // its own reuse-check below would always miss and mint a SECOND,
+          // different number for the same submission.
+          { ...orderStatusData, generatedOrderNumber: orderNumber || orderStatusData.generatedOrderNumber }
         );
 
         if (updateSuccess) {
@@ -708,13 +700,16 @@ function NewEnquiryTracker() {
           // sync itself must never block the save flow — fired here
           // without an await, same pattern as the enquiry path above.
           if (isOrderStatusStage && orderStatusData.orderStatus?.toLowerCase() === "yes") {
-            showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
+            const syncToastId = showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
             syncLeadToSheetInBackground(
               { leadNo: formData.enquiryNo },
-              (webhookSuccess) => showNotification(
-                webhookSuccess ? "Data synced to Google Sheets" : "Database updated but Google Sheets sync may be delayed",
-                webhookSuccess ? "success" : "warning"
-              )
+              (webhookSuccess) => {
+                dismissNotification(syncToastId);
+                showNotification(
+                  webhookSuccess ? "Data synced to Google Sheets" : "Database updated but Google Sheets sync may be delayed",
+                  webhookSuccess ? "success" : "warning"
+                );
+              }
             );
           }
         } else {

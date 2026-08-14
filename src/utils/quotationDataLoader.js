@@ -110,20 +110,15 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
     }
 
     const subtotal = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    // Previously hardcoded to 0 -- since flat_discount now round-trips
-    // through lto_make_quotation_items (see the per-item mapping above),
-    // derive the summary total from the items themselves so a revision's
-    // tax base reflects any flat discounts that were actually applied.
-    // flat_discount is a PERCENTAGE (stacked after `discount`, itself a %)
-    // -- mirrors computeItemFlatDiscountAmount in use-quotation-data.jsx.
-    const totalFlatDiscount = items.reduce((sum, item) => {
-      const baseAmount = Number(item.qty || 0) * Number(item.rate || 0);
-      const discountedAmount = baseAmount * (1 - Number(item.discount || 0) / 100);
-      return sum + discountedAmount * (Number(item.flatDiscount || 0) / 100);
-    }, 0);
+    // flat_discount is a fixed currency amount (not a %), already baked
+    // into each item's `amount` at save time -- this is purely the display
+    // rollup for the "Total Flat Discount" summary row, not fed back into
+    // taxableAmount (item.amount already reflects it, so subtracting it from
+    // subtotal again here would double-count it).
+    const totalFlatDiscount = items.reduce((sum, item) => sum + Number(item.flatDiscount || 0), 0);
     const cgstRate = 9;
     const sgstRate = 9;
-    const taxableAmount = Math.max(0, subtotal - totalFlatDiscount);
+    const taxableAmount = Math.max(0, subtotal);
     const cgstAmount = Number((taxableAmount * (cgstRate / 100)).toFixed(2));
     const sgstAmount = Number((taxableAmount * (sgstRate / 100)).toFixed(2));
     const specialDiscount = 0; // Same "will be calculated from items if needed" placeholder as the original flow

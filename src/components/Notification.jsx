@@ -1,4 +1,10 @@
-function Notification({ message, type = "info" }) {
+// Renders a STACK of toasts, not just one -- each background operation
+// (e.g. a Google Sheets sync) gets its own independent entry with its own
+// id, so two overlapping syncs no longer stomp each other's "loading"
+// state (previously a single global `notification` object, matched for
+// dismissal purely by message-string equality, which broke down the moment
+// two calls shared the same literal text).
+function Notification({ notifications = [] }) {
   const bgColor = {
     success: "bg-success/10 border-success text-success",
     error: "bg-destructive/10 border-destructive text-destructive",
@@ -7,23 +13,30 @@ function Notification({ message, type = "info" }) {
     loading: "bg-info/10 border-info text-info",
   }
 
+  if (!notifications.length) return null
+
   return (
-    <div className="fixed bottom-4 right-4 z-50 max-w-md">
-      <div className={`p-4 rounded-md border-l-4 shadow-md flex items-center gap-3 ${bgColor[type]}`}>
-        {type === "loading" && (
-          <svg
-            className="animate-spin h-4 w-4 flex-shrink-0"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-          </svg>
-        )}
-        <span>{message}</span>
-      </div>
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2 max-w-md">
+      {notifications.map(({ id, message, type = "info" }) => (
+        <div
+          key={id}
+          className={`p-4 rounded-md border-l-4 shadow-md flex items-center gap-3 ${bgColor[type]}`}
+        >
+          {type === "loading" && (
+            <svg
+              className="animate-spin h-4 w-4 flex-shrink-0"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+          )}
+          <span>{message}</span>
+        </div>
+      ))}
     </div>
   )
 }

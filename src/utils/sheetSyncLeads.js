@@ -291,11 +291,23 @@ export const syncLeadToSheet = async ({ leadNo, trackerId }) => {
     // text/plain avoids a CORS preflight against the Apps Script Web App,
     // matching the enquiry-sync convention. sheetTab tells the shared
     // Apps Script which tab to write into.
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ secret, sheetTab: "FMS", row }),
-    });
+    //
+    // Same 30s cap as sheetSync.js's syncEnquiryToSheet -- see that file
+    // for why: an unbounded fetch here left the persistent "Syncing..."
+    // loading toast spinning for as long as the webhook took, with no cap.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    let response;
+    try {
+      response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ secret, sheetTab: "FMS", row }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const result = await response.json();
     return !!result.success;

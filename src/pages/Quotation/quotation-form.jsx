@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import QuotationDetails from "./quotation-details";
 import ConsignorDetails from "./consignor-details";
 import ConsigneeDetails from "./consignee-details";
@@ -10,6 +10,7 @@ import BankDetails from "./bank-details";
 import NotesSection from "./notes-section";
 import SpecialOfferSection from "./special-offer-section";
 import { getCompanyPrefix, getNextQuotationNumber } from "./quotation-service";
+import { getStateCodeFromName } from "../../utils/gstStateCodes";
 import supabase from "../../utils/supabase";
 
 const QuotationForm = ({
@@ -306,6 +307,48 @@ const QuotationForm = ({
     fetchDropdownData();
   }, []);
 
+  // `dropdownData.companies` above takes a moment to load (a sequential
+  // chain of several table fetches) -- if consigneeName already gets set
+  // before that resolves (e.g. the user picks/types a company right away,
+  // or Lead No selection auto-fills it), handleCompanyChange in
+  // consignee-details.jsx runs against an empty `dropdownData.companies`
+  // and explicitly blanks consigneeStateCode/Address/State/etc rather than
+  // just leaving them alone, since it can't tell "not loaded yet" apart
+  // from "not a known company". Nothing then re-checks once the data
+  // arrives. This runs once, right when companies finish loading, and
+  // fills in only whatever fields are still blank -- never overwrites
+  // anything already correctly set (e.g. by revision loading, or by the
+  // user editing it manually in that gap).
+  const hasHydratedConsigneeRef = useRef(false);
+  useEffect(() => {
+    if (hasHydratedConsigneeRef.current) return;
+    if (!dropdownData.companies || Object.keys(dropdownData.companies).length === 0) return;
+    hasHydratedConsigneeRef.current = true;
+
+    const name = quotationData.consigneeName;
+    const companyDetails = name && dropdownData.companies[name];
+    if (!companyDetails) return;
+
+    if (!quotationData.consigneeStateCode && companyDetails.stateCode) {
+      handleInputChange("consigneeStateCode", companyDetails.stateCode);
+    }
+    if (!quotationData.consigneeAddress && companyDetails.address) {
+      handleInputChange("consigneeAddress", companyDetails.address);
+    }
+    if (!quotationData.consigneeState && companyDetails.state) {
+      handleInputChange("consigneeState", companyDetails.state);
+    }
+    if (!quotationData.consigneeContactName && companyDetails.contactName) {
+      handleInputChange("consigneeContactName", companyDetails.contactName);
+    }
+    if (!quotationData.consigneeContactNo && companyDetails.contactNo) {
+      handleInputChange("consigneeContactNo", companyDetails.contactNo);
+    }
+    if (!quotationData.consigneeGSTIN && companyDetails.gstin) {
+      handleInputChange("consigneeGSTIN", companyDetails.gstin);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dropdownData.companies]);
 
   // Lead/Enquiry No. suggestions now come from `enquiry_pending_view` -- the
   // same Postgres view that backs the Enquiry Tracker's "Pending" tab, and
@@ -468,6 +511,21 @@ const QuotationForm = ({
     handleInputChange("consigneeContactNo", leadData.contactNo);
     handleInputChange("consigneeGSTIN", leadData.gstin);
 
+    // Lead/enquiry records (lto_leads/lto_enquiries) have no state_code
+    // column at all -- only lto_client_master does -- so State Code could
+    // never be filled by this Lead No. selection path, even when the
+    // matching client_master row already has one stored (this is a
+    // different path from handleCompanyChange below, which correctly
+    // pulls it from dropdownData.companies since it's keying off the
+    // Company Name field directly). Same lookup, keyed by the company name
+    // this lead/enquiry belongs to; falls back to deriving it from the
+    // state name if client_master doesn't have a code either.
+    const matchedCompany = dropdownData.companies && dropdownData.companies[companyName];
+    const resolvedStateCode = matchedCompany?.stateCode || getStateCodeFromName(leadData.state);
+    if (resolvedStateCode) {
+      handleInputChange("consigneeStateCode", resolvedStateCode);
+    }
+
     if (leadData.shipTo) {
       handleInputChange("shipTo", leadData.shipTo);
     }
@@ -581,9 +639,40 @@ const QuotationForm = ({
       };
     };
 
-    // Update items if found
+    // Update items if found. This is a full replace (matches revision
+    // loading's behavior of only ever showing the selected record's own
+    // items) -- but autoItems comes from lto_lead_items/lto_enquiry_items,
+    // which essentially never contains a literal "Freight" line, so an
+    // unconditional replace here silently dropped whatever Freight row
+    // was already in quotationData.items (the default one, or one the
+    // user had already edited) until the user manually re-added it.
     if (autoItems.length > 0) {
       const newItems = autoItems.map((item, index) => mapItemToQuotationRow(item, index, nob));
+
+      const alreadyHasFreight = newItems.some((item) => item.isFreight || item.name === "Freight");
+      if (!alreadyHasFreight) {
+        const existingFreightItem = quotationData.items.find(
+          (item) => item.isFreight || item.name === "Freight"
+        );
+        const freightItem = existingFreightItem
+          ? { ...existingFreightItem, id: newItems.length + 1 }
+          : {
+              id: newItems.length + 1,
+              code: "",
+              name: "Freight",
+              description: "",
+              gst: 0,
+              qty: 1,
+              units: "Nos",
+              rate: 0,
+              discount: 0,
+              flatDiscount: 0,
+              amount: 0,
+              isFreight: true,
+            };
+        newItems.push(freightItem);
+      }
+
       handleInputChange("items", newItems);
     }
 

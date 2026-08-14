@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect, useContext, useCallback } from "react";
+import { useState, useEffect, useContext, useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   PlusIcon,
@@ -17,6 +17,7 @@ import { syncEnquiryToSheetInBackground } from "../../utils/sheetSync";
 import { syncLeadToSheetInBackground } from "../../utils/sheetSyncLeads";
 import { isUrlReachable, regenerateQuotationPdf } from "../../utils/regenerateQuotationPdf";
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync";
+import { generateNextOrderNumber as generateNextOrderNumberShared } from "../../utils/orderNumberGenerator";
 import DataTable from "../../components/DataTable";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import { usePendingEnquiries, useHistoryEnquiries, CURRENT_STAGE_OPTIONS } from "./queries";
@@ -204,7 +205,8 @@ function EnquiryTracker() {
     currentUser = null,
     isAdmin = () => false,
     getUsernamesToFilter = () => [],
-    showNotification = () => {}
+    showNotification = () => {},
+    dismissNotification = () => {}
   } = authContext;
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTabState] = useState(() => {
@@ -232,7 +234,6 @@ function EnquiryTracker() {
   const [valueFilter, setValueFilter] = useState("");
   const [currentStageFilter, setCurrentStageFilter] = useState([]);
   const [scNameFilter] = useState("all");
-  const [, setAvailableEnquiryNos] = useState([]);
   const [, setUniqueScNames] = useState({
     pending: [],
     directEnquiry: [],
@@ -460,45 +461,13 @@ function EnquiryTracker() {
     }
   };
 
-  // Function to generate the next order number via Supabase RPC (Option B)
-  const generateNextOrderNumber = async () => {
-    try {
-      // Option B: Generate order number directly via Supabase Postgres RPC function
-      const { data, error } = await supabase.rpc('lto_get_next_order_number');
-      if (error) throw error;
-      if (data && typeof data === 'string' && data.trim() !== '') {
-        return data.trim();
-      }
-      throw new Error('RPC returned empty or invalid value');
-    } catch (error) {
-      console.error("Error generating order number via RPC, falling back to local query:", error);
-      // Safe fallback if RPC function is not created yet or fails
-      try {
-        const [trackerEnqRes, trackerLeadsRes] = await Promise.all([
-          supabase.from("lto_enquiry_tracker").select('order_no').not('order_no', 'is', null).order('created_at', { ascending: false }).limit(500),
-          supabase.from("lto_enquiry_tracker_for_leads").select('order_no').not('order_no', 'is', null).order('created_at', { ascending: false }).limit(500)
-        ]);
-
-        const allNumbers = [
-          ...(trackerEnqRes.data || []).map(item => item.order_no),
-          ...(trackerLeadsRes.data || []).map(item => item.order_no)
-        ];
-
-        const orderNumbers = allNumbers
-          .map(orderNo => {
-            const match = String(orderNo || '').match(/DO-(\d+)/i);
-            return match ? parseInt(match[1], 10) : 0;
-          })
-          .filter(num => !isNaN(num) && num > 0);
-
-        const maxOrderNumber = orderNumbers.length > 0 ? Math.max(...orderNumbers) : 0;
-        return `DO-${String(maxOrderNumber + 1).padStart(3, "0")}`;
-      } catch {
-        const timestamp = Date.now().toString().slice(-4);
-        return `DO-${timestamp}`;
-      }
-    }
-  };
+  // See src/utils/orderNumberGenerator.js -- this used to have its own
+  // locally-duplicated fallback (a non-atomic MAX(order_no)+1 over a
+  // stale, limited snapshot) that produced out-of-sequence/colliding
+  // order numbers whenever the RPC call failed for any transient reason.
+  // Removed in favor of retrying the real atomic sequence and throwing if
+  // that keeps failing, same as EnquiryTrackerForm.jsx.
+  const generateNextOrderNumber = () => generateNextOrderNumberShared(supabase);
 
 const handleSaveClick = async () => {
   try {
@@ -634,15 +603,26 @@ const handleSaveClick = async () => {
           await syncClientOnOrderConversion(editedData.enquiry_no || directEnquiryUpdateData.enquiry_no);
         }
 
-        alert("Updated successfully!");
+        // Non-blocking -- the previous `alert("Updated successfully!")`
+        // here was a synchronous, thread-freezing native dialog that sat
+        // right in between the (already slow, several sequential DB calls)
+        // syncClientOnOrderConversion above and the refetch below, which is
+        // what actually made this path feel laggy/janky, not the refetch
+        // itself.
+        showNotification("Updated successfully!", "success");
 
         // Only order-received enquiries get pushed to the sheet, and the
         // sync itself must never block this save flow — fired here without
-        // an await; its own success/failure just gets logged.
+        // an await; its own success/failure just gets logged. Persistent
+        // loading toast (own id, dismissed by id not message text) so the
+        // user gets the same "don't close this window" signal every other
+        // sync call site already shows.
         if (editedData.orderStatus?.toLowerCase() === "yes") {
+          const syncToastId = showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
           syncEnquiryToSheetInBackground(
             { enquiryNo: editedData.enquiry_no || directEnquiryUpdateData.enquiry_no },
             (success) => {
+              dismissNotification(syncToastId);
               if (success) {
                 showNotification("Data synced to Google Sheets", "success");
               } else {
@@ -652,7 +632,14 @@ const handleSaveClick = async () => {
           );
         }
 
-        fetchPendingData(currentPage, searchTerm, getDateFiltersFromCallingDays());
+        fetchPendingData();
+        // The converted row just left enquiry_pending_view for
+        // enquiry_history_view (is_order_received_status flipped) -- without
+        // this, the History tab kept showing stale data until some other
+        // action happened to invalidate it.
+        if (editedData.orderStatus?.toLowerCase() === "yes") {
+          fetchHistoryData();
+        }
         setEditingRowId(null);
         setEditedData({});
         return;
@@ -871,15 +858,18 @@ const handleSaveClick = async () => {
     // History rows are an append-only log and there can be several per
     // enquiry/lead.
     if (editedData.orderStatus?.toLowerCase() === "yes") {
+      // Own toast id per sync -- dismissed here specifically, not by
+      // message-text match, so it can't be stomped by (or stomp) any other
+      // sync's toast that happens to be in flight at the same time.
+      const syncToastId = showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
       const onSettled = (success) => {
+        dismissNotification(syncToastId);
         if (success) {
           showNotification("Data synced to Google Sheets", "success");
         } else {
           showNotification("Enquiry updated but Google Sheets sync may be delayed", "warning");
         }
       };
-
-      showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
 
       if (isLeadNumber) {
         syncLeadToSheetInBackground({ leadNo: identifier, trackerId: editedData.id }, onSettled);
@@ -1068,9 +1058,6 @@ const handleSaveClick = async () => {
     };
   }, []);
 
-  // Add this function near your other fetch functions
-  // Replace your fetchTenDaysData function with this fixed version
-  // Replace your fetchTenDaysData function with this updated version
   const fetchTenDaysData = async () => {
     setIsLoading(true);
     try {
@@ -1403,6 +1390,7 @@ const handleSaveClick = async () => {
     currentPage,
     callingDaysFilter,
     scNameFilter,
+    itemsPerPage,
   ]);
 
   // ─── TanStack Query: Pending/History data ──────────────────────────────────
@@ -1782,49 +1770,6 @@ const handleSaveClick = async () => {
     return dateFilters;
   };
 
-  // Fetch data when tab changes or page changes
-  useEffect(() => {
-    if (isSearching) {
-      return;
-    }
-
-    const fetchData = async () => {
-      // Get date filters from callingDaysFilter
-      const dateFilters = getDateFiltersFromCallingDays();
-
-      switch (activeTab) {
-        case "pending":
-          await fetchPendingData(
-            currentPage,
-            searchTerm,
-            dateFilters
-          );
-          break;
-        case "history":
-          await fetchHistoryData(
-            currentPage,
-            searchTerm,
-            dateFilters
-          );
-          break;
-        case "directEnquiry":
-          await fetchDirectEnquiryData(
-            currentPage,
-            searchTerm,
-            dateFilters
-          );
-          break;
-      }
-    };
-
-    fetchData();
-  }, [
-    activeTab,
-    currentPage,
-    callingDaysFilter,
-    scNameFilter,
-  ]);
-
   // Handle search with debounce
   // 6. Update the search useEffect to handle date filters
   useEffect(() => {
@@ -1933,142 +1878,30 @@ const handleSaveClick = async () => {
     );
   };
 
-  // Function to fetch all unique SC names for the filter dropdown
-  const fetchUniqueScNames = useCallback(async () => {
-    if (!isAdmin()) return; // Only admins need to see all SC names
 
-    try {
-      const { data: scData, error: scError } = await supabase
-        .from("lto_dropdown")
-        .select("value")
-        .eq("category", "sc_name")
-        .not("value", "is", null);
-
-      if (scError) {
-        console.error("Error fetching SC names from dropdown:", scError);
-      }
-
-      const uniqueNames = Array.from(
-        new Set((scData || []).map(item => item.value).filter(Boolean))
-      ).sort();
-
-      setUniqueScNames({
-        pending: uniqueNames,
-        directEnquiry: uniqueNames,
-        history: uniqueNames
-      });
-    } catch (error) {
-      console.error("Error fetching unique SC names:", error);
-    }
-  }, [isAdmin]);
-
-
-
-  // Reset pagination when tab changes. Data itself is no longer cleared here
-  // -- pendingData/historyData are now kept in sync with their respective
-  // TanStack Query results (see the sync effects above), which already
-  // manage loading/empty state correctly per tab. Clearing them here raced
-  // against that sync (the query could resolve and populate data, then this
-  // effect would wipe it back to [] on the same mount), causing the Pending
-  // tab to flash data and then go blank.
+  // Reset pagination whenever the tab, search, or any filter changes. Data
+  // itself is no longer cleared here -- pendingData/historyData are kept in
+  // sync with their respective TanStack Query results (see the sync
+  // effects above), which already manage loading/empty state correctly
+  // per tab. Clearing them here raced against that sync (the query could
+  // resolve and populate data, then this effect would wipe it back to []
+  // on the same mount), causing the Pending tab to flash data and then go
+  // blank.
+  //
+  // This used to be split across 3 separate effects with overlapping
+  // dependency sets (one for activeTab alone, one guarded on
+  // callingDaysFilter/valueFilter/currentStageFilter being non-empty, and
+  // a third, unconditional one for the full combined dep set below) --
+  // consolidated into one, which also fixes the guarded one's asymmetry
+  // (it never reset the page when a filter was cleared back to empty,
+  // even though the third effect's unconditional reset already covered
+  // that case on the same deps anyway).
   useEffect(() => {
     setCurrentPage(1);
     setHasMorePending(true);
     setHasMoreHistory(true);
     setHasMoreDirectEnquiry(true);
-  }, [activeTab]);
-
-  // Fetch unique SC names on component mount
-  useEffect(() => {
-    fetchUniqueScNames();
-  }, [fetchUniqueScNames]);
-
-  useEffect(() => {
-    if (
-      callingDaysFilter.length > 0 ||
-      valueFilter ||
-      currentStageFilter.length > 0
-    ) {
-      setCurrentPage(1);
-      setHasMorePending(true);
-      setHasMoreHistory(true);
-      setHasMoreDirectEnquiry(true);
-    }
-  }, [callingDaysFilter, valueFilter, currentStageFilter]);
-
-  // NEW: Update available enquiry numbers when data changes or tab changes
-  useEffect(() => {
-    let enquiryNos = [];
-
-    switch (activeTab) {
-      case "pending":
-        enquiryNos = [
-          ...new Set(pendingData.map((item) => item.lead_no).filter(Boolean)),
-        ];
-        break;
-      case "directEnquiry":
-        enquiryNos = [
-          ...new Set(
-            directEnquiryData.map((item) => item.enquiry_no).filter(Boolean)
-          ),
-        ];
-        break;
-      case "history":
-        enquiryNos = [
-          ...new Set(historyData.map((item) => item.enquiryNo).filter(Boolean)),
-        ];
-        break;
-      default:
-        enquiryNos = [];
-    }
-
-    setAvailableEnquiryNos(enquiryNos.sort());
-  }, [activeTab, pendingData, directEnquiryData, historyData]);
-
-  useEffect(() => {
-    if (isSearching) {
-      return;
-    }
-
-    const fetchData = async () => {
-      // Get date filters from callingDaysFilter
-      const dateFilters = getDateFiltersFromCallingDays();
-
-      switch (activeTab) {
-        case "pending":
-          await fetchPendingData(
-            currentPage,
-            searchTerm,
-            dateFilters
-          );
-          break;
-        case "history":
-          await fetchHistoryData(
-            currentPage,
-            searchTerm,
-            dateFilters
-          );
-          break;
-        case "directEnquiry":
-          await fetchDirectEnquiryData(
-            currentPage,
-            searchTerm,
-            dateFilters
-          );
-          break;
-        case "tenDays":
-          await fetchTenDaysData();
-          break;
-      }
-    };
-
-    fetchData();
-  }, [
-    activeTab,
-    currentPage,
-    callingDaysFilter,
-    scNameFilter,
-  ]);
+  }, [activeTab, searchTerm, callingDaysFilter, valueFilter, currentStageFilter]);
 
   const fetchCallingDaysCounts = async () => {
     try {
@@ -2145,9 +1978,10 @@ const handleSaveClick = async () => {
     fetchCallingDaysCounts();
   }, []);
 
-  // Add this function inside your CallTracker component
-  // Replace your calculateFilterCounts function with this:
-  const calculateFilterCounts = () => {
+  // Memoized -- this iterates the full data array for the active tab
+  // (potentially hundreds of rows) and previously re-ran on every render,
+  // including every keystroke of the unrelated searchTerm input.
+  const filterCounts = useMemo(() => {
     const counts = {
       today: 0,
       overdue: 0,
@@ -2179,9 +2013,7 @@ const handleSaveClick = async () => {
     }
 
     return counts;
-  };
-
-  const filterCounts = calculateFilterCounts();
+  }, [activeTab, pendingData, directEnquiryData, historyData]);
 
   // Mobile Card View Component for CallTracker
   const MobileCardView = ({ data, type, onView }) => {
@@ -2604,20 +2436,15 @@ const handleSaveClick = async () => {
   const filteredHistory = applyFilters(historyData || [], "history");
 
   // ─── Pagination ───────────────────────────────────────────────────────────
+  // The page-reset-on-change effect now lives earlier in this file, merged
+  // with the hasMore* flag resets that used to be split across 2 other
+  // effects on overlapping deps -- see the comment there.
 
-  useEffect(() => { setCurrentPage(1); }, [activeTab, searchTerm, callingDaysFilter, valueFilter, currentStageFilter]);
-
-  useEffect(() => {
-    const dateFilters = getDateFiltersFromCallingDays();
-    if (activeTab === "pending") {
-      fetchPendingData(currentPage, searchTerm, dateFilters);
-    } else if (activeTab === "history") {
-      fetchHistoryData(currentPage, searchTerm, dateFilters);
-    } else if (activeTab === "directEnquiry") {
-      fetchDirectEnquiryData(currentPage, searchTerm, dateFilters);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsPerPage, currentPage]);
+  // itemsPerPage is covered by the canonical fetch-on-change effect above
+  // (its deps now include itemsPerPage) -- this used to be a second,
+  // separate effect doing the same fetchPendingData/fetchHistoryData/
+  // fetchDirectEnquiryData calls on every currentPage change too, so any
+  // page change fired two overlapping invalidations for one logical event.
 
   const rawCurrentData = activeTab === "pending" ? filteredPending : filteredHistory;
   const currentData = [...rawCurrentData].sort((a, b) => {

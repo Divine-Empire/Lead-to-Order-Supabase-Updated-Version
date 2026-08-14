@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect, useContext, useRef } from "react";
+import { useState, useEffect, useContext, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
@@ -464,10 +464,6 @@ function Leads() {
 
   const [receiverNames, setReceiverNames] = useState([]);
   const [leadSources, setLeadSources] = useState([]);
-  const [, setScNames] = useState([]);
-  const [, setSearchScName] = useState("");
-  const [, setShowScNameDropdown] = useState(false);
-  const scDropdownRef = useRef(null);
 
   // Client Master records state & Dropdown refs
   const [clientMasterRecords, setClientMasterRecords] = useState([]);
@@ -512,9 +508,6 @@ function Leads() {
   // Click outside handlers for Dropdowns
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (scDropdownRef.current && !scDropdownRef.current.contains(event.target)) {
-        setShowScNameDropdown(false);
-      }
       if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target)) {
         setShowGroupNameDropdown(false);
       }
@@ -544,7 +537,6 @@ function Leads() {
       const [
         { data: receiversData },
         { data: sourcesData },
-        { data: scData },
         { data: statesData },
         { data: creditDaysData },
         { data: creditLimitsData },
@@ -554,7 +546,6 @@ function Leads() {
       ] = await Promise.all([
         fetchCategory("lead_receiver_name"),
         fetchCategory("lead_source"),
-        fetchCategory("sc_name"),
         fetchCategory("state"),
         fetchCategory("credit_days"),
         fetchCategory("credit_limit"),
@@ -568,7 +559,6 @@ function Leads() {
 
       setReceiverNames(toValues(receiversData));
       setLeadSources(toValues(sourcesData));
-      setScNames(toValues(scData));
       setStateOptions(toValues(statesData));
       setCreditDaysOptions(toValues(creditDaysData));
       setCreditLimitOptions(toValues(creditLimitsData));
@@ -580,7 +570,6 @@ function Leads() {
       console.error("Error fetching dropdown values:", error);
       setReceiverNames(["John Smith", "Sarah Johnson", "Michael Brown"]);
       setLeadSources(["Indiamart", "Justdial", "Social Media", "Website", "Referral", "Other"]);
-      setScNames(["SC Person 1", "SC Person 2", "SC Person 3"]);
       setStateOptions(["Maharashtra", "Delhi", "Gujarat", "Karnataka", "Tamil Nadu"]);
       setDesignationOptions(["Manager", "Director", "Proprietor"]);
       setNobOptions(["Manufacturing", "Trading", "Service", "Retail"]);
@@ -663,37 +652,53 @@ function Leads() {
     }));
   };
 
-  // Group Names extracted from client_master (where isRelevant = true)
-  const availableGroupNames = Array.from(
-    new Set(
-      clientMasterRecords
-        .map((c) => c.company_group_name)
-        .filter(Boolean)
-        .map((g) => g.trim())
-    )
-  ).sort();
+  // Group Names extracted from client_master (where isRelevant = true).
+  // Memoized -- these don't depend on the search text at all, so without
+  // this they were re-derived from the full clientMasterRecords array on
+  // every render, including every keystroke in the group/company search
+  // boxes below (which only need to re-filter the already-deduped list).
+  const availableGroupNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          clientMasterRecords
+            .map((c) => c.company_group_name)
+            .filter(Boolean)
+            .map((g) => g.trim())
+        )
+      ).sort(),
+    [clientMasterRecords]
+  );
 
   const filteredGroupNames = availableGroupNames.filter((name) =>
     name.toLowerCase().includes(searchGroupName.toLowerCase())
   );
 
   // Companies matching selected group from client_master (or all relevant companies if no group selected)
-  const availableCompanyRecords = formData.groupName
-    ? clientMasterRecords.filter(
-        (c) =>
-          c.company_group_name &&
-          c.company_group_name.toLowerCase().trim() === formData.groupName.toLowerCase().trim()
-      )
-    : clientMasterRecords;
+  const availableCompanyRecords = useMemo(
+    () =>
+      formData.groupName
+        ? clientMasterRecords.filter(
+            (c) =>
+              c.company_group_name &&
+              c.company_group_name.toLowerCase().trim() === formData.groupName.toLowerCase().trim()
+          )
+        : clientMasterRecords,
+    [clientMasterRecords, formData.groupName]
+  );
 
-  const availableCompanyNames = Array.from(
-    new Set(
-      availableCompanyRecords
-        .map((c) => c.company_name)
-        .filter(Boolean)
-        .map((cn) => cn.trim())
-    )
-  ).sort();
+  const availableCompanyNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          availableCompanyRecords
+            .map((c) => c.company_name)
+            .filter(Boolean)
+            .map((cn) => cn.trim())
+        )
+      ).sort(),
+    [availableCompanyRecords]
+  );
 
   const filteredCompanyNames = availableCompanyNames.filter((name) =>
     name.toLowerCase().includes(searchCompanyName.toLowerCase())
@@ -939,7 +944,6 @@ function Leads() {
         scName: "",
         groupName: "",
       });
-      setSearchScName("");
       setSearchGroupName("");
       setSearchCompanyName("");
 

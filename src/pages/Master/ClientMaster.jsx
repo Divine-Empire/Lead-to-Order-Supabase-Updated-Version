@@ -7,6 +7,7 @@ import supabase from "../../utils/supabase";
 import ModalForm from "../../components/ModalForm";
 import { TABLES, COLUMNS } from "../../constants/dbSchema";
 import { AuthContext } from "../../App";
+import { getStateCodeFromName } from "../../utils/gstStateCodes";
 
 function ClientMaster() {
   const authContext = useContext(AuthContext) || {};
@@ -301,7 +302,11 @@ function ClientMaster() {
       company_group_name: formData.companyGroupName || null,
       sc_name: formData.scName || null,
       crm_name: formData.crmName || null,
-      state_code: formData.stateCode || null,
+      // Admin's typed value always wins if present; otherwise derive it
+      // from State so this table can't end up with one set and not the
+      // other (that mismatch is what leaves the Quotation revision
+      // loader's Consignee State/State Code blank -- see gstStateCodes.js).
+      state_code: formData.stateCode || getStateCodeFromName(formData.state) || null,
       credit_days: formData.creditDays !== "" && formData.creditDays !== null ? parseInt(formData.creditDays, 10) : null,
       credit_limit: formData.creditLimit !== "" && formData.creditLimit !== null ? parseFloat(formData.creditLimit) : null,
       sales_type: formData.salesType || null,

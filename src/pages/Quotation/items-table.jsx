@@ -65,7 +65,7 @@ const ItemsTable = ({
     { key: "hideUnits", label: "Units" },
     { key: "hideRate", label: "Rate" },
     { key: "hideDisc", label: "Disc %" },
-    { key: "hideFlatDisc", label: "Flat Disc %" },
+    { key: "hideFlatDisc", label: "Flat Disc" },
     { key: "hideAmount", label: "Amount" },
     { key: "hideSubtotal", label: "Subtotal" },
     { key: "hideTotalQty", label: "Total Qty" },
@@ -230,7 +230,7 @@ const ItemsTable = ({
                 )}
                 {!hideFlatDisc && (
                   <th className="px-4 py-2 text-xs font-medium text-left text-gray-500 uppercase">
-                    Flat Disc %
+                    Flat Disc
                   </th>
                 )}
                 {!hideAmount && (
@@ -664,7 +664,6 @@ const ItemsTable = ({
                           }}
                           step="0.01"
                           min="0"
-                          max="100"
                           disabled={isLoading}
                         />
                       </td>
@@ -1035,7 +1034,6 @@ const ItemsTable = ({
                           }}
                           step="0.01"
                           min="0"
-                          max="100"
                           disabled={isLoading}
                         />
                       </td>

@@ -28,7 +28,7 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return localStorage.getItem("isAuthenticated") === "true"
   })
-  const [notification, setNotification] = useState(null)
+  const [notifications, setNotifications] = useState([])
   const [currentUser, setCurrentUser] = useState(() => {
     const storedUser = localStorage.getItem("currentUser")
     return storedUser ? JSON.parse(storedUser) : null
@@ -233,17 +233,31 @@ function App() {
     showNotification("Logged out successfully", "success");
   }
 
-  // duration is in ms; pass 0 (or null) to keep the toast up until the
-  // next showNotification call replaces/clears it -- used for "syncing,
+  // Each call pushes its OWN toast onto a stack, keyed by a unique id --
+  // duration is in ms; pass 0 (or null) to keep that specific toast up
+  // until dismissNotification(id) is called for it, used for "syncing,
   // don't close this window" indicators that should stay visible for the
   // whole duration of a background operation, not just 3 seconds.
+  //
+  // Returns the new toast's id so a caller running a loading->result
+  // sequence (e.g. a background sheet sync) can dismiss exactly ITS OWN
+  // loading toast before showing its result, rather than the old
+  // single-slot behavior where any two calls sharing the same message text
+  // could dismiss/overwrite each other -- the real cause of the toast
+  // seeming to "blink" when multiple syncs overlapped.
   const showNotification = (message, type = "info", duration = 3000) => {
-    setNotification({ message, type });
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setNotifications((current) => [...current, { id, message, type }]);
     if (duration) {
       setTimeout(() => {
-        setNotification((current) => (current?.message === message ? null : current));
+        setNotifications((current) => current.filter((n) => n.id !== id));
       }, duration);
     }
+    return id;
+  }
+
+  const dismissNotification = (id) => {
+    setNotifications((current) => current.filter((n) => n.id !== id));
   }
   
   // Check if user has admin privileges
@@ -285,8 +299,9 @@ function App() {
       isAuthenticated, 
       login, 
       logout, 
-      showNotification, 
-      currentUser, 
+      showNotification,
+      dismissNotification,
+      currentUser,
       userType, 
       isAdmin: isAdmin,
       alternateAccess,
@@ -431,7 +446,7 @@ function App() {
               {isAuthenticated && <div className="bg-white border-t"><Footer /></div>}
             </div>
 
-            {notification && <Notification message={notification.message} type={notification.type} />}
+            <Notification notifications={notifications} />
           </div>
         </Router>
       </DataContext.Provider>
