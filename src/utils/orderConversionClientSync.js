@@ -22,6 +22,7 @@
 
 import supabase from "./supabase";
 import { generateAndAssignClientCode } from "../pages/Master/ClientCodeGen";
+import { isOtherClientsGroup } from "./scAssignment";
 
 /**
  * @param {string} enquiryNo - "EN-..." or "LD-..." identifier. Everything
@@ -79,7 +80,7 @@ export const syncClientOnOrderConversion = async (enquiryNo) => {
     const targetGroup = (existingClient?.company_group_name || leadData?.company_group_name || enqData?.company_group_name || "").trim();
 
     let assignedScFromGroup = false;
-    if (targetGroup) {
+    if (targetGroup && !isOtherClientsGroup(targetGroup)) {
       try {
         const { data: groupClients } = await supabase
           .from("lto_client_master")

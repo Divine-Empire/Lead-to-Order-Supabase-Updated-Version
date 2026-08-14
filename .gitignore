@@ -25,9 +25,9 @@ dist-ssr
 *.sln
 *.sw?
 
-schema.txt
-output.txt
 .claude
 apps-script
-Order-Received-Data
 sql
+Order-Received-Data
+schema.txt
+task.txt
