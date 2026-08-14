@@ -15,6 +15,8 @@ import DirectEnquiryForm from "./DirectEnquiryForm";
 import supabase from "../../utils/supabase";
 import { syncEnquiryToSheetInBackground } from "../../utils/sheetSync";
 import { syncLeadToSheetInBackground } from "../../utils/sheetSyncLeads";
+import { isUrlReachable, regenerateQuotationPdf } from "../../utils/regenerateQuotationPdf";
+import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync";
 import DataTable from "../../components/DataTable";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import { usePendingEnquiries, useHistoryEnquiries, CURRENT_STAGE_OPTIONS } from "./queries";
@@ -262,6 +264,11 @@ function EnquiryTracker() {
   const [editingRowId, setEditingRowId] = useState(null);
   const [editedData, setEditedData] = useState({});
 
+  // Tracks which quotation's "View File" link is mid-regeneration (keyed by
+  // quotation number) so only that one link shows a loading state -- see
+  // handleQuotationFileClick / regenerateQuotationPdf.js.
+  const [regeneratingQuotationNo, setRegeneratingQuotationNo] = useState(null);
+
   const [, setCallingDaysCounts] = useState({
     pendingToday: 0,
     pendingOverdue: 0,
@@ -325,6 +332,44 @@ function EnquiryTracker() {
 
   const closeItemDetailsModal = () => {
     setItemDetailsModal({ open: false, loading: false, title: "", items: [] });
+  };
+
+  // Handles clicking "View File" on a Quotation Copy link. Most links still
+  // work -- checked first, opened immediately, no extra latency. Only when
+  // the stored URL is actually dead (the file's original Storage bucket/
+  // project no longer exists) does this regenerate the PDF from the
+  // quotation's still-intact DB data and heal the link for next time.
+  const handleQuotationFileClick = async (e, url, quotationNo) => {
+    e.preventDefault();
+
+    if (quotationNo && regeneratingQuotationNo === quotationNo) return; // already in flight
+
+    if (await isUrlReachable(url)) {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    if (!quotationNo) {
+      showNotification("This file is unavailable and no quotation number is on record to regenerate it.", "error");
+      return;
+    }
+
+    setRegeneratingQuotationNo(quotationNo);
+    showNotification("Quotation file was unavailable — regenerating it now...", "loading", 0);
+
+    const result = await regenerateQuotationPdf(quotationNo);
+    setRegeneratingQuotationNo(null);
+
+    if (!result) {
+      showNotification("Could not regenerate this quotation's PDF — its data may be missing.", "error");
+      return;
+    }
+
+    window.open(result.blobUrl, "_blank", "noopener,noreferrer");
+    showNotification(
+      result.newUrl ? "Quotation regenerated and link fixed for next time." : "Quotation regenerated, but saving the fixed link failed — it will retry next time this is opened.",
+      result.newUrl ? "success" : "warning"
+    );
   };
 
   useEffect(() => {
@@ -580,6 +625,15 @@ const handleSaveClick = async () => {
           }
         }
 
+        // SC/CRE client_master sync -- this inline-edit path used to flip
+        // is_order_received_status to "yes" without ever running this,
+        // unlike the main Order Status form. Awaited (not fire-and-forget
+        // like the sheet sync below) since it's core assignment data, not
+        // an external nice-to-have.
+        if (editedData.orderStatus?.toLowerCase() === "yes") {
+          await syncClientOnOrderConversion(editedData.enquiry_no || directEnquiryUpdateData.enquiry_no);
+        }
+
         alert("Updated successfully!");
 
         // Only order-received enquiries get pushed to the sheet, and the
@@ -799,6 +853,14 @@ const handleSaveClick = async () => {
       alert(`Error updating ${tableName}: ${error.message}`);
       console.error(`Error updating ${tableName}:`, error);
       return;
+    }
+
+    // SC/CRE client_master sync -- this inline-edit path used to flip
+    // is_order_received_status to "yes" without ever running this, unlike
+    // the main Order Status form. Awaited since it's core assignment data,
+    // not an external nice-to-have like the sheet sync below.
+    if (editedData.orderStatus?.toLowerCase() === "yes") {
+      await syncClientOnOrderConversion(identifier);
     }
 
     alert("Updated successfully!");
@@ -2652,7 +2714,23 @@ const handleSaveClick = async () => {
             View Items
           </button>
         );
-      } else if (opt.key === "quotationUpload" || opt.key === "acceptanceFile" || opt.key === "apologyVideo") {
+      } else if (opt.key === "quotationUpload") {
+        // Unlike Acceptance File/Apology Video (plain links to user-uploaded
+        // originals with nothing to fall back on), a quotation PDF can be
+        // rebuilt from its still-intact DB data if the stored link is dead
+        // -- see handleQuotationFileClick / regenerateQuotationPdf.js.
+        const isRegenerating = regeneratingQuotationNo === tracker.quotationNumber;
+        cellContent = val && val !== "—" ? (
+          <a
+            href={val}
+            onClick={(e) => handleQuotationFileClick(e, val, tracker.quotationNumber)}
+            className={`text-info hover:underline ${isRegenerating ? "opacity-50 cursor-wait" : ""}`}
+            aria-disabled={isRegenerating}
+          >
+            {isRegenerating ? "Generating..." : "View File"}
+          </a>
+        ) : "—";
+      } else if (opt.key === "acceptanceFile" || opt.key === "apologyVideo") {
         cellContent = val && val !== "—" ? (
           <a href={val} target="_blank" rel="noopener noreferrer" className="text-info hover:underline">
             {opt.key === "apologyVideo" ? "View Video" : "View File"}

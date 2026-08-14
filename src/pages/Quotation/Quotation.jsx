@@ -11,6 +11,7 @@ import { generatePDFFromData } from "./pdf-generator";
 import { getNextQuotationNumber } from "./quotation-service";
 import { useQuotationData } from "./use-quotation-data";
 import supabase from "../../utils/supabase";
+import { loadQuotationDataByNumber } from "../../utils/quotationDataLoader";
 
 function Quotation() {
   const [activeTab, setActiveTab] = useState("edit");
@@ -268,215 +269,23 @@ function Quotation() {
     setSelectedQuotation(quotationNo);
 
     try {
-      const { data, error } = await supabase
-        .from("lto_make_quotations")
-        .select(`
-          *,
-          consignor_details:lto_consignor_details (
-            reference_name, state, address, contact_num, gstin, state_code, msme_num
-          ),
-          client_master:lto_client_master (
-            company_name, billing_address, state, gst_number, state_code
-          ),
-          make_quotation_items:lto_make_quotation_items (*)
-        `)
-        .eq("quotation_no", quotationNo)
-        .single();
+      const result = await loadQuotationDataByNumber(quotationNo);
 
-      if (error) {
-        console.error("Error fetching quotation data:", error);
+      if (!result) {
         alert("Failed to load quotation data");
         return;
       }
 
-      if (data) {
-        const loadedData = data;
+      const { quotationData: loadedQuotationData, selectedReferences, specialDiscount: loadedSpecialDiscount, items } = result;
 
-        const refName = loadedData.consignor_details?.reference_name || "";
-        const references = refName
-          ? refName.split(",")
-            .map((r) => r.trim())
-            .filter((r) => r)
-          : [];
-        setSelectedReferences(references);
+      setSelectedReferences(selectedReferences);
+      setQuotationData(loadedQuotationData);
+      setSpecialDiscount(loadedSpecialDiscount);
 
-        let items = [];
-        const specialDiscountFromItems = 0; // Will be calculated from items if needed
-
-        // make_quotation_items is the sole source of truth for line items --
-        // every quotation in this DB already has its items normalized there.
-        const sourceItems = loadedData.make_quotation_items || [];
-
-        if (sourceItems.length > 0) {
-          items = sourceItems.map((item, index) => {
-            const isFreight = item.is_freight || item.isFreight || item.item_name === "Freight" || item.name === "Freight";
-            const itemName = item.item_name || item.name || "";
-            const itemCode = item.item_code || item.code || "";
-            const desc = item.description || "";
-            const qty = item.quantity !== undefined ? item.quantity : (item.qty !== undefined ? item.qty : 1);
-            const units = item.unit || item.units || "Nos";
-            const rate = item.rate || 0;
-            const gst = item.gst_percent !== undefined ? item.gst_percent : (item.gst !== undefined ? item.gst : 18);
-            const discount = item.discount !== undefined ? item.discount : (item.disc !== undefined ? item.disc : 0);
-            const amount = item.amount || 0;
-
-            if (isFreight) {
-              const shouldBeEmpty = desc.toLowerCase().trim().startsWith("extra as per");
-              return {
-                id: index + 1,
-                code: itemCode,
-                name: itemName || "Freight",
-                description: shouldBeEmpty ? "" : desc,
-                gst: 0,
-                qty: qty,
-                units: units,
-                rate: rate,
-                discount: discount,
-                flatDiscount: 0,
-                amount: amount,
-                isFreight: true,
-              };
-            }
-
-            return {
-              id: index + 1,
-              code: itemCode,
-              name: itemName,
-              description: desc,
-              gst: gst,
-              qty: qty,
-              units: units,
-              rate: rate,
-              discount: discount,
-              flatDiscount: 0,
-              amount: amount,
-              isFreight: false,
-            };
-          });
-        }
-
-        // Ensure at least one default item and one Freight item exist if items is empty
-        if (items.length === 0) {
-          items = [
-            {
-              id: 1,
-              code: "",
-              name: "",
-              description: "",
-              gst: 18,
-              qty: 1,
-              units: "Nos",
-              rate: 0,
-              discount: 0,
-              flatDiscount: 0,
-              amount: 0,
-            },
-            {
-              id: 2,
-              code: "",
-              name: "Freight",
-              description: "",
-              gst: 0,
-              qty: 1,
-              units: "Nos",
-              rate: 0,
-              discount: 0,
-              flatDiscount: 0,
-              amount: 0,
-              isFreight: true,
-            },
-          ];
-        }
-
-        const subtotal = items.reduce(
-          (sum, item) => sum + Number(item.amount || 0),
-          0
-        );
-        const totalFlatDiscount = 0; // Calculate from items if needed
-        const cgstRate = 9;
-        const sgstRate = 9;
-        const taxableAmount = Math.max(0, subtotal - totalFlatDiscount);
-        const cgstAmount = Number(
-          (taxableAmount * (cgstRate / 100)).toFixed(2)
-        );
-        const sgstAmount = Number(
-          (taxableAmount * (sgstRate / 100)).toFixed(2)
-        );
-        const total = Number(
-          (
-            taxableAmount +
-            cgstAmount +
-            sgstAmount -
-            specialDiscountFromItems
-          ).toFixed(2)
-        );
-
-        // Parse special offers from loaded data
-        let specialOffers = [""];
-        if (loadedData.special_offer) {
-          if (typeof loadedData.special_offer === "string") {
-            specialOffers = loadedData.special_offer.split("|").filter((offer) => offer.trim());
-            if (specialOffers.length === 0) specialOffers = [""];
-          } else if (Array.isArray(loadedData.special_offer)) {
-            specialOffers = loadedData.special_offer;
-          }
-        }
-
-        setQuotationData({
-          enquiryReferenceNo: loadedData.enquiry_reference_no || "",
-          quotationNo: loadedData.quotation_no || "",
-          date: loadedData.quotation_date || "",
-          preparedBy: loadedData.prepared_by || "",
-          consignorState: loadedData.consignor_details?.state || "",
-          consignorName: loadedData.consignor_details?.reference_name || "",
-          consignorAddress: loadedData.consignor_details?.address || "",
-          consignorMobile: loadedData.consignor_details?.contact_num?.toString() || "",
-          consignorPhone: loadedData.consignor_details?.contact_num?.toString() || "",
-          consignorGSTIN: loadedData.consignor_details?.gstin || "",
-          consignorStateCode: loadedData.consignor_details?.state_code || "",
-          consigneeName: loadedData.client_master?.company_name || "",
-          consigneeAddress: loadedData.client_master?.billing_address || "",
-          shipTo: loadedData.ship_to_address || "",
-          consigneeState: loadedData.client_master?.state || "",
-          consigneeContactName: loadedData.consignee_contact_name || "",
-          consigneeContactNo: loadedData.consignee_contact_no || "",
-          consigneeGSTIN: loadedData.client_master?.gst_number || "",
-          consigneeStateCode: loadedData.client_master?.state_code || "",
-          msmeNumber: loadedData.consignor_details?.msme_num || "",
-          validity: loadedData.validity || "",
-          paymentTerms: loadedData.payment_terms || "",
-          delivery: loadedData.delivery || "",
-          freight: loadedData.freight || "",
-          insurance: loadedData.insurance || "",
-          taxes: loadedData.taxes || "",
-          accountNo: loadedData.account_no || "",
-          bankName: loadedData.bank_name || "",
-          bankAddress: loadedData.bank_address || "",
-          ifscCode: loadedData.ifsc_code || "",
-          email: "",
-          website: "",
-          pan: "",
-          items,
-          subtotal,
-          totalFlatDiscount,
-          cgstRate,
-          sgstRate,
-          cgstAmount,
-          sgstAmount,
-          total,
-          specialOffers: specialOffers,
-          notes: loadedData.notes
-            ? loadedData.notes.split("|").filter((note) => note.trim())
-            : [""],
-        });
-
-        setSpecialDiscount(specialDiscountFromItems);
-
-        handleSpecialDiscountChangeWrapper(specialDiscountFromItems);
-        handleInputChange("consignorState", loadedData.consignor_details?.state || "");
-        handleInputChange("consigneeState", loadedData.client_master?.state || "");
-        handleInputChange("items", items);
-      }
+      handleSpecialDiscountChangeWrapper(loadedSpecialDiscount);
+      handleInputChange("consignorState", loadedQuotationData.consignorState);
+      handleInputChange("consigneeState", loadedQuotationData.consigneeState);
+      handleInputChange("items", items);
     } catch (error) {
       console.error("Error fetching quotation data:", error);
       alert("Failed to load quotation data");

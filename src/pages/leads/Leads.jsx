@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
 import * as XLSX from "xlsx";
+import { resolveScAndCreForNewCompany } from "../../utils/scAssignment";
 
 // Generate next sequential lead numbers for bulk import
 const generateNextImportLeadNumbers = async (count) => {
@@ -524,98 +525,14 @@ function Leads() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Auto-assign SC Name when Company Name is NOT in client_master using dynamic multi-select criteria
-  useEffect(() => {
-    const assignScForUnregisteredCompany = async () => {
-      if (!formData.companyName?.trim() || !formData.salesType || !formData.nob) return;
-
-      // Check if current company exists in client_master
-      const isCompanyInMaster = clientMasterRecords.some(
-        (c) => (c.company_name || "").toLowerCase().trim() === formData.companyName.toLowerCase().trim()
-      );
-
-      if (!isCompanyInMaster) {
-        let assignedFromGroup = false;
-
-        // Priority 1: If groupName is selected (and isn't the "OTHER CLIENTS"
-        // catch-all, which groups unrelated companies together and shouldn't
-        // drive SC inheritance), check if any client under that group already
-        // has an SC assigned.
-        const isOtherClientsGroup = formData.groupName?.trim().toUpperCase() === "OTHER CLIENTS";
-        if (formData.groupName && formData.groupName.trim() && !isOtherClientsGroup) {
-          try {
-            const { data: groupClients } = await supabase
-              .from("lto_client_master")
-              .select("sc_name")
-              .ilike("company_group_name", formData.groupName.trim())
-              .not("sc_name", "is", null)
-              .not("sc_name", "eq", "")
-              .order("updated_at", { ascending: false })
-              .limit(1);
-
-            if (groupClients && groupClients.length > 0 && groupClients[0].sc_name) {
-              setSearchScName(groupClients[0].sc_name);
-              setFormData((prev) => ({ ...prev, scName: groupClients[0].sc_name }));
-              assignedFromGroup = true;
-            }
-          } catch (err) {
-            console.error("Error checking group SC in Leads.jsx:", err);
-          }
-        }
-
-        // Priority 2: Fall back to sc_distribution rules if no existing group SC found
-        if (!assignedFromGroup) {
-          try {
-            const { data: activeRules } = await supabase
-              .from("lto_sc_distribution")
-              .select("*")
-              .order("sequence_order", { ascending: true })
-              .order("created_at", { ascending: true });
-
-            if (activeRules && activeRules.length > 0) {
-              const currentNob = (formData.nob || "").trim().toUpperCase();
-              const currentSource = (formData.source || "").trim().toUpperCase();
-              const currentType = (formData.salesType || "").trim().toUpperCase();
-
-              const matchedRules = activeRules.filter((rule) => {
-                const types = (rule.sales_types || []).map((t) => t.toUpperCase());
-                const sources = (rule.lead_sources || []).map((s) => s.toUpperCase());
-                const nobs = (rule.nobs || []).map((n) => n.toUpperCase());
-
-                // 1. Sales Type match
-                const typeMatch = types.length === 0 || types.includes(currentType);
-
-                // 2. Lead Source match
-                const sourceMatch = sources.length === 0 || sources.includes("ALL SOURCES") || sources.includes(currentSource);
-
-                // 3. NOB match
-                const nobMatch = nobs.some((n) => {
-                  if (n === "ALL NOBS") return true;
-                  if (n === "ALL NOBS (EXCEPT RESELLER)") return currentNob !== "RESELLER";
-                  return n === currentNob;
-                });
-
-                return typeMatch && sourceMatch && nobMatch;
-              });
-
-              if (matchedRules.length > 0) {
-                // Pick the one whose turn is next, otherwise default to first matched candidate
-                const candidate = matchedRules.find((r) => r.is_next_in_line) || matchedRules[0];
-                if (candidate?.sc_name) {
-                  setSearchScName(candidate.sc_name);
-                  setFormData((prev) => ({ ...prev, scName: candidate.sc_name }));
-                }
-              }
-            }
-          } catch (err) {
-            console.error("Error matching dynamic SC distribution:", err);
-          }
-        }
-      }
-    };
-
-    assignScForUnregisteredCompany();
-  }, [formData.nob, formData.salesType, formData.source, formData.companyName, formData.groupName, clientMasterRecords]);
+  // SC (and, for group companies, CRE) assignment for a brand-new company
+  // used to be computed here via a useEffect writing to React state, gated
+  // on Sales Type + NOB + company name all being filled + clientMasterRecords
+  // already loaded -- if that hadn't resolved by submit time, the new
+  // company/lead silently got no SC assigned, with no visible error. Now
+  // computed atomically inside handleSubmit via resolveScAndCreForNewCompany
+  // (src/utils/scAssignment.js), right before the lto_client_master insert
+  // that actually needs the value -- see handleSubmit.
 
   const fetchDropdownData = async () => {
     // Helper: fetch all values for a given category from the normalized dropdown table
@@ -855,8 +772,12 @@ function Leads() {
     setIsSubmitting(true);
 
     try {
-      // 1. Check if company exists in client_master
-      let wasNewCompany = false;
+      // 1. Check if company exists in client_master. If it's brand new,
+      //    resolve SC (and, for group companies, CRE) BEFORE inserting, so
+      //    the assignment lands in the SAME atomic insert -- see
+      //    src/utils/scAssignment.js for the group-copy vs round-robin rule.
+      let assignedScName = formData.scName ? formData.scName.trim() : null;
+      let assignedCrmName = null;
       const compNameTrimmed = (formData.companyName || "").trim();
       if (compNameTrimmed) {
         const { data: existingClient, error: clientCheckErr } = await supabase
@@ -866,7 +787,15 @@ function Leads() {
           .maybeSingle();
 
         if (!clientCheckErr && !existingClient) {
-          wasNewCompany = true;
+          const resolved = await resolveScAndCreForNewCompany({
+            groupName: formData.groupName,
+            salesType: formData.salesType,
+            leadSource: formData.source,
+            nob: formData.nob,
+          });
+          assignedScName = resolved.scName || assignedScName;
+          assignedCrmName = resolved.crmName;
+
           // Insert new row into client_master
           const newClientPayload = {
             company_name: compNameTrimmed,
@@ -876,7 +805,8 @@ function Leads() {
             state: formData.state ? formData.state.trim() : null,
             billing_address: formData.address ? formData.address.trim() : null,
             gst_number: formData.gst ? formData.gst.trim() : null,
-            sc_name: formData.scName ? formData.scName.trim() : null,
+            sc_name: assignedScName,
+            crm_name: assignedCrmName,
             credit_days: formData.creditDays ? parseInt(formData.creditDays, 10) : null,
             credit_limit: formData.creditLimit ? parseFloat(formData.creditLimit) : null,
             sales_type: formData.salesType ? formData.salesType.trim() : null,
@@ -927,7 +857,7 @@ function Leads() {
         company_name: formData.companyName || "",
         phone_number: formData.phoneNumber || "",
         person_name: formData.salespersonName || "",
-        sc_name: formData.scName || "",
+        sc_name: assignedScName || "",
         location: formData.location || "",
         email_address: formData.email || "",
         state: formData.state || "",
@@ -979,74 +909,9 @@ function Leads() {
           .ilike("company_name", compNameTrimmed);
       }
 
-      // 3. Perform SC Round-Robin Turn Rotation if company was brand new and SC wasn't assigned from an existing group
-      if (wasNewCompany) {
-        let assignedFromGroup = false;
-        if (formData.groupName && formData.groupName.trim()) {
-          try {
-            const { data: groupClients } = await supabase
-              .from("lto_client_master")
-              .select("sc_name")
-              .ilike("company_group_name", formData.groupName.trim())
-              .not("sc_name", "is", null)
-              .not("sc_name", "eq", "")
-              .neq("company_name", compNameTrimmed)
-              .limit(1);
-
-            if (groupClients && groupClients.length > 0 && groupClients[0].sc_name) {
-              assignedFromGroup = true;
-            }
-          } catch (err) {
-            console.error("Error checking group SC on submit:", err);
-          }
-        }
-
-        if (!assignedFromGroup) {
-          try {
-            const { data: activeRules } = await supabase
-              .from("lto_sc_distribution")
-              .select("*")
-              .order("sequence_order", { ascending: true })
-              .order("created_at", { ascending: true });
-
-            if (activeRules && activeRules.length > 0) {
-              const currentNob = (formData.nob || "").trim().toUpperCase();
-              const currentSource = (formData.source || "").trim().toUpperCase();
-              const currentType = (formData.salesType || "").trim().toUpperCase();
-
-              const pool = activeRules.filter((rule) => {
-                const types = (rule.sales_types || []).map((t) => t.toUpperCase());
-                const sources = (rule.lead_sources || []).map((s) => s.toUpperCase());
-                const nobs = (rule.nobs || []).map((n) => n.toUpperCase());
-
-                const typeMatch = types.length === 0 || types.includes(currentType);
-                const sourceMatch = sources.length === 0 || sources.includes("ALL SOURCES") || sources.includes(currentSource);
-                const nobMatch = nobs.some((n) => {
-                  if (n === "ALL NOBS") return true;
-                  if (n === "ALL NOBS (EXCEPT RESELLER)") return currentNob !== "RESELLER";
-                  return n === currentNob;
-                });
-
-                return typeMatch && sourceMatch && nobMatch;
-              });
-
-              if (pool.length > 1) {
-                const currentIndex = pool.findIndex((item) => item.is_next_in_line);
-                const nextIndex = currentIndex !== -1 ? (currentIndex + 1) % pool.length : 0;
-                const currentItem = currentIndex !== -1 ? pool[currentIndex] : null;
-                const nextItem = pool[nextIndex];
-
-                if (currentItem && currentItem.id !== nextItem.id) {
-                  await supabase.from("lto_sc_distribution").update({ is_next_in_line: false }).eq("id", currentItem.id);
-                }
-                await supabase.from("lto_sc_distribution").update({ is_next_in_line: true, updated_at: new Date().toISOString() }).eq("id", nextItem.id);
-              }
-            }
-          } catch (rrErr) {
-            console.error("Error advancing dynamic SC round-robin pointer:", rrErr);
-          }
-        }
-      }
+      // SC/CRE round-robin rotation for brand-new companies already happened
+      // atomically in step 1, inside resolveScAndCreForNewCompany -- no
+      // separate post-hoc rotation step needed here anymore.
 
       showNotification(`Lead created successfully! Lead No: ${authoritiveLeadNo}`, "success");
       alert(`Lead created successfully!\nLead No: ${authoritiveLeadNo}`);

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import supabase from "../../utils/supabase"
 import { TABLES, COLUMNS } from "../../constants/dbSchema"
+import { resolveScAndCreForNewCompany } from "../../utils/scAssignment"
 
 const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = null }) => {
   const [leadSources, setLeadSources] = useState([])
@@ -400,87 +401,27 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
         }
       }
 
-      // 1. Auto-assign SC Name (Priority 1: Existing Group SC, Priority 2: sc_distribution rules with Round-Robin)
+      // 1. Auto-assign SC Name (and, for group companies, CRE) via the same
+      // shared rule Leads.jsx uses (src/utils/scAssignment.js): existing
+      // client's own values win first; otherwise a brand-new/still-missing
+      // company gets SC+CRE copied from the group's last-created company,
+      // or falls back to the sc_distribution round-robin for SC only (CRE
+      // stays null -- only assigned later, at order conversion).
       let assignedScName = existingClient?.sc_name || newCallTrackerData.scName || null;
-
-      // Priority 1: Check if group already has an assigned SC in client_master
-      // (skip the "OTHER CLIENTS" catch-all -- it groups unrelated companies
-      // together and shouldn't drive SC inheritance).
-      const isOtherClientsGroup = newCallTrackerData.groupName?.trim().toUpperCase() === "OTHER CLIENTS";
-      if (!assignedScName && newCallTrackerData.groupName && newCallTrackerData.groupName.trim() && !isOtherClientsGroup) {
-        try {
-          const { data: groupClients } = await supabase
-            .from("lto_client_master")
-            .select("sc_name")
-            .ilike("company_group_name", newCallTrackerData.groupName.trim())
-            .not("sc_name", "is", null)
-            .not("sc_name", "eq", "")
-            .order("updated_at", { ascending: false })
-            .limit(1);
-
-          if (groupClients && groupClients.length > 0 && groupClients[0].sc_name) {
-            assignedScName = groupClients[0].sc_name;
-          }
-        } catch (groupScErr) {
-          console.error("Error fetching group SC name in DirectEnquiryForm:", groupScErr);
-        }
-      }
-
-      // Priority 2: Fall back to round-robin sc_distribution rules
-      if (!assignedScName) {
-        try {
-          const { data: activeRules } = await supabase
-            .from("lto_sc_distribution")
-            .select("*")
-            .order("sequence_order", { ascending: true })
-            .order("created_at", { ascending: true });
-
-          if (activeRules && activeRules.length > 0) {
-            const currentNob = (enquiryFormData.nob || "").trim().toUpperCase();
-            const currentSource = (newCallTrackerData.leadSource || "").trim().toUpperCase();
-            const currentType = (enquiryFormData.salesType || "").trim().toUpperCase();
-
-            const matchedRules = activeRules.filter((rule) => {
-              const types = (rule.sales_types || []).map((t) => t.toUpperCase());
-              const sources = (rule.lead_sources || []).map((s) => s.toUpperCase());
-              const nobs = (rule.nobs || []).map((n) => n.toUpperCase());
-
-              const typeMatch = types.length === 0 || types.includes(currentType);
-              const sourceMatch = sources.length === 0 || sources.includes("ALL SOURCES") || sources.includes(currentSource);
-              const nobMatch = nobs.some((n) => {
-                if (n === "ALL NOBS") return true;
-                if (n === "ALL NOBS (EXCEPT RESELLER)") return currentNob !== "RESELLER";
-                return n === currentNob;
-              });
-
-              return typeMatch && sourceMatch && nobMatch;
-            });
-
-            if (matchedRules.length > 0) {
-              const candidate = matchedRules.find((r) => r.is_next_in_line) || matchedRules[0];
-              if (candidate && candidate.sc_name) {
-                assignedScName = candidate.sc_name;
-              }
-
-              if (matchedRules.length > 1 && candidate?.id) {
-                const currentIndex = matchedRules.findIndex((item) => item.id === candidate.id);
-                const nextIndex = (currentIndex + 1) % matchedRules.length;
-                const nextItem = matchedRules[nextIndex];
-
-                if (candidate.id !== nextItem.id) {
-                  await supabase.from("lto_sc_distribution").update({ is_next_in_line: false }).eq("id", candidate.id);
-                }
-                await supabase.from("lto_sc_distribution").update({ is_next_in_line: true, updated_at: new Date().toISOString() }).eq("id", nextItem.id);
-              }
-            }
-          }
-        } catch (scErr) {
-          console.error("Error evaluating SC auto-assignment rules:", scErr);
-        }
-      }
-
-      // 2. CRE / CRM Name is assigned only upon order conversion; inherit existing if present in client_master
       let assignedCrmName = existingClient?.crm_name || null;
+
+      if (!assignedScName) {
+        const resolved = await resolveScAndCreForNewCompany({
+          groupName: newCallTrackerData.groupName,
+          salesType: enquiryFormData.salesType,
+          leadSource: newCallTrackerData.leadSource,
+          nob: enquiryFormData.nob,
+        });
+        assignedScName = resolved.scName || assignedScName;
+        if (!assignedCrmName) {
+          assignedCrmName = resolved.crmName;
+        }
+      }
 
       const baseRowData = {
         created_at: createdAtDate.toISOString(),
