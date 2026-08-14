@@ -6,6 +6,7 @@ import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
 import * as XLSX from "xlsx";
 import { resolveScAndCreForNewCompany } from "../../utils/scAssignment";
+import { getStateCodeFromName } from "../../utils/gstStateCodes";
 
 // Generate next sequential lead numbers for bulk import
 const generateNextImportLeadNumbers = async (count) => {
@@ -803,6 +804,7 @@ function Leads() {
             client_name: formData.salespersonName ? formData.salespersonName.trim() : null,
             client_mobile_number: formData.phoneNumber ? formData.phoneNumber.trim() : null,
             state: formData.state ? formData.state.trim() : null,
+            state_code: getStateCodeFromName(formData.state),
             billing_address: formData.address ? formData.address.trim() : null,
             gst_number: formData.gst ? formData.gst.trim() : null,
             sc_name: assignedScName,

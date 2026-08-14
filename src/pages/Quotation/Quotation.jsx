@@ -420,13 +420,21 @@ function Quotation() {
       let authoritativeQuotationId = null;
       let lastError = null;
 
-      // Look up consignor and consignee UUIDs
+      // Look up consignor and consignee UUIDs.
+      // consignor_id must point at the real consignor/branch entity (the one
+      // matching the selected State on the left panel) -- it previously
+      // matched against reference_name instead, which meant it almost always
+      // resolved to a "reference" row (sales-staff referrer) rather than the
+      // actual branch used, silently breaking revision prefill of the
+      // consignor's own state/address/GSTIN. Reference name/number are now
+      // stored directly on this record (see reference_name/reference_number
+      // below) rather than via this FK at all.
       let consignorId = null;
-      if (quotationData.consignorName) {
+      if (quotationData.consignorState) {
         const { data: cData } = await supabase
           .from("lto_consignor_details")
           .select("uuid")
-          .ilike("reference_name", quotationData.consignorName)
+          .ilike("state", quotationData.consignorState)
           .maybeSingle();
         consignorId = cData?.uuid || null;
       }
@@ -484,6 +492,8 @@ function Quotation() {
           quotation_date: convertDateToISO(quotationData.date),
           prepared_by: quotationData.preparedBy || null,
           consignor_id: consignorId,
+          reference_name: quotationData.consignorName || null,
+          reference_number: quotationData.consignorMobile || null,
           consignee_client_id: consigneeId,
           ship_to_address: quotationData.shipTo || quotationData.consigneeAddress || null,
           consignee_contact_name: quotationData.consigneeContactName || null,
@@ -545,6 +555,7 @@ function Quotation() {
             rate: Number(it.rate) || 0,
             gst_percent: Number(it.gst) || 0,
             discount: Number(it.discount) || 0,
+            flat_discount: Number(it.flatDiscount) || 0,
             amount: Number(it.amount) || 0,
             is_freight: Boolean(it.isFreight),
           }));

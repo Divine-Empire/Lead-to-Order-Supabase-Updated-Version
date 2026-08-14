@@ -170,6 +170,26 @@ const QuotationForm = ({
         console.error("Prepared by fetch exception:", err);
       }
 
+      // ── 5. Fetch references from dropdown table ────────────────────────────────
+      // References (sales-staff referrer name + phone) used to live mixed into
+      // lto_consignor_details, which also holds the 3 real consignor/branch
+      // entities -- that conflation is what made consignor_id on a saved
+      // quotation resolve to a reference row instead of the actual branch used,
+      // breaking revision prefill. References now live here instead, one
+      // "Name — Number" string per row (lto_dropdown only has a single value
+      // column, so both are packed into it and split back out below).
+      let referenceData = [];
+      try {
+        const { data, error } = await supabase
+          .from("lto_dropdown")
+          .select("value")
+          .eq("category", "reference");
+        if (error) console.error("Error fetching references:", error);
+        else referenceData = data || [];
+      } catch (err) {
+        console.error("Reference fetch exception:", err);
+      }
+
       // ── Build state options from consignor_details ──────────────────────────
       const stateOptionsData = ["Select State"];
       const stateDetailsMap = {};
@@ -226,13 +246,15 @@ const QuotationForm = ({
         });
       }
 
-      // Build reference options from consignor_details
-      if (consignorData && consignorData.length > 0) {
-        consignorData.forEach((row) => {
-          if (row.reference_name && !referenceOptionsData.includes(row.reference_name)) {
-            referenceOptionsData.push(row.reference_name);
-            referenceDetailsMap[row.reference_name] = {
-              mobile: row.contact_num ? String(row.contact_num) : "",
+      // Build reference options from lto_dropdown (category="reference"),
+      // splitting each "Name — Number" value back into its two parts.
+      if (referenceData && referenceData.length > 0) {
+        referenceData.forEach((row) => {
+          const [name, number] = (row.value || "").split("—").map((s) => s.trim());
+          if (name && !referenceOptionsData.includes(name)) {
+            referenceOptionsData.push(name);
+            referenceDetailsMap[name] = {
+              mobile: number || "",
               phone: REFERENCE_PHONE_NO,
             };
           }

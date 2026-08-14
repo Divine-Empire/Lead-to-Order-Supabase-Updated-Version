@@ -42,7 +42,7 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
       return null;
     }
 
-    const refName = loadedData.consignor_details?.reference_name || "";
+    const refName = loadedData.reference_name || "";
     const selectedReferences = refName
       ? refName.split(",").map((r) => r.trim()).filter((r) => r)
       : [];
@@ -63,6 +63,7 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
         const rate = item.rate || 0;
         const gst = item.gst_percent !== undefined ? item.gst_percent : (item.gst !== undefined ? item.gst : 18);
         const discount = item.discount !== undefined ? item.discount : (item.disc !== undefined ? item.disc : 0);
+        const flatDiscount = item.flat_discount !== undefined && item.flat_discount !== null ? item.flat_discount : 0;
         const amount = item.amount || 0;
 
         if (isFreight) {
@@ -77,7 +78,7 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
             units,
             rate,
             discount,
-            flatDiscount: 0,
+            flatDiscount,
             amount,
             isFreight: true,
           };
@@ -93,7 +94,7 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
           units,
           rate,
           discount,
-          flatDiscount: 0,
+          flatDiscount,
           amount,
           isFreight: false,
         };
@@ -109,7 +110,17 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
     }
 
     const subtotal = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-    const totalFlatDiscount = 0;
+    // Previously hardcoded to 0 -- since flat_discount now round-trips
+    // through lto_make_quotation_items (see the per-item mapping above),
+    // derive the summary total from the items themselves so a revision's
+    // tax base reflects any flat discounts that were actually applied.
+    // flat_discount is a PERCENTAGE (stacked after `discount`, itself a %)
+    // -- mirrors computeItemFlatDiscountAmount in use-quotation-data.jsx.
+    const totalFlatDiscount = items.reduce((sum, item) => {
+      const baseAmount = Number(item.qty || 0) * Number(item.rate || 0);
+      const discountedAmount = baseAmount * (1 - Number(item.discount || 0) / 100);
+      return sum + discountedAmount * (Number(item.flatDiscount || 0) / 100);
+    }, 0);
     const cgstRate = 9;
     const sgstRate = 9;
     const taxableAmount = Math.max(0, subtotal - totalFlatDiscount);
@@ -133,11 +144,18 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
       quotationNo: loadedData.quotation_no || "",
       date: loadedData.quotation_date || "",
       preparedBy: loadedData.prepared_by || "",
+      // consignor_details is now guaranteed (for quotations saved after the
+      // consignor_id fix) to be the real branch entity matching the State
+      // that was selected, not a reference row -- so state/address/GSTIN
+      // come from that join. Reference name/number are a different concept
+      // (the sales-staff referrer) and are stored directly on this record
+      // instead, since consignor_id previously (mis)used for this can't
+      // reliably represent both at once.
       consignorState: loadedData.consignor_details?.state || "",
-      consignorName: loadedData.consignor_details?.reference_name || "",
+      consignorName: loadedData.reference_name || "",
       consignorAddress: loadedData.consignor_details?.address || "",
-      consignorMobile: loadedData.consignor_details?.contact_num?.toString() || "",
-      consignorPhone: loadedData.consignor_details?.contact_num?.toString() || "",
+      consignorMobile: loadedData.reference_number || "",
+      consignorPhone: loadedData.reference_number || "",
       consignorGSTIN: loadedData.consignor_details?.gstin || "",
       consignorStateCode: loadedData.consignor_details?.state_code || "",
       consigneeName: loadedData.client_master?.company_name || "",

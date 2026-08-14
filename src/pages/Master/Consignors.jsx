@@ -2,13 +2,17 @@
 import supabase from "../../utils/supabase";
 import { PlusIcon, PencilIcon, TrashIcon } from "../../components/Icons";
 
-// A row is a "consignor" row if any consignor-only field is set, otherwise
-// it's treated as a "reference" row -- this table stores both kinds with no
-// discriminator column, so the split has to be replicated in the query too.
-const applyTabFilter = (query, tab) =>
-  tab === "consignor"
-    ? query.or("state.not.is.null,address.not.is.null,gstin.not.is.null")
-    : query.or("reference_name.not.is.null,contact_num.not.is.null");
+// References used to live mixed into this same table (rows with only
+// reference_name/contact_num set, no state/address/gstin) -- that's what let
+// a saved quotation's consignor_id resolve to a reference row instead of the
+// real branch entity, silently breaking revision prefill of the consignor's
+// own state/address/GSTIN. References now live in lto_dropdown
+// (category="reference", one "Name — Number" string per row) instead, so
+// this table only ever holds the real consignor/branch entities. The old
+// reference rows are intentionally left in place here (not deleted) --
+// consignor_id has ON DELETE SET NULL, and thousands of already-saved
+// quotations still point at them; deleting would silently null out their
+// consignor_id. They just aren't shown or added to from this screen anymore.
 
 const Consignors = () => {
   const [data, setData] = useState([]);
@@ -38,15 +42,33 @@ const Consignors = () => {
       const from = (currentPage - 1) * itemsPerPage;
       const to = from + itemsPerPage - 1;
 
-      let query = supabase.from("lto_consignor_details").select("*", { count: "exact" });
-      query = applyTabFilter(query, activeTab);
-      query = query.range(from, to);
-
-      const { data: consignorData, error, count } = await query;
-
-      if (error) throw error;
-      setData(consignorData || []);
-      setTotalResults(count || 0);
+      if (activeTab === "consignor") {
+        const { data: consignorData, error, count } = await supabase
+          .from("lto_consignor_details")
+          .select("*", { count: "exact" })
+          .range(from, to);
+        if (error) throw error;
+        setData(consignorData || []);
+        setTotalResults(count || 0);
+      } else {
+        const { data: dropdownData, error, count } = await supabase
+          .from("lto_dropdown")
+          .select("id, value", { count: "exact" })
+          .eq("category", "reference")
+          .order("value")
+          .range(from, to);
+        if (error) throw error;
+        // Split each "Name — Number" value back into its two parts for
+        // display. `uuid` is aliased to the dropdown row's `id` so the
+        // existing render/edit/delete code (keyed on item.uuid) needs no
+        // further changes below.
+        const rows = (dropdownData || []).map((row) => {
+          const [name, number] = (row.value || "").split("—").map((s) => s.trim());
+          return { uuid: row.id, reference_name: name || "", contact_num: number || "" };
+        });
+        setData(rows);
+        setTotalResults(count || 0);
+      }
     } catch (error) {
       console.error("Error fetching consignors:", error);
       alert("Error fetching data");
@@ -105,37 +127,66 @@ const Consignors = () => {
   const handleSave = async (e) => {
     e.preventDefault();
     if (isEditing && !currentId) {
-      alert("Cannot save: this record has no uuid. Please refresh and try again.");
+      alert("Cannot save: this record has no id. Please refresh and try again.");
       return;
     }
     try {
-      if (isEditing) {
-        const { data: existing, error: checkError } = await supabase
-          .from("lto_consignor_details")
-          .select("uuid")
-          .eq("uuid", currentId)
-          .maybeSingle();
-        if (checkError) throw checkError;
-        if (!existing) {
-          throw new Error("This record no longer exists in the database (it may have been deleted). Please refresh.");
-        }
+      if (activeTab === "consignor") {
+        if (isEditing) {
+          const { data: existing, error: checkError } = await supabase
+            .from("lto_consignor_details")
+            .select("uuid")
+            .eq("uuid", currentId)
+            .maybeSingle();
+          if (checkError) throw checkError;
+          if (!existing) {
+            throw new Error("This record no longer exists in the database (it may have been deleted). Please refresh.");
+          }
 
-        const { data, error } = await supabase
-          .from("lto_consignor_details")
-          .update(formData)
-          .eq("uuid", currentId)
-          .select()
-          .single();
-        if (error) throw error;
-        if (!data) throw new Error("Update did not affect any row.");
+          const { data, error } = await supabase
+            .from("lto_consignor_details")
+            .update(formData)
+            .eq("uuid", currentId)
+            .select()
+            .single();
+          if (error) throw error;
+          if (!data) throw new Error("Update did not affect any row.");
+        } else {
+          const { data, error } = await supabase
+            .from("lto_consignor_details")
+            .insert([formData])
+            .select()
+            .single();
+          if (error) throw error;
+          if (!data) throw new Error("Insert did not return the new row.");
+        }
       } else {
-        const { data, error } = await supabase
-          .from("lto_consignor_details")
-          .insert([formData])
-          .select()
-          .single();
-        if (error) throw error;
-        if (!data) throw new Error("Insert did not return the new row.");
+        // References live in lto_dropdown (category="reference") -- pack
+        // name+number into the single "value" column the same way
+        // quotation-form.jsx reads them back out.
+        const name = (formData.reference_name || "").trim();
+        const number = (formData.contact_num || "").toString().trim();
+        if (!name) throw new Error("Reference Name is required.");
+        const value = `${name} — ${number}`;
+
+        if (isEditing) {
+          const { data, error } = await supabase
+            .from("lto_dropdown")
+            .update({ value })
+            .eq("id", currentId)
+            .select()
+            .single();
+          if (error) throw error;
+          if (!data) throw new Error("Update did not affect any row.");
+        } else {
+          const { data, error } = await supabase
+            .from("lto_dropdown")
+            .insert([{ category: "reference", value }])
+            .select()
+            .single();
+          if (error) throw error;
+          if (!data) throw new Error("Insert did not return the new row.");
+        }
       }
 
       handleCloseModal();
@@ -148,14 +199,16 @@ const Consignors = () => {
 
   const handleDelete = async (id) => {
     if (!id) {
-      alert("Cannot delete: this record has no uuid.");
+      alert("Cannot delete: this record has no id.");
       return;
     }
     if (!window.confirm("Are you sure you want to delete this record?")) return;
     try {
-      const { data, error } = await supabase.from("lto_consignor_details").delete().eq("uuid", id).select().maybeSingle();
+      const table = activeTab === "consignor" ? "lto_consignor_details" : "lto_dropdown";
+      const idColumn = activeTab === "consignor" ? "uuid" : "id";
+      const { data, error } = await supabase.from(table).delete().eq(idColumn, id).select().maybeSingle();
       if (error) throw error;
-      if (!data) throw new Error("This record was already removed (no matching uuid found).");
+      if (!data) throw new Error("This record was already removed (no matching row found).");
       fetchData();
     } catch (error) {
       console.error("Error deleting data:", error);

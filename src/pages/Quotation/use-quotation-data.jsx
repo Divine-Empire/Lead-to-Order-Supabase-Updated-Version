@@ -25,6 +25,20 @@ const getRatesForCalculation = (gstValue) => {
   return parts;
 };
 
+// "Flat Disc" is a second, stacked PERCENTAGE discount applied after
+// "Disc %" -- not a fixed currency amount. This computes the currency
+// value it removes for one item, purely for the "Total Flat Discount"
+// display rollup (item.amount itself already has it baked in via
+// handleItemChange, so this does NOT feed into subtotal/GST calc again).
+const computeItemFlatDiscountAmount = (item) => {
+  const baseAmount = Number(item.qty || 0) * Number(item.rate || 0);
+  const discountedAmount = baseAmount * (1 - Number(item.discount || 0) / 100);
+  return discountedAmount * (Number(item.flatDiscount || 0) / 100);
+};
+
+const sumFlatDiscountAmounts = (items) =>
+  items.reduce((sum, item) => sum + computeItemFlatDiscountAmount(item), 0);
+
 const recalculateTotals = (
   items,
   shouldUseIGST,
@@ -228,10 +242,7 @@ export const useQuotationData = (initialSpecialDiscount = 0) => {
 
       // Handle items array update
       if (field === "items") {
-        const totalFlatDiscount = value.reduce(
-          (sum, item) => sum + Number(item.flatDiscount || 0),
-          0
-        );
+        const totalFlatDiscount = sumFlatDiscountAmounts(value);
 
         const shouldUseIGST = checkStateAndCalculateGST(
           newData.consignorState,
@@ -254,10 +265,7 @@ export const useQuotationData = (initialSpecialDiscount = 0) => {
           field === "consigneeState" ? value : newData.consigneeState
         );
 
-        const totalFlatDiscount = newData.items.reduce(
-          (sum, item) => sum + Number(item.flatDiscount || 0),
-          0
-        );
+        const totalFlatDiscount = sumFlatDiscountAmounts(newData.items);
 
         const totals = recalculateTotals(newData.items, shouldUseIGST, specialDiscount);
 
@@ -293,7 +301,7 @@ export const useQuotationData = (initialSpecialDiscount = 0) => {
               baseAmount * (1 - Number(updatedItem.discount || 0) / 100);
             updatedItem.amount = Math.max(
               0,
-              discountedAmount - Number(updatedItem.flatDiscount || 0)
+              discountedAmount * (1 - Number(updatedItem.flatDiscount || 0) / 100)
             );
           }
 
@@ -302,10 +310,7 @@ export const useQuotationData = (initialSpecialDiscount = 0) => {
         return item;
       });
 
-      const totalFlatDiscount = newItems.reduce(
-        (sum, item) => sum + Number(item.flatDiscount || 0),
-        0
-      );
+      const totalFlatDiscount = sumFlatDiscountAmounts(newItems);
 
       const shouldUseIGST = checkStateAndCalculateGST(
         prev.consignorState,

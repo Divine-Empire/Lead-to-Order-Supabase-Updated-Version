@@ -23,6 +23,7 @@
 import supabase from "./supabase";
 import { generateAndAssignClientCode } from "../pages/Master/ClientCodeGen";
 import { isOtherClientsGroup } from "./scAssignment";
+import { getStateCodeFromName } from "./gstStateCodes";
 
 /**
  * @param {string} enquiryNo - "EN-..." or "LD-..." identifier. Everything
@@ -69,7 +70,7 @@ export const syncClientOnOrderConversion = async (enquiryNo) => {
 
     const { data: clientMatches } = await supabase
       .from("lto_client_master")
-      .select("uuid, company_name, crm_name, company_group_name, sales_type, sc_name, state")
+      .select("uuid, company_name, crm_name, company_group_name, sales_type, sc_name, state, state_code, client_mobile_number, billing_address, gst_number")
       .ilike("company_name", compName)
       .limit(1);
     const existingClient = clientMatches && clientMatches.length > 0 ? clientMatches[0] : null;
@@ -242,16 +243,24 @@ export const syncClientOnOrderConversion = async (enquiryNo) => {
       }
     }
 
+    // Resolve each field with a fallback to whatever client_master already
+    // has -- these previously wrote "" unconditionally whenever the lead/
+    // enquiry side happened to be empty, clobbering a good existing value
+    // (e.g. a state that had been filled in later via ClientMaster.jsx).
+    const resolvedState = leadData?.state || enqData?.enquiry_for_state || enqData?.enquiryState || existingClient?.state || "";
+    const resolvedStateCode = getStateCodeFromName(resolvedState) || existingClient?.state_code || "";
+
     const clientPayload = {
       company_name: compName,
       client_name: clientName,
       sc_name: resolvedHandlePerson,
       sales_type: targetSalesType || null,
       crm_name: assignedCrmName || null,
-      client_mobile_number: leadData?.phone_number || enqData?.phone_number || enqData?.phoneNumber || "",
-      state: leadData?.state || enqData?.enquiry_for_state || enqData?.enquiryState || "",
-      billing_address: leadData?.address || enqData?.shipping_address || enqData?.shippingAddress || "",
-      gst_number: leadData?.gst_number || enqData?.gst_number || enqData?.gstNumber || "",
+      client_mobile_number: leadData?.phone_number || enqData?.phone_number || enqData?.phoneNumber || existingClient?.client_mobile_number || "",
+      state: resolvedState,
+      state_code: resolvedStateCode,
+      billing_address: leadData?.address || enqData?.shipping_address || enqData?.shippingAddress || existingClient?.billing_address || "",
+      gst_number: leadData?.gst_number || enqData?.gst_number || enqData?.gstNumber || existingClient?.gst_number || "",
       already_in_tracker: `Order Received (${enquiryNo})`,
     };
 

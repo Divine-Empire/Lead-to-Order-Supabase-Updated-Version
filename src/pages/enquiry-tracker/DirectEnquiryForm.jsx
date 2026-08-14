@@ -392,7 +392,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
         try {
           const { data: clientRes } = await supabase
             .from("lto_client_master")
-            .select("uuid, client_code, sc_name, crm_name, company_group_name")
+            .select("uuid, client_code, sc_name, crm_name, company_group_name, state, state_code")
             .ilike("company_name", newCallTrackerData.companyName.trim())
             .maybeSingle();
           existingClient = clientRes;
@@ -490,6 +490,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             await supabase.from("lto_client_master").insert([{
               company_name: newCallTrackerData.companyName.trim(),
               company_group_name: newCallTrackerData.groupName || null,
+              state: enquiryFormData.enquiryState || null,
               state_code: newCallTrackerData.stateCode || null,
               client_name: newCallTrackerData.salesPersonName || null,
               client_mobile_number: newCallTrackerData.phoneNumber || null,
@@ -505,6 +506,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             const updatePayload = {
               already_in_tracker: `Enquiry Tracker (${assignedEnquiryNo || 'New'})`,
               updated_at: new Date().toISOString(),
+              state: enquiryFormData.enquiryState || existingClient.state || null,
               state_code: newCallTrackerData.stateCode || existingClient.state_code || null
             };
             if (newCallTrackerData.groupName && !existingClient.company_group_name) {
