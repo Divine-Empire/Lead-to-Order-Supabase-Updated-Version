@@ -432,7 +432,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
         email: newCallTrackerData.emailAddress,
         shipping_address: newCallTrackerData.shippingAddress,
         enquiry_receiver_name: newCallTrackerData.enquiryReceiverName,
-        enquiry_assign_to_project: newCallTrackerData.enquiryAssignToProject,
+        enquiry_assign_to_person: newCallTrackerData.enquiryAssignToProject,
         gst_number: newCallTrackerData.gstNumber,
         enquiry_date: enquiryFormData.enquiryDate ? formatDateToISO(enquiryFormData.enquiryDate) : null,
         enquiry_for_state: enquiryFormData.enquiryState,

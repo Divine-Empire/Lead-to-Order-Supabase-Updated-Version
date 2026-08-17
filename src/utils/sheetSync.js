@@ -69,7 +69,7 @@ const buildPayloadRow = (enquiry, items, tracker) => {
     Email: enquiry.email,
     "Shipping Address": enquiry.shipping_address,
     "Enquiry Receiver Name": enquiry.enquiry_receiver_name,
-    "Enquiry Assign to Project": enquiry.enquiry_assign_to_project,
+    "Enquiry Assign to Project": enquiry.enquiry_assign_to_person,
     "GST Number": enquiry.gst_number,
     "Enquiry Date": enquiry.enquiry_date,
     "Enquiry For State": enquiry.enquiry_for_state,

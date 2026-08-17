@@ -78,7 +78,7 @@ export const COLUMNS = {
     SHIPPING_ADDRESS: 'shipping_address',
     GST_NUMBER: 'gst_number',
     ENQUIRY_RECEIVER_NAME: 'enquiry_receiver_name',
-    ENQUIRY_ASSIGN_TO_PROJECT: 'enquiry_assign_to_project',
+    ENQUIRY_ASSIGN_TO_PERSON: 'enquiry_assign_to_person',
     SALES_PERSON_NAME: 'sales_person_name',
     SALES_COORDINATOR_NAME: 'sales_coordinator_name',
     CRM_NAME: 'crm_name',

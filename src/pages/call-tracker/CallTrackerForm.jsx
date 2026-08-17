@@ -360,6 +360,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
         insertData.project_name = projectName || null;
         insertData.enquiry_type = salesType || null;
         insertData.enquiry_approach = enquiryApproach || null;
+        insertData.enquiry_assign_to_person = enquiryAssignToProject || null;
 
         // Calculate planned_at using tat_config for stage 'Enquiry Tracker for Leads'
         try {

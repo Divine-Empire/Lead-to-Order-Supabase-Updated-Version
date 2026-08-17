@@ -71,15 +71,40 @@ export const getNextQuotationNumber = async (prefix = "NBD") => {
     const financialYear = getCurrentFinancialYear();
     const yearPrefix = `${prefix}-${financialYear.start}-${financialYear.end}`;
 
-    // Fetch all quotations matching the prefix and current year
-    const { data, error } = await supabase
-      .from("lto_make_quotations")
-      .select("quotation_no")
-      .like("quotation_no", `${yearPrefix}-%`);
+    // Fetch ALL quotations matching the prefix and current year -- an
+    // unbounded select() gets silently capped at 1000 rows by PostgREST, so
+    // once a prefix/year combination passes 1000 quotations (CRR-26-27 hit
+    // 1995), the un-paginated version of this query only ever saw a subset
+    // and computed a stale max, handing back a quotation_no that already
+    // existed (e.g. returning "CRR-26-27-1760" as "next" when the true max
+    // was already 1765) -- every save then failed on the unique constraint
+    // and the handful of +1 retries in Quotation.jsx couldn't close a gap
+    // that size. Paging through all matches keeps this correct regardless
+    // of how many quotations a given prefix/year accumulates.
+    let data = [];
+    let from = 0;
+    const step = 1000;
+    let fetchMore = true;
 
-    if (error) {
-      console.error("Error fetching latest quotations:", error);
-      return `${yearPrefix}-001`; // Start from 001
+    while (fetchMore) {
+      const { data: page, error } = await supabase
+        .from("lto_make_quotations")
+        .select("quotation_no")
+        .like("quotation_no", `${yearPrefix}-%`)
+        .range(from, from + step - 1);
+
+      if (error) {
+        console.error("Error fetching latest quotations:", error);
+        return `${yearPrefix}-001`; // Start from 001
+      }
+
+      if (page && page.length > 0) {
+        data = data.concat(page);
+        from += step;
+        if (page.length < step) fetchMore = false;
+      } else {
+        fetchMore = false;
+      }
     }
 
     let maxNumber = 0; // Default to 0 if no records found
