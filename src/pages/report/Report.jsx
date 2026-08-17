@@ -3,8 +3,6 @@
 import { useState, useEffect, useContext, useCallback } from "react";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
-import { ShoppingCartIcon, UsersIcon } from "../../components/Icons";
-import { MapPin } from "lucide-react";
 
 // import { supabaseVisit } from "../supabaseClientVisit";
 
@@ -79,6 +77,9 @@ const FOS_RECEIVERS = [
 ];
 
 const formatMetricValue = (value, format) => {
+    // Total Visit is not wired up yet (pending a separate sheet source) --
+    // rendered as a placeholder rather than a misleading "0".
+    if (format === "blank") return "--";
     if (format === "currency") return (value || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
     if (format === "percent") return `${(value || 0).toFixed(1)}%`;
     return value || 0;
@@ -246,6 +247,84 @@ function PipelineTable({ title, section, visibleLabels, isLoading }) {
     );
 }
 
+const FOS_METRIC_COLUMNS = [
+    { key: "totalVisit", label: "Total Visit", format: "blank" },
+    { key: "enquiries", label: "No. of Enquiries", format: "int" },
+    { key: "enquiryValue", label: "Total Enquiry Value", format: "currency" },
+    { key: "ordersConverted", label: "Orders Converted", format: "int" },
+    { key: "orderConvertedValue", label: "Order Converted Value", format: "currency" },
+    { key: "avgTicket", label: "Avg Ticket Size", format: "currency" },
+    { key: "pipelineCount", label: "Pipeline (Qty)", format: "int" },
+    { key: "pipelineValue", label: "Pipeline (Value)", format: "currency" },
+];
+
+// Renders one FOS Report table (Leads or Enquiries): one row per FOS team
+// member, metrics as columns -- same two-section split as the SC Pipeline
+// tab, just transposed (rows = person, not columns) per the confirmed
+// layout. `visibleNames === null` means no restriction (admin sees
+// everyone); otherwise only rows whose name is in the array are kept, which
+// naturally scopes a non-admin to their own row.
+function FosMetricsTable({ title, rows, visibleNames, isLoading }) {
+    // `rows === null` means "hasn't loaded yet" (or the fetch failed) --
+    // distinct from an empty array, which means "loaded, nothing to show".
+    if (!rows) {
+        return (
+            <div className="mb-8">
+                <h3 className="text-base font-semibold text-gray-800 mb-3">{title}</h3>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-8 text-center text-sm text-gray-500">
+                    {isLoading ? (
+                        <span className="inline-flex items-center gap-2 text-primary">
+                            <Spinner className="h-4 w-4" /> Loading data for this range...
+                        </span>
+                    ) : "No data available."}
+                </div>
+            </div>
+        );
+    }
+
+    const visibleRows = rows.filter(r => visibleNames === null || visibleNames.includes(r.name));
+
+    return (
+        <div className="mb-8">
+            <h3 className="text-base font-semibold text-gray-800 mb-3">{title}</h3>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                {visibleRows.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-sm text-gray-500">No rows to show</div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-100">
+                            <thead className="bg-gray-50/80">
+                                <tr>
+                                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide sticky left-0 bg-gray-50/80">Name</th>
+                                    {FOS_METRIC_COLUMNS.map(c => (
+                                        <th key={c.key} className="px-4 py-2 text-center text-xs font-semibold text-gray-600 whitespace-nowrap">{c.label}</th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {isLoading ? (
+                                    <tr><td colSpan={FOS_METRIC_COLUMNS.length + 1} className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading data for this range...</span></td></tr>
+                                ) : (
+                                    visibleRows.map(row => (
+                                        <tr key={row.name} className="hover:bg-gray-50/60">
+                                            <td className="px-4 py-2.5 text-sm font-medium text-gray-900 whitespace-nowrap sticky left-0 bg-white">{row.name}</td>
+                                            {FOS_METRIC_COLUMNS.map(c => (
+                                                <td key={c.key} className="px-4 py-2.5 text-center text-sm whitespace-nowrap text-gray-700">
+                                                    {formatMetricValue(row[c.key], c.format)}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 function Report() {
     const { isAdmin, getUsernamesToFilter } = useContext(AuthContext);
     const [activeTab, setActiveTab] = useState("calling"); // "calling" or "fos"
@@ -274,21 +353,12 @@ function Report() {
     // picking a range doesn't cost more than the default view does.
     const [callingFilters, setCallingFilters] = useState({ startDate: "", endDate: "" });
 
-    // FOS report state
-    const [fosMetrics, setFosMetrics] = useState({
-        enquiryCount: 0,
-        totalValue: 0,
-        orderConvert: 0,
-    });
-
-    // Total Visit (Tankhwa Patra)
-    const [totalVisitCount, setTotalVisitCount] = useState(0);
-
-    // Pipeline state (for non-converted enquiries)
-    const [pipelineMetrics, setPipelineMetrics] = useState({
-        enquiryCount: 0,
-        totalValue: 0,
-    });
+    // FOS report state -- two sections (Leads, Enquiries), one row per
+    // FOS_RECEIVERS member per section, mirroring the SC Pipeline tab's
+    // layout. null = not loaded yet (or fetch failed); [] = loaded, empty.
+    const [fosTableData, setFosTableData] = useState({ leads: null, enquiries: null });
+    // Surfaced in the UI if the fetch throws, same convention as SC Pipeline.
+    const [fosError, setFosError] = useState(null);
 
     // SC Pipeline state -- no filters, same "always this week" convention as
     // Calling Data: Geeta/Priya/Nikita are broken out by category (CRR /
@@ -303,9 +373,6 @@ function Report() {
     // rolling 60 days for Pipeline Value, per task.txt#26-33). Setting either
     // date collapses BOTH of those windows onto the same custom range instead.
     const [scPipelineFilters, setScPipelineFilters] = useState({ startDate: "", endDate: "" });
-
-    // Conversion Metrics Table (per enquiry receiver)
-    const [conversionMetrics, setConversionMetrics] = useState([]);
 
     const [fosFilters, setFosFilters] = useState({
         receiverName: "all",
@@ -588,206 +655,141 @@ function Report() {
         }
     }, [activeTab, isAdmin, getUsernamesToFilter, scNames, callingFilters]);
 
-    // Fetch FOS Data
+    // Fetch FOS Data -- two sections (Leads, Enquiries), one row per
+    // FOS_RECEIVERS member per section. Default window: last Monday 00:00
+    // -> now for enquiries/orders columns, rolling 60 days for Pipeline
+    // (same convention as SC Pipeline); setting either filter date collapses
+    // BOTH windows onto that one custom range instead.
     const fetchFosMetrics = useCallback(async () => {
         if (activeTab !== "fos") return;
         setIsLoading(true);
+        setFosError(null);
         try {
-            const { data: rawData, error } = await fetchAllRows(() => {
-                let q = supabase
-                    .from("lto_enquiries")
-                    .select("id, created_at, enquiry_receiver_name");
+            const monday = getMondayStart();
+            const now = new Date();
+            const defaultSixtyDaysAgo = new Date(now);
+            defaultSixtyDaysAgo.setDate(defaultSixtyDaysAgo.getDate() - 60);
+            const hasCustomRange = !!(fosFilters.startDate || fosFilters.endDate);
 
-                const scList = getScFilterList(fosFilters.receiverName);
-                if (scList) {
-                    q = q.in("enquiry_receiver_name", scList);
-                }
-                if (fosFilters.startDate) {
-                    q = q.gte("created_at", fosFilters.startDate);
-                }
-                if (fosFilters.endDate) {
-                    q = q.lte("created_at", getEndDateWithTime(fosFilters.endDate));
-                }
-                return q;
-            });
+            const rangeStart = hasCustomRange
+                ? (fosFilters.startDate ? new Date(`${fosFilters.startDate}T00:00:00`) : defaultSixtyDaysAgo)
+                : monday;
+            const rangeEnd = hasCustomRange
+                ? (fosFilters.endDate ? new Date(getEndDateWithTime(fosFilters.endDate)) : now)
+                : now;
 
-            if (error) {
-                console.error("Error fetching FOS data:", error);
-                setFosMetrics({ enquiryCount: 0, totalValue: 0, orderConvert: 0 });
-                setPipelineMetrics({ enquiryCount: 0, totalValue: 0 });
-                return;
-            }
+            // Widest bound actually needed server-side, same reasoning as SC
+            // Pipeline: default mode still needs the full 60-day lookback for
+            // Pipeline even though the other columns only need this week;
+            // custom mode needs exactly the chosen range since both windows
+            // collapse onto it.
+            const fetchStart = hasCustomRange ? rangeStart : defaultSixtyDaysAgo;
+            const fetchEnd = hasCustomRange ? rangeEnd : now;
+            const fetchStartISO = fetchStart.toISOString();
+            const fetchEndISO = fetchEnd.toISOString();
 
-            // quotation_value_without_tax / order_no / is_order_received_status all
-            // live on lto_enquiry_tracker, not on lto_enquiries -- fetch and reduce
-            // to one representative (latest) row per enquiry.
-            const { data: trackerRows, error: trackerErr } = await fetchAllRows(() =>
-                supabase.from("lto_enquiry_tracker")
-                    .select("enquiry_id, created_at, quotation_value_without_tax, order_no, is_order_received_status")
-            );
-            if (trackerErr) console.error("Error fetching enquiry tracker data for FOS report:", trackerErr);
+            const inRange = (d) => {
+                const dt = new Date(d);
+                return !isNaN(dt.getTime()) && dt >= rangeStart && dt <= rangeEnd;
+            };
+            // Under a custom range there is only one window, not two.
+            const inPipelineWindow = hasCustomRange ? inRange : (d) => {
+                const dt = new Date(d);
+                return !isNaN(dt.getTime()) && dt >= defaultSixtyDaysAgo && dt <= now;
+            };
+            const isYes = (status) => String(status || "").trim().toLowerCase() === "yes";
 
-            const latestTrackerByEnquiryId = new Map();
-            (trackerRows || []).forEach(t => {
-                const existing = latestTrackerByEnquiryId.get(t.enquiry_id);
-                if (!existing || new Date(t.created_at) > new Date(existing.created_at)) {
-                    latestTrackerByEnquiryId.set(t.enquiry_id, t);
-                }
-            });
+            // Computes all 8 columns for one FOS person, given the full
+            // (already date-bounded) record set for a section and its
+            // tracker rows keyed by record id.
+            const computePersonMetrics = (name, records, trackerByRecordId) => {
+                const mine = records.filter(r => r._receiverName === name);
+                let enquiries = 0, enquiryValue = 0, ordersConverted = 0, orderConvertedValue = 0;
+                let pipelineCount = 0, pipelineValue = 0;
 
-            const data = (rawData || []).map(row => {
-                const tracker = latestTrackerByEnquiryId.get(row.id);
-                const hasOrder = (trackerRows || []).some(t =>
-                    t.enquiry_id === row.id &&
-                    t.is_order_received_status &&
-                    String(t.is_order_received_status).trim().toLowerCase() === "yes"
-                );
+                mine.forEach(rec => {
+                    const trackerRows = trackerByRecordId.get(rec.id) || [];
+                    const isConverted = trackerRows.some(t => isYes(t.is_order_received_status));
+
+                    let latestRow = null;
+                    trackerRows.forEach(t => {
+                        if (!latestRow || new Date(t.created_at) > new Date(latestRow.created_at)) latestRow = t;
+                    });
+                    const latestValue = latestRow?.quotation_value_without_tax ? parseMoney(latestRow.quotation_value_without_tax) : 0;
+
+                    if (inRange(rec.created_at)) {
+                        enquiries++;
+                        enquiryValue += latestValue;
+                        if (isConverted) {
+                            ordersConverted++;
+                            orderConvertedValue += latestValue;
+                        }
+                    }
+                    // Pipeline: open (non-converted) work only, per the
+                    // confirmed convention shared with SC Pipeline.
+                    if (inPipelineWindow(rec.created_at) && !isConverted) {
+                        pipelineCount++;
+                        pipelineValue += latestValue;
+                    }
+                });
+
                 return {
-                    ...row,
-                    quotation_value_without_tax: tracker?.quotation_value_without_tax ?? null,
-                    order_no: tracker?.order_no ?? null,
-                    is_order_received_status: tracker?.is_order_received_status ?? null,
-                    hasOrder,
+                    name,
+                    totalVisit: null, // pending -- to be wired to another sheet later
+                    enquiries, enquiryValue, ordersConverted, orderConvertedValue,
+                    avgTicket: ordersConverted > 0 ? orderConvertedValue / ordersConverted : 0,
+                    pipelineCount, pipelineValue,
                 };
+            };
+
+            // ---- Leads section ----
+            const [{ data: allLeads, error: leadsErr }, { data: allLeadTrackers, error: leadTrackersErr }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_leads").select("id, lead_receiver_name, created_at")
+                    .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
+                fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, created_at, is_order_received_status, quotation_value_without_tax")
+                    .gte("created_at", fetchStartISO)),
+            ]);
+            if (leadsErr) throw leadsErr;
+            if (leadTrackersErr) throw leadTrackersErr;
+
+            const leadTrackerByLeadId = new Map();
+            (allLeadTrackers || []).forEach(t => {
+                if (!t.lead_id) return;
+                if (!leadTrackerByLeadId.has(t.lead_id)) leadTrackerByLeadId.set(t.lead_id, []);
+                leadTrackerByLeadId.get(t.lead_id).push(t);
             });
+            const leadRecords = (allLeads || []).map(l => ({ ...l, _receiverName: l.lead_receiver_name }));
+            const leadsRows = FOS_RECEIVERS.map(name => computePersonMetrics(name, leadRecords, leadTrackerByLeadId));
 
-            // FOS Team metrics (all enquiries)
-            let fosEnquiryCount = data.length;
-            let fosTotalValue = 0;
-            let fosConvertedValue = 0; // NEW: Track sum of converted orders only
-            let orderConvert = 0;
+            // ---- Enquiries section ----
+            const [{ data: allEnquiries, error: enqErr }, { data: allEnquiryTrackers, error: enqTrackersErr }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_receiver_name, created_at")
+                    .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
+                fetchAllRows(() => supabase.from("lto_enquiry_tracker").select("enquiry_id, created_at, is_order_received_status, quotation_value_without_tax")
+                    .gte("created_at", fetchStartISO)),
+            ]);
+            if (enqErr) throw enqErr;
+            if (enqTrackersErr) throw enqTrackersErr;
 
-            // Pipeline metrics (only non-converted: actual1 is null)
-            let pipelineEnquiryCount = 0;
-            let pipelineTotalValue = 0;
-
-            data.forEach(row => {
-                // Count total value for all enquiries
-                if (row.quotation_value_without_tax) {
-                    const value = parseFloat(
-                        String(row.quotation_value_without_tax)
-                            .replace(/,/g, "")
-                            .replace(/[^\d.-]/g, "")
-                    );
-
-                    if (!isNaN(value)) {
-                        fosTotalValue += value;
-
-                        // NEW: If converted to order, add to converted value
-                        const isOrderReceived = row.is_order_received_status &&
-                            String(row.is_order_received_status).toLowerCase() === "yes";
-
-                        if (row.hasOrder && isOrderReceived) {
-                            fosConvertedValue += value;
-                        }
-                    }
-                }
-
-                // Check if this enquiry was converted to order
-                if (row.hasOrder) {
-                    orderConvert++;
-                }
-
-                // Pipeline metrics (only non-converted)
-                if (!row.hasOrder) {
-                    pipelineEnquiryCount++;
-
-                    if (row.quotation_value_without_tax) {
-                        const value = parseFloat(
-                            String(row.quotation_value_without_tax)
-                                .replace(/,/g, "")
-                                .replace(/[^\d.-]/g, "")
-                        );
-
-                        if (!isNaN(value)) {
-                            pipelineTotalValue += value;
-                        }
-                    }
-                }
-
+            const enquiryTrackerByEnquiryId = new Map();
+            (allEnquiryTrackers || []).forEach(t => {
+                if (!t.enquiry_id) return;
+                if (!enquiryTrackerByEnquiryId.has(t.enquiry_id)) enquiryTrackerByEnquiryId.set(t.enquiry_id, []);
+                enquiryTrackerByEnquiryId.get(t.enquiry_id).push(t);
             });
+            const enquiryRecords = (allEnquiries || []).map(e => ({ ...e, _receiverName: e.enquiry_receiver_name }));
+            const enquiriesRows = FOS_RECEIVERS.map(name => computePersonMetrics(name, enquiryRecords, enquiryTrackerByEnquiryId));
 
-            setFosMetrics({
-                enquiryCount: fosEnquiryCount,
-                totalValue: fosTotalValue,
-                convertedValue: fosConvertedValue, // Added
-                orderConvert
-            });
-
-            setPipelineMetrics({
-                enquiryCount: pipelineEnquiryCount,
-                totalValue: pipelineTotalValue
-            });
-
-            // Calculate per-person conversion metrics
-            // Initialize with all FOS team members
-            const personMetrics = {};
-            FOS_RECEIVERS.forEach(name => {
-                personMetrics[name] = {
-                    name: name,
-                    totalEnquiries: 0,
-                    orderConversions: 0,
-                    totalOrderValue: 0
-                };
-            });
-
-            data.forEach(row => {
-                const receiverName = row.enquiry_receiver_name;
-
-                // Only process if receiver name exists in FOS_RECEIVERS
-                if (receiverName && personMetrics[receiverName]) {
-                    // Count every enquiry
-                    personMetrics[receiverName].totalEnquiries++;
-
-                    // Check if this enquiry was converted to order
-                    const hasOrder = row.hasOrder;
-
-                    if (hasOrder) {
-                        personMetrics[receiverName].orderConversions++;
-
-                        if (row.quotation_value_without_tax) {
-                            const value = parseFloat(
-                                String(row.quotation_value_without_tax)
-                                    .replace(/,/g, "")
-                                    .replace(/[^\d.-]/g, "")
-                            );
-
-                            if (!isNaN(value)) {
-                                personMetrics[receiverName].totalOrderValue += value;
-                            }
-                        }
-                    }
-                }
-            });
-
-            // Convert to array and calculate conversion percentage and average ticket size (preserve FOS_RECEIVERS order)
-            let metricsArray = FOS_RECEIVERS.map(name => ({
-                name: name,
-                totalEnquiries: personMetrics[name].totalEnquiries,
-                orderConversions: personMetrics[name].orderConversions,
-                conversionPercentage: personMetrics[name].totalEnquiries > 0
-                    ? (personMetrics[name].orderConversions / personMetrics[name].totalEnquiries) * 100
-                    : 0,
-                avgTicketSize: personMetrics[name].orderConversions > 0
-                    ? personMetrics[name].totalOrderValue / personMetrics[name].orderConversions
-                    : 0
-            }));
-
-            // If a specific receiver is selected (or a non-admin is scoped to their
-            // own name), filter the table to show only allowed row(s).
-            const conversionScList = getScFilterList(fosFilters.receiverName);
-            if (conversionScList) {
-                metricsArray = metricsArray.filter(met => conversionScList.includes(met.name));
-            }
-
-            setConversionMetrics(metricsArray);
+            setFosTableData({ leads: leadsRows, enquiries: enquiriesRows });
 
         } catch (err) {
             console.error("FOS fetch error:", err);
+            setFosError(err?.message || "Failed to load FOS report data.");
+            setFosTableData({ leads: [], enquiries: [] });
         } finally {
             setIsLoading(false);
         }
-    }, [fosFilters, activeTab, isAdmin, getUsernamesToFilter]);
+    }, [fosFilters, activeTab]);
 
     // Fetch SC Pipeline Metrics
     // "Category" = sales_type, normalized -- the raw data has inconsistent
@@ -982,27 +984,15 @@ function Report() {
     }, [fetchSCNames]);
 
 
-    const fetchFilteredVisitCount = useCallback(async () => {
-        if (activeTab !== "fos") return;
-
-        try {
-            // 📊 Default logic: Tables tankhwa_patra and total_visit have been removed.
-            setTotalVisitCount(0);
-        } catch (err) {
-            console.error("Visit count error:", err);
-        }
-    }, [fosFilters, activeTab, isAdmin]);
-
     useEffect(() => {
         if (activeTab === "calling") {
             fetchCallingDataReport();
         } else if (activeTab === "fos") {
             fetchFosMetrics();
-            fetchFilteredVisitCount();
         } else if (activeTab === "sc_pipeline") {
             fetchScPipelineMetrics();
         }
-    }, [fetchCallingDataReport, fetchFosMetrics, fetchFilteredVisitCount, fetchScPipelineMetrics, activeTab]);
+    }, [fetchCallingDataReport, fetchFosMetrics, fetchScPipelineMetrics, activeTab]);
 
 
 
@@ -1170,225 +1160,54 @@ function Report() {
                 {/* FOS REPORT TAB CONTENT */}
                 {activeTab === "fos" && (
                     <>
-                        {/* FOS Filters */}
-                        <div className="bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 mb-6 flex flex-col md:flex-row gap-3 items-end md:items-center">
-                            {isAdmin() && (
-                                <div className="w-full md:w-1/3">
-                                    <label className="block text-xs font-medium text-gray-600 mb-1">Enquiry Receiver Name</label>
-                                    <select
-                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
-                                        value={fosFilters.receiverName}
-                                        onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
-                                    >
-                                        <option value="all">All Receivers</option>
-                                        {FOS_RECEIVERS.map(name => (
-                                            <option key={name} value={name}>{name}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            )}
-                            <div className="w-full md:w-1/4">
-                                <label className="block text-xs font-medium text-gray-600 mb-1">Start Date</label>
-                                <input
-                                    type="date"
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
-                                    value={fosFilters.startDate}
-                                    onChange={(e) => setFosFilters(prev => ({ ...prev, startDate: e.target.value }))}
-                                />
-                            </div>
-                            <div className="w-full md:w-1/4">
-                                <label className="block text-xs font-medium text-gray-600 mb-1">End Date</label>
-                                <input
-                                    type="date"
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
-                                    value={fosFilters.endDate}
-                                    onChange={(e) => setFosFilters(prev => ({ ...prev, endDate: e.target.value }))}
-                                />
-                            </div>
-                            <div className="w-full md:w-1/6">
-                                <button
-                                    onClick={() => setFosFilters({ receiverName: "all", startDate: "", endDate: "" })}
-                                    className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium text-sm py-2 px-4 rounded-md transition-colors"
+                        <p className="text-sm text-gray-500 mb-3 flex items-center gap-2">
+                            {fosFilters.startDate || fosFilters.endDate
+                                ? "Custom date range applies to every metric below, including Pipeline."
+                                : "This week (Monday through today) for Enquiries/Orders columns; Pipeline looks back 60 days at non-converted work."}
+                            {!isAdmin() && " You're seeing only your own row."}
+                            {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
+                        </p>
+
+                        {isAdmin() && (
+                            <div className="bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 mb-3">
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Receiver Name</label>
+                                <select
+                                    className="w-full md:w-1/4 border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
+                                    value={fosFilters.receiverName}
+                                    onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
                                 >
-                                    Reset
-                                </button>
+                                    <option value="all">All Receivers</option>
+                                    {FOS_RECEIVERS.map(name => (
+                                        <option key={name} value={name}>{name}</option>
+                                    ))}
+                                </select>
                             </div>
-                        </div>
+                        )}
 
-                        {/* FOS Team and Pipeline Sections */}
-                        <div className="space-y-8">
-                            {/* Section 1: FOS Team */}
-                            <div>
-                                <h3 className="text-base font-semibold text-gray-800 mb-3">FOS Team</h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-                                    {/* Total Visit */}
-                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                                                Total Visit
-                                            </p>
-                                            <p className="text-2xl font-bold text-gray-900 mt-1">
-                                                {isLoading ? "..." : totalVisitCount}
-                                            </p>
-                                        </div>
-                                        <div className="p-2.5 rounded-lg bg-info/10 text-info">
-                                            <MapPin className="h-5 w-5" />
-                                        </div>
-                                    </div>
+                        <DateRangeFilterBar
+                            startDate={fosFilters.startDate}
+                            endDate={fosFilters.endDate}
+                            onStartDateChange={(v) => setFosFilters(prev => ({ ...prev, startDate: v }))}
+                            onEndDateChange={(v) => setFosFilters(prev => ({ ...prev, endDate: v }))}
+                            onReset={() => setFosFilters(prev => ({ ...prev, startDate: "", endDate: "" }))}
+                            defaultRangeLabel="Showing this week + rolling 60-day pipeline"
+                        />
 
-                                    {/* No. of Enquiry */}
-                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">No. of Enquiries</p>
-                                            <p className="text-2xl font-bold text-gray-900 mt-1">{isLoading ? "..." : fosMetrics.enquiryCount}</p>
-                                        </div>
-                                        <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
-                                            <UsersIcon className="h-5 w-5" />
-                                        </div>
-                                    </div>
-
-                                    {/* Total Enquiry Value */}
-                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Enquiry Value</p>
-                                            <p className="text-xl font-bold text-gray-900 mt-1">
-                                                {isLoading ? "..." : (fosMetrics.totalValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}
-                                            </p>
-                                        </div>
-                                        <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600">
-                                            <span className="text-lg font-bold">₹</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Order Convert */}
-                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Orders Converted</p>
-                                            <p className="text-2xl font-bold text-gray-900 mt-1">{isLoading ? "..." : fosMetrics.orderConvert}</p>
-                                        </div>
-                                        <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
-                                            <ShoppingCartIcon className="h-5 w-5" />
-                                        </div>
-                                    </div>
-
-                                    {/*Order Converted Total Value */}
-                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Order Value Converted</p>
-                                            <p className="text-xl font-bold text-gray-900 mt-1">
-                                                {isLoading ? "..." : (fosMetrics.convertedValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}
-                                            </p>
-                                        </div>
-                                        <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600">
-                                            <span className="text-lg font-bold">₹</span>
-                                        </div>
-                                    </div>
-
-                                    {/* Avg Ticket Size */}
-                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Avg Ticket Size</p>
-                                            <p className="text-xl font-bold text-gray-900 mt-1">
-                                                {isLoading ? "..." : fosMetrics.orderConvert > 0
-                                                    ? (fosMetrics.convertedValue / fosMetrics.orderConvert).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
-                                                    : '₹0'}
-                                            </p>
-                                        </div>
-                                        <div className="p-2.5 rounded-lg bg-amber-50 text-amber-600">
-                                            <span className="text-lg font-bold">₹</span>
-                                        </div>
-                                    </div>
-                                </div>
+                        {fosError && (
+                            <div className="mb-5 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-700">
+                                Couldn't load FOS report data: {fosError}
                             </div>
+                        )}
 
-                            {/* Section 2: Pipeline (Non-converted Enquiries Only) */}
-                            <div>
-                                <h3 className="text-base font-semibold text-gray-800 mb-3">Pipeline</h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {/* No. of Enquiry (Non-converted only) */}
-                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">No. of Enquiries</p>
-                                            <p className="text-2xl font-bold text-gray-900 mt-1">{isLoading ? "..." : pipelineMetrics.enquiryCount}</p>
-                                        </div>
-                                        <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
-                                            <UsersIcon className="h-5 w-5" />
-                                        </div>
-                                    </div>
-
-                                    {/* Value (Non-converted only) */}
-                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
-                                        <div>
-                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Value</p>
-                                            <p className="text-xl font-bold text-gray-900 mt-1">
-                                                {isLoading ? "..." : (pipelineMetrics.totalValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}
-                                            </p>
-                                        </div>
-                                        <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600">
-                                            <span className="text-lg font-bold">₹</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Section 3: Conversion Metrics Table */}
-                            <div>
-                                <h3 className="text-base font-semibold text-gray-800 mb-3">Enquiry to Order Conversion Metrics</h3>
-                                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                                    <div className="overflow-x-auto">
-                                        <table className="min-w-full divide-y divide-gray-100">
-                                            <thead className="bg-gray-50/80">
-                                                <tr>
-                                                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                                        Enquiry Receiver Name
-                                                    </th>
-                                                    <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                                        Enquiry to Order Conversion
-                                                    </th>
-                                                    <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                                                        Avg Ticket Size
-                                                    </th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-100">
-                                                {isLoading ? (
-                                                    <tr>
-                                                        <td colSpan="3" className="px-4 py-8 text-center text-sm text-primary">
-                                                            <span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span>
-                                                        </td>
-                                                    </tr>
-                                                ) : conversionMetrics.length === 0 ? (
-                                                    <tr>
-                                                        <td colSpan="3" className="px-4 py-6 text-center text-sm text-gray-500">
-                                                            No data available
-                                                        </td>
-                                                    </tr>
-                                                ) : (
-                                                    conversionMetrics.map((person, index) => (
-                                                        <tr key={index} className="hover:bg-gray-50/60">
-                                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-gray-900">
-                                                                {person.name}
-                                                            </td>
-                                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
-                                                                <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${getPercentColorClass(person.conversionPercentage)}`}>
-                                                                    {person.conversionPercentage.toFixed(1)}%
-                                                                </span>
-                                                            </td>
-                                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">
-                                                                {person.avgTicketSize > 0
-                                                                    ? person.avgTicketSize.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
-                                                                    : '₹0'
-                                                                }
-                                                            </td>
-                                                        </tr>
-                                                    ))
-                                                )}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        {(() => {
+                            const visibleNames = getScFilterList(fosFilters.receiverName);
+                            return (
+                                <>
+                                    <FosMetricsTable title="Leads" rows={fosTableData.leads} visibleNames={visibleNames} isLoading={isLoading} />
+                                    <FosMetricsTable title="Enquiries" rows={fosTableData.enquiries} visibleNames={visibleNames} isLoading={isLoading} />
+                                </>
+                            );
+                        })()}
                     </>
                 )}
 

@@ -9,8 +9,6 @@ import OrderExpectedForm from "../../components/enquiry-tracker/OrderExpectedFor
 import OrderStatusForm from "../../components/enquiry-tracker/OrderStatusFrom"
 import supabase from "../../utils/supabase"
 import { generateAndAssignClientCode } from "../Master/ClientCodeGen"
-import { syncEnquiryToSheetInBackground } from "../../utils/sheetSync"
-import { syncLeadToSheetInBackground } from "../../utils/sheetSyncLeads"
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync"
 import { generateNextOrderNumber as generateNextOrderNumberShared } from "../../utils/orderNumberGenerator"
 
@@ -18,7 +16,7 @@ function NewEnquiryTracker() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const leadId = searchParams.get("leadId")
-  const { showNotification, dismissNotification } = useContext(AuthContext)
+  const { showNotification } = useContext(AuthContext)
   const [customerFeedbackOptions, setCustomerFeedbackOptions] = useState([])
 
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -624,31 +622,13 @@ function NewEnquiryTracker() {
 
         if (updateSuccess) {
           showNotification("Call tracker updated successfully and enquiry record updated", "success");
-
-          // Only order-received enquiries get pushed to the sheet, and the
-          // sync itself must never block the save flow — it's fired here
-          // without an await; the follow-up toast fires whenever it settles.
-          if (isOrderStatusStage && orderStatusData.orderStatus?.toLowerCase() === "yes") {
-            // Persistent (duration 0) so it stays up for the whole sync —
-            // the fetch can take a few seconds, and if the tab is closed
-            // before it resolves the sheet update is lost, so the user
-            // needs a clear signal to wait for the follow-up toast.
-            // Each sync gets its OWN toast id -- dismissing this exact one
-            // before showing the result means two overlapping syncs (e.g.
-            // saving another row while this one is still in flight) no
-            // longer stomp each other's loading/result toast.
-            const syncToastId = showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
-            syncEnquiryToSheetInBackground(
-              { enquiryNo: formData.enquiryNo },
-              (webhookSuccess) => {
-                dismissNotification(syncToastId);
-                showNotification(
-                  webhookSuccess ? "Data synced to Google Sheets" : "Database updated but Google Sheets sync may be delayed",
-                  webhookSuccess ? "success" : "warning"
-                );
-              }
-            );
-          }
+          // Google Sheets sync no longer happens from here. It's now a
+          // Supabase Database Webhook -> Apps Script live sync (see
+          // apps-script/SupabaseWebhookLiveSync.gs) that fires straight off
+          // the lto_enquiries/lto_enquiry_tracker/lto_enquiry_items writes
+          // themselves the instant is_order_received_status flips to
+          // "yes" — the frontend doesn't need to (and no longer does)
+          // push a row to the sheet directly.
         } else {
           showNotification("Call tracker updated but enquiry record could not be updated", "warning");
         }
@@ -695,23 +675,11 @@ function NewEnquiryTracker() {
 
         if (updateSuccess) {
           showNotification("Call tracker updated successfully and lead record updated", "success");
-
-          // Only order-received leads get pushed to the sheet, and the
-          // sync itself must never block the save flow — fired here
-          // without an await, same pattern as the enquiry path above.
-          if (isOrderStatusStage && orderStatusData.orderStatus?.toLowerCase() === "yes") {
-            const syncToastId = showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
-            syncLeadToSheetInBackground(
-              { leadNo: formData.enquiryNo },
-              (webhookSuccess) => {
-                dismissNotification(syncToastId);
-                showNotification(
-                  webhookSuccess ? "Data synced to Google Sheets" : "Database updated but Google Sheets sync may be delayed",
-                  webhookSuccess ? "success" : "warning"
-                );
-              }
-            );
-          }
+          // Google Sheets sync no longer happens from here either — same
+          // reasoning as the enquiry path above, now covered by the
+          // Supabase Database Webhook -> Apps Script live sync for leads
+          // (lto_leads/lto_enquiry_tracker_for_leads/lto_lead_items/
+          // lto_lead_contacts/lto_call_tracker_for_leads).
         } else {
           showNotification("Call tracker updated but lead record could not be updated", "warning");
         }
