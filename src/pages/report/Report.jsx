@@ -3,8 +3,8 @@
 import { useState, useEffect, useContext, useCallback } from "react";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
-import { BarChartIcon, PhoneCallIcon, FileTextIcon, ShoppingCartIcon, UsersIcon } from "../../components/Icons";
-import { MapPin, ArrowDownLeft, ArrowUpRight, CheckCircle2 } from "lucide-react";
+import { FileTextIcon, ShoppingCartIcon, UsersIcon } from "../../components/Icons";
+import { MapPin } from "lucide-react";
 
 // import { supabaseVisit } from "../supabaseClientVisit";
 
@@ -62,24 +62,13 @@ function Report() {
         return null;
     };
 
-    // calling report state
-    const [metrics, setMetrics] = useState({
-        totalLeads: 0,
-        calls: 0,
-        enquiries: 0,
-        quotations: 0,
-        orders: 0,
-        quotationValue: 0,
-        orderQuotationValue: 0,
-        incoming: 0,
-        outgoing: 0,
-        conversion: 0,
-    });
-    const [filters, setFilters] = useState({
-        scName: "all",
-        startDate: "",
-        endDate: "",
-    });
+    // Calling Data tab state -- one row per SC (from `login`, admin/user role
+    // excluded), always scoped to the current week (Monday 00:00 -> now), no
+    // date/SC filters since the whole point is "everyone's current-week
+    // snapshot at a glance". Non-admins only ever see their own row (or none,
+    // if their name isn't a known SC).
+    const [leadsReportRows, setLeadsReportRows] = useState([]);
+    const [enquiriesReportRows, setEnquiriesReportRows] = useState([]);
     const [scNames, setScNames] = useState([]);
 
     // FOS report state
@@ -151,232 +140,235 @@ function Report() {
         }
     }, []);
 
-    const fetchMetrics = useCallback(async () => {
+    // Monday 00:00 of the current week -> now. "Always started from Monday"
+    // per the spec -- this tab has no date picker, it's always this week.
+    const getMondayStart = () => {
+        const now = new Date();
+        const day = now.getDay(); // 0 = Sun, 1 = Mon, ... 6 = Sat
+        const diffToMonday = day === 0 ? 6 : day - 1;
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday, 0, 0, 0, 0);
+    };
+
+    // Root quotation = no revision suffix. Quotation.jsx's own numbering
+    // scheme (see nextRevision in Quotation.jsx) is unambiguous about this:
+    // "PREFIX-YY-YY-NNN" (4 hyphen-separated parts) is a root quotation;
+    // appending "-01", "-02", ... for each revision makes it 5 parts.
+    const isRootQuotationNo = (quotationNo) => String(quotationNo || "").split("-").length === 4;
+
+    const parseMoney = (v) => {
+        const value = parseFloat(String(v).replace(/,/g, '').replace(/[^\d.-]/g, ''));
+        return isNaN(value) ? 0 : value;
+    };
+
+    const fetchCallingDataReport = useCallback(async () => {
         if (activeTab !== "calling") return;
         setIsLoading(true);
         try {
-            // Helper to parse dates strictly
-            const parseDate = (dateStr) => {
-                if (!dateStr) return null;
-                const datePart = String(dateStr).split(" ")[0]; // Get only date part
+            const monday = getMondayStart();
+            const mondayISO = monday.toISOString();
+            const now = new Date();
+            const inThisWeek = (dateStr) => {
+                if (!dateStr) return false;
+                const d = new Date(dateStr);
+                return !isNaN(d.getTime()) && d >= monday && d <= now;
+            };
 
-                // 1. Handle DD/MM/YYYY or DD-MM-YYYY (Very common in user's backend)
-                const parts = datePart.split(/[/|-]/);
-                if (parts.length === 3) {
-                    if (parts[0].length === 4) {
-                        // format looks like YYYY-MM-DD
-                        return new Date(parts[0], parts[1] - 1, parts[2]);
-                    } else {
-                        // format looks like DD/MM/YYYY or DD-MM-YYYY
-                        return new Date(parts[2], parts[1] - 1, parts[0]);
-                    }
+            // Visible rows: admin sees every known SC; a non-admin sees only
+            // their own row (by exact name match against `login`), or none
+            // at all if their name isn't a recognized SC.
+            const allowedNames = isAdmin() ? scNames : (getUsernamesToFilter() || []);
+            const visibleScNames = scNames.filter(name => allowedNames.includes(name));
+
+            if (visibleScNames.length === 0) {
+                setLeadsReportRows([]);
+                setEnquiriesReportRows([]);
+                return;
+            }
+
+            // ---- Base tables (unbounded -- a quotation created this week can
+            // reference a lead/enquiry created any time in the past, so the
+            // lead_no/enquiry_no -> sc_name lookup needs the full table) ----
+            const [{ data: allLeads }, { data: allEnquiries }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_leads").select("id, lead_no, sc_name, created_at")),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, sc_name, enquiry_approach, created_at")),
+            ]);
+
+            // ---- This week's call-tracker rows (leads only -- there is no
+            // equivalent call-tracker table for direct enquiries) ----
+            const { data: weekCalls } = await fetchAllRows(() =>
+                supabase.from("lto_call_tracker_for_leads")
+                    .select("lead_id, sc_name, created_at, enquiry_approach")
+                    .gte("created_at", mondayISO)
+            );
+
+            // ---- Full tracker history per lead, needed to determine
+            // "currently pending" regardless of when that history was
+            // logged (a lead created this week could have tracker rows
+            // from any point up to now) ----
+            const { data: allLeadTrackers } = await fetchAllRows(() =>
+                supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, is_order_received_status")
+            );
+            const leadTrackersByLeadId = new Map();
+            (allLeadTrackers || []).forEach(t => {
+                if (!t.lead_id) return;
+                if (!leadTrackersByLeadId.has(t.lead_id)) leadTrackersByLeadId.set(t.lead_id, []);
+                leadTrackersByLeadId.get(t.lead_id).push(t);
+            });
+            const isPending = (rows) => rows.length > 0 && rows.every(r => {
+                const s = String(r.is_order_received_status || "").trim().toLowerCase();
+                return s !== "yes" && s !== "no";
+            });
+
+            // ---- Order conversions THIS WEEK (any lead/enquiry, regardless
+            // of its own creation date -- "their updation has been done
+            // within this week") ----
+            const [{ data: weekLeadOrders }, { data: weekEnquiryOrders }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads")
+                    .select("lead_id, created_at")
+                    .gte("created_at", mondayISO)
+                    .eq("is_order_received_status", "yes")),
+                fetchAllRows(() => supabase.from("lto_enquiry_tracker")
+                    .select("enquiry_id, created_at")
+                    .gte("created_at", mondayISO)
+                    .eq("is_order_received_status", "yes")),
+            ]);
+
+            // ---- Root quotations created this week, plus their pre-tax
+            // item totals (lto_make_quotations has no "value without tax"
+            // column of its own -- grand_total is post-tax) ----
+            const { data: weekQuotations } = await fetchAllRows(() =>
+                supabase.from("lto_make_quotations")
+                    .select("id, quotation_no, enquiry_reference_no, created_at")
+                    .gte("created_at", mondayISO)
+            );
+            const rootWeekQuotations = (weekQuotations || []).filter(q => isRootQuotationNo(q.quotation_no));
+
+            const quotationAmountByQId = new Map();
+            const quotationIds = rootWeekQuotations.map(q => q.id);
+            if (quotationIds.length > 0) {
+                const { data: items } = await fetchAllRows(() =>
+                    supabase.from("lto_make_quotation_items").select("quotation_id, amount").in("quotation_id", quotationIds)
+                );
+                (items || []).forEach(it => {
+                    quotationAmountByQId.set(it.quotation_id, (quotationAmountByQId.get(it.quotation_id) || 0) + parseMoney(it.amount));
+                });
+            }
+
+            // ---- Lookups: lead_no / enquiry_no -> owning SC, for tying a
+            // quotation back to whichever SC's lead/enquiry it belongs to ----
+            const leadById = new Map();
+            const leadScByLeadNo = new Map();
+            (allLeads || []).forEach(l => {
+                leadById.set(l.id, l);
+                if (l.lead_no) leadScByLeadNo.set(l.lead_no.trim().toUpperCase(), l.sc_name);
+            });
+            const enquiryById = new Map();
+            const enquiryScByEnquiryNo = new Map();
+            (allEnquiries || []).forEach(e => {
+                enquiryById.set(e.id, e);
+                if (e.enquiry_no) enquiryScByEnquiryNo.set(e.enquiry_no.trim().toUpperCase(), e.sc_name);
+            });
+
+            // ==================== LEADS SECTION ====================
+            const leadStats = {};
+            visibleScNames.forEach(name => {
+                leadStats[name] = {
+                    name, totalLeads: 0, calls: 0, convertedToEnquiry: 0,
+                    quotations: 0, quotationAmount: 0, orderConverted: 0, incoming: 0, outgoing: 0,
+                };
+            });
+
+            const callsByLeadId = new Map();
+            (weekCalls || []).forEach(c => {
+                if (!c.lead_id) return;
+                if (!callsByLeadId.has(c.lead_id)) callsByLeadId.set(c.lead_id, { sc_name: c.sc_name, approaches: new Set() });
+                if (c.enquiry_approach) callsByLeadId.get(c.lead_id).approaches.add(String(c.enquiry_approach).trim().toUpperCase());
+            });
+
+            (allLeads || []).forEach(lead => {
+                if (!inThisWeek(lead.created_at)) return;
+                const sc = lead.sc_name;
+                if (!sc || !leadStats[sc]) return;
+                leadStats[sc].totalLeads++;
+
+                if (isPending(leadTrackersByLeadId.get(lead.id) || [])) leadStats[sc].convertedToEnquiry++;
+
+                const callEntry = callsByLeadId.get(lead.id);
+                if (callEntry) {
+                    if (callEntry.approaches.has("INCOMING")) leadStats[sc].incoming++;
+                    if (callEntry.approaches.has("OUTGOING")) leadStats[sc].outgoing++;
                 }
-
-                // 2. Fallback to standard Date parser
-                const isoDate = new Date(dateStr);
-                return isNaN(isoDate.getTime()) ? null : isoDate;
-            };
-
-            const isDateInRange = (date, start, end) => {
-                if (!date) return false;
-                const target = new Date(date).getTime();
-                const s = start ? new Date(start).setHours(0, 0, 0, 0) : null;
-                const e = end ? new Date(end).setHours(23, 59, 59, 999) : null;
-
-                if (s && target < s) return false;
-                if (e && target > e) return false;
-                return true;
-            };
-
-            // 1. Fetch Calls (call_tracker_for_leads)
-            const { data: callsData, error: callsError } = await fetchAllRows(() => {
-                let q = supabase.from("lto_call_tracker_for_leads").select("created_at, sc_name");
-                const scList = getScFilterList(filters.scName);
-                if (scList) q = q.in("sc_name", scList);
-                return q;
             });
-            if (callsError) console.error("Error fetching calls:", callsError);
 
-            let callsCount = 0;
-            if (callsData) {
-                callsData.forEach(row => {
-                    const tDate = parseDate(row.created_at);
-                    if (isDateInRange(tDate, filters.startDate, filters.endDate)) {
-                        callsCount++;
-                    }
-                });
-            }
+            // No. of Calls: distinct leads (any creation date) called this
+            // week, credited to the call's own sc_name, max one per lead.
+            callsByLeadId.forEach(entry => {
+                if (entry.sc_name && leadStats[entry.sc_name]) leadStats[entry.sc_name].calls++;
+            });
 
-            // 2, 3, 4 & 5. Fetch Total Leads (lto_leads), plus their tracker history
-            // (lto_enquiry_tracker_for_leads) which is where quotation/order/enquiry
-            // signals actually live in the current normalized schema -- lto_leads
-            // itself only has contact/assignment fields, no stage/quotation data.
-            const { data: leadsData, error: leadsError } = await fetchAllRows(() => {
-                let q = supabase.from("lto_leads").select("id, created_at, sc_name");
-                const scList = getScFilterList(filters.scName);
-                if (scList) {
-                    q = q.in("sc_name", scList);
+            // Order Converted: any lead (any creation date) whose order was
+            // marked received this week, credited to the lead's own SC.
+            (weekLeadOrders || []).forEach(row => {
+                const lead = leadById.get(row.lead_id);
+                if (lead?.sc_name && leadStats[lead.sc_name]) leadStats[lead.sc_name].orderConverted++;
+            });
+
+            // Quotations: root quotations created this week whose reference
+            // no. points at a lead (LD-...), credited to that lead's SC.
+            rootWeekQuotations.forEach(q => {
+                const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
+                if (!ref.startsWith("LD-")) return;
+                const sc = leadScByLeadNo.get(ref);
+                if (sc && leadStats[sc]) {
+                    leadStats[sc].quotations++;
+                    leadStats[sc].quotationAmount += quotationAmountByQId.get(q.id) || 0;
                 }
-                return q;
             });
 
-            const { data: leadsTrackerData, error: leadsTrackerError } = await fetchAllRows(() =>
-                supabase.from("lto_enquiry_tracker_for_leads")
-                    .select("lead_id, created_at, is_order_received_status, quotation_number, quotation_value_without_tax")
-            );
-            if (leadsTrackerError) console.error("Error fetching lead tracker history:", leadsTrackerError);
+            setLeadsReportRows(visibleScNames.map(name => leadStats[name]));
 
-            const leadsTrackerMap = new Map();
-            (leadsTrackerData || []).forEach(row => {
-                if (!row.lead_id) return;
-                if (!leadsTrackerMap.has(row.lead_id)) leadsTrackerMap.set(row.lead_id, []);
-                leadsTrackerMap.get(row.lead_id).push(row);
+            // ==================== ENQUIRIES SECTION ====================
+            const enquiryStats = {};
+            visibleScNames.forEach(name => {
+                enquiryStats[name] = {
+                    name, totalEnquiries: 0, quotations: 0, quotationAmount: 0,
+                    orderConverted: 0, incoming: 0, outgoing: 0,
+                };
             });
 
-            // Fetch Enquiries + their tracker history (lto_enquiry_tracker) for the
-            // same reason -- order/quotation status lives on the tracker table.
-            const { data: enquiryData, error: enquiryError } = await fetchAllRows(() =>
-                supabase.from("lto_enquiries").select("id, created_at, sc_name, enquiry_assign_to_project, enquiry_approach")
-            );
-
-            const { data: enquiryTrackerData, error: enquiryTrackerError } = await fetchAllRows(() =>
-                supabase.from("lto_enquiry_tracker")
-                    .select("enquiry_id, created_at, is_order_received_status, quotation_number, quotation_value_without_tax")
-            );
-            if (enquiryTrackerError) console.error("Error fetching enquiry tracker history:", enquiryTrackerError);
-
-            const enquiryTrackerMap = new Map();
-            (enquiryTrackerData || []).forEach(row => {
-                if (!row.enquiry_id) return;
-                if (!enquiryTrackerMap.has(row.enquiry_id)) enquiryTrackerMap.set(row.enquiry_id, []);
-                enquiryTrackerMap.get(row.enquiry_id).push(row);
+            (allEnquiries || []).forEach(e => {
+                if (!inThisWeek(e.created_at)) return;
+                const sc = e.sc_name;
+                if (!sc || !enquiryStats[sc]) return;
+                enquiryStats[sc].totalEnquiries++;
+                const approach = String(e.enquiry_approach || "").trim().toUpperCase();
+                if (approach === "INCOMING") enquiryStats[sc].incoming++;
+                if (approach === "OUTGOING") enquiryStats[sc].outgoing++;
             });
 
-            let totalLeadCount = 0;
-            let enquiryCount = 0;
-            let orderCount = 0;
-            let quotationCount = 0;
-            let totalQuotationValue = 0;
-            let totalOrderQuotationValue = 0; // The quotation value of ONLY converted orders
-            let incomingCount = 0;
-            let outgoingCount = 0;
-            let conversionCount = 0;
-
-            const firstWord = (str) => String(str || '').trim().toLowerCase().split(/\s+/)[0];
-            const parseMoney = (v) => {
-                const value = parseFloat(String(v).replace(/,/g, '').replace(/[^\d.-]/g, ''));
-                return isNaN(value) ? 0 : value;
-            };
-
-            if (leadsError) {
-                console.error("Error fetching leads:", leadsError);
-            } else if (leadsData) {
-                leadsData.forEach(lead => {
-                    const tDate = parseDate(lead.created_at);
-
-                    // Total Leads
-                    if (isDateInRange(tDate, filters.startDate, filters.endDate)) {
-                        totalLeadCount++;
-                    }
-
-                    const trackerRows = leadsTrackerMap.get(lead.id) || [];
-                    if (trackerRows.length === 0) return;
-
-                    // Enquiries: the lead progressed into at least one tracked stage
-                    const firstTrackerDate = parseDate(trackerRows[0]?.created_at);
-                    if (isDateInRange(firstTrackerDate, filters.startDate, filters.endDate)) {
-                        enquiryCount++;
-                    }
-
-                    trackerRows.forEach(t => {
-                        const rDate = parseDate(t.created_at);
-                        const isOrderReceived = t.is_order_received_status &&
-                            String(t.is_order_received_status).trim().toLowerCase() === "yes";
-
-                        if (isOrderReceived && isDateInRange(rDate, filters.startDate, filters.endDate)) {
-                            orderCount++;
-                            conversionCount++;
-                            if (t.quotation_value_without_tax) {
-                                totalOrderQuotationValue += parseMoney(t.quotation_value_without_tax);
-                            }
-                        }
-
-                        if (t.quotation_number && isDateInRange(rDate, filters.startDate, filters.endDate)) {
-                            quotationCount++;
-                            if (t.quotation_value_without_tax) {
-                                totalQuotationValue += parseMoney(t.quotation_value_without_tax);
-                            }
-                        }
-                    });
-                });
-            }
-
-            if (enquiryError) {
-                console.error("Error fetching enquiries:", enquiryError);
-            } else if (enquiryData) {
-                const scList = getScFilterList(filters.scName);
-                const scFirstWords = scList ? scList.map(firstWord) : null;
-
-                enquiryData.forEach(row => {
-                    // SC Filter check
-                    const matchesSC = scFirstWords === null ||
-                        (row.sc_name && scFirstWords.includes(firstWord(row.sc_name))) ||
-                        (row.enquiry_assign_to_project && scFirstWords.includes(firstWord(row.enquiry_assign_to_project)));
-
-                    if (!matchesSC) return;
-
-                    const eDate = parseDate(row.created_at);
-
-                    if (isDateInRange(eDate, filters.startDate, filters.endDate)) {
-                        const approach = row.enquiry_approach ? String(row.enquiry_approach).trim().toLowerCase() : "";
-                        if (approach === "incoming") incomingCount++;
-                        if (approach === "outgoing") outgoingCount++;
-                    }
-
-                    // Order/quotation status lives on lto_enquiry_tracker, not on lto_enquiries.
-                    const trackerRows = enquiryTrackerMap.get(row.id) || [];
-                    trackerRows.forEach(t => {
-                        const rDate = parseDate(t.created_at);
-                        const isOrderReceived = t.is_order_received_status &&
-                            String(t.is_order_received_status).trim().toLowerCase() === "yes";
-
-                        if (isOrderReceived && isDateInRange(rDate, filters.startDate, filters.endDate)) {
-                            orderCount++;
-                            conversionCount++;
-                            if (t.quotation_value_without_tax) {
-                                totalOrderQuotationValue += parseMoney(t.quotation_value_without_tax);
-                            }
-                        }
-
-                        if (t.quotation_number && isDateInRange(rDate, filters.startDate, filters.endDate)) {
-                            quotationCount++;
-                            if (t.quotation_value_without_tax) {
-                                totalQuotationValue += parseMoney(t.quotation_value_without_tax);
-                            }
-                        }
-                    });
-                });
-            }
-
-            setMetrics({
-                totalLeads: totalLeadCount,
-                calls: callsCount || 0,
-                enquiries: enquiryCount,
-                quotations: quotationCount,
-                orders: orderCount,
-                quotationValue: totalQuotationValue,
-                orderQuotationValue: totalOrderQuotationValue,
-                incoming: incomingCount,
-                outgoing: outgoingCount,
-                conversion: conversionCount,
+            (weekEnquiryOrders || []).forEach(row => {
+                const e = enquiryById.get(row.enquiry_id);
+                if (e?.sc_name && enquiryStats[e.sc_name]) enquiryStats[e.sc_name].orderConverted++;
             });
+
+            rootWeekQuotations.forEach(q => {
+                const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
+                if (!ref.startsWith("EN-")) return;
+                const sc = enquiryScByEnquiryNo.get(ref);
+                if (sc && enquiryStats[sc]) {
+                    enquiryStats[sc].quotations++;
+                    enquiryStats[sc].quotationAmount += quotationAmountByQId.get(q.id) || 0;
+                }
+            });
+
+            setEnquiriesReportRows(visibleScNames.map(name => enquiryStats[name]));
 
         } catch (error) {
-            console.error("Error fetching report metrics:", error);
+            console.error("Error fetching calling data report:", error);
         } finally {
             setIsLoading(false);
         }
-    }, [filters, activeTab, isAdmin, getUsernamesToFilter]);
+    }, [activeTab, isAdmin, getUsernamesToFilter, scNames]);
 
     // Fetch FOS Data
     const fetchFosMetrics = useCallback(async () => {
@@ -726,14 +718,14 @@ function Report() {
 
     useEffect(() => {
         if (activeTab === "calling") {
-            fetchMetrics();
+            fetchCallingDataReport();
         } else if (activeTab === "fos") {
             fetchFosMetrics();
             fetchFilteredVisitCount();
         } else if (activeTab === "sc_pipeline") {
             fetchScPipelineMetrics();
         }
-    }, [fetchMetrics, fetchFosMetrics, fetchFilteredVisitCount, fetchScPipelineMetrics, activeTab]);
+    }, [fetchCallingDataReport, fetchFosMetrics, fetchFilteredVisitCount, fetchScPipelineMetrics, activeTab]);
 
 
 
@@ -789,164 +781,93 @@ function Report() {
                 {/* CALLING DATA TAB CONTENT */}
                 {activeTab === "calling" && (
                     <>
-                        {/* Filters */}
-                        <div className="bg-white p-4 rounded-lg shadow mb-8 flex flex-col md:flex-row gap-4 items-end md:items-center">
-                            {isAdmin() && (
-                                <div className="w-full md:w-1/4">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">SC Name</label>
-                                    <select
-                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                        value={filters.scName}
-                                        onChange={(e) => setFilters(prev => ({ ...prev, scName: e.target.value }))}
-                                    >
-                                        <option value="all">All Sales Coordinators</option>
-                                        {scNames.map(name => (
-                                            <option key={name} value={name}>{name}</option>
-                                        ))}
-                                    </select>
+                        <p className="text-sm text-gray-500 mb-6">
+                            Current week (Monday through today) -- one row per Sales Coordinator.
+                            {!isAdmin() && " You're seeing only your own row."}
+                        </p>
+
+                        {/* Leads Section */}
+                        <div className="mb-12">
+                            <h2 className="text-xl font-semibold text-gray-800 mb-4">Leads</h2>
+                            <div className="bg-white rounded-lg shadow overflow-hidden">
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-gray-200">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SC Name</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Leads</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">No. of Calls</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Converted to Enquiries</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Quotations</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Quotation Amount</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order Converted</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incoming</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outgoing</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="bg-white divide-y divide-gray-200">
+                                            {isLoading ? (
+                                                <tr><td colSpan="9" className="px-4 py-4 text-center text-sm text-gray-500">Loading...</td></tr>
+                                            ) : leadsReportRows.length === 0 ? (
+                                                <tr><td colSpan="9" className="px-4 py-4 text-center text-sm text-gray-500">No rows to show</td></tr>
+                                            ) : (
+                                                leadsReportRows.map(row => (
+                                                    <tr key={row.name} className="hover:bg-gray-50">
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.totalLeads}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.calls}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.convertedToEnquiry}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.quotations}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.orderConverted}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.incoming}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.outgoing}</td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
                                 </div>
-                            )}
-                            <div className="w-full md:w-1/4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-                                <input
-                                    type="date"
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                    value={filters.startDate}
-                                    onChange={(e) => setFilters(prev => ({ ...prev, startDate: e.target.value }))}
-                                />
-                            </div>
-                            <div className="w-full md:w-1/4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-                                <input
-                                    type="date"
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                    value={filters.endDate}
-                                    onChange={(e) => setFilters(prev => ({ ...prev, endDate: e.target.value }))}
-                                />
-                            </div>
-                            <div className="w-full md:w-1/4">
-                                <button
-                                    onClick={() => setFilters({ scName: "all", startDate: "", endDate: "" })}
-                                    className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded-md transition-colors"
-                                >
-                                    Reset Filters
-                                </button>
                             </div>
                         </div>
 
-                        {/* Metrics Grid */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-                            {/* Card 0: Total Leads */}
-                            <div className="bg-white rounded-lg shadow px-4 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-primary/10 text-primary mr-3">
-                                    <UsersIcon className="h-8 w-8" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Total Leads</p>
-                                    <p className="text-xl sm:text-2xl font-semibold text-gray-900">{isLoading ? "..." : metrics.totalLeads}</p>
-                                </div>
-                            </div>
-
-                            {/* Card 1: Calls */}
-                            <div className="bg-white rounded-lg shadow px-4 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-info/10 text-info mr-3">
-                                    <PhoneCallIcon className="h-8 w-8" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">No. of Calls</p>
-                                    <p className="text-xl sm:text-2xl font-semibold text-gray-900">{isLoading ? "..." : metrics.calls}</p>
-                                </div>
-                            </div>
-
-                            {/* Card 2: Enquiries */}
-                            <div className="bg-white rounded-lg shadow px-6 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-primary/10 text-primary mr-4">
-                                    <BarChartIcon className="h-8 w-8" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Total Enquiries</p>
-                                    <p className="text-2xl font-semibold text-gray-900">{isLoading ? "..." : metrics.enquiries}</p>
-                                </div>
-                            </div>
-
-                            {/* Card 3: Quotations */}
-                            <div className="bg-white rounded-lg shadow px-6 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-warning/15 text-warning-foreground mr-4">
-                                    <FileTextIcon className="h-8 w-8" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Total Quotations</p>
-                                    <p className="text-2xl font-semibold text-gray-900">{isLoading ? "..." : metrics.quotations}</p>
-                                </div>
-                            </div>
-
-                            {/* Card 4: Orders */}
-                            <div className="bg-white rounded-lg shadow px-6 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-success/10 text-success mr-4">
-                                    <ShoppingCartIcon className="h-8 w-8" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Total Orders</p>
-                                    <p className="text-2xl font-semibold text-gray-900">{isLoading ? "..." : metrics.orders}</p>
-                                </div>
-                            </div>
-
-                            {/* Card 5: Incoming */}
-                            <div className="bg-white rounded-lg shadow px-6 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-primary/10 text-primary mr-4">
-                                    <ArrowDownLeft className="h-8 w-8" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Incoming</p>
-                                    <p className="text-2xl font-semibold text-gray-900">{isLoading ? "..." : metrics.incoming}</p>
-                                </div>
-                            </div>
-
-                            {/* Card 6: Outgoing */}
-                            <div className="bg-white rounded-lg shadow px-6 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-destructive/10 text-destructive mr-4">
-                                    <ArrowUpRight className="h-8 w-8" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Outgoing</p>
-                                    <p className="text-2xl font-semibold text-gray-900">{isLoading ? "..." : metrics.outgoing}</p>
-                                </div>
-                            </div>
-
-                            {/* Card 7: Conversion */}
-                            <div className="bg-white rounded-lg shadow px-6 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-success/10 text-success mr-4">
-                                    <CheckCircle2 className="h-8 w-8" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Conversion</p>
-                                    <p className="text-2xl font-semibold text-gray-900">{isLoading ? "..." : metrics.conversion}</p>
-                                </div>
-                            </div>
-
-                            {/* Card 8: Total Quotation Value */}
-                            <div className="bg-white rounded-lg shadow px-6 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-success/10 text-success mr-4">
-                                    <span className="text-2xl font-bold">₹</span>
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Total Quotation Value</p>
-                                    <p className="text-xl font-semibold text-gray-900">
-                                        {isLoading ? "..." : (metrics.quotationValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
-                                    </p>
-                                </div>
-                            </div>
-
-                            {/* Card 9: Total Order Quotation Value */}
-                            <div className="bg-white rounded-lg shadow px-6 py-6 flex items-center">
-                                <div className="p-3 rounded-full bg-orange-100 text-orange-600 mr-4">
-                                    <span className="text-2xl font-bold">₹</span>
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-gray-500">Total Order Quotation Value</p>
-                                    <p className="text-xl font-semibold text-gray-900">
-                                        {isLoading ? "..." : (metrics.orderQuotationValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
-                                    </p>
+                        {/* Enquiries Section */}
+                        <div>
+                            <h2 className="text-xl font-semibold text-gray-800 mb-4">Enquiries</h2>
+                            <div className="bg-white rounded-lg shadow overflow-hidden">
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-gray-200">
+                                        <thead className="bg-gray-50">
+                                            <tr>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SC Name</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Enquiries</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Quotations</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Quotation Amount</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order Converted</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incoming</th>
+                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outgoing</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="bg-white divide-y divide-gray-200">
+                                            {isLoading ? (
+                                                <tr><td colSpan="7" className="px-4 py-4 text-center text-sm text-gray-500">Loading...</td></tr>
+                                            ) : enquiriesReportRows.length === 0 ? (
+                                                <tr><td colSpan="7" className="px-4 py-4 text-center text-sm text-gray-500">No rows to show</td></tr>
+                                            ) : (
+                                                enquiriesReportRows.map(row => (
+                                                    <tr key={row.name} className="hover:bg-gray-50">
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.totalEnquiries}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.quotations}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.orderConverted}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.incoming}</td>
+                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.outgoing}</td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
                         </div>
