@@ -3,35 +3,65 @@
 import { useState, useEffect, useContext, useCallback } from "react";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
-import { FileTextIcon, ShoppingCartIcon, UsersIcon } from "../../components/Icons";
+import { ShoppingCartIcon, UsersIcon } from "../../components/Icons";
 import { MapPin } from "lucide-react";
 
 // import { supabaseVisit } from "../supabaseClientVisit";
 
 
+// A handful of simultaneous connections to the same host has shown
+// occasional transient connect timeouts in practice -- retrying the single
+// affected page (not the whole fetch) makes that a non-issue rather than
+// failing the entire report load over one flaky connection.
+async function fetchPageWithRetry(buildQuery, start, end, attempts = 3) {
+    let lastResult = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        lastResult = await buildQuery().range(start, end);
+        if (!lastResult.error) return lastResult;
+        if (attempt < attempts) await new Promise(r => setTimeout(r, 400 * attempt));
+    }
+    return lastResult;
+}
+
 // Applies any already-built filters to every chunk of a paginated fetch,
 // bypassing PostgREST's silent 1000-row cap on unbounded selects -- needed
-// here since `enquiries` alone is already well past that count.
+// here since `enquiries` alone is already well past that count, and
+// `lto_enquiry_tracker` (SC Pipeline's biggest fetch) runs ~26k rows.
+//
+// Pages are fetched in parallel batches rather than one at a time -- with
+// ~1-1.5s of latency per request, sequentially paging through 26k rows (27
+// requests) took 40+ seconds end to end, during which the SC Pipeline tab
+// showed nothing at all. Firing BATCH_SIZE requests per round cuts that to
+// roughly (page count / BATCH_SIZE) round trips instead of (page count).
 async function fetchAllRows(buildQuery) {
+    const step = 1000;
+    const BATCH_SIZE = 8;
     let allRows = [];
     let from = 0;
-    const step = 1000;
-    let fetchMore = true;
+    let done = false;
     let lastError = null;
 
-    while (fetchMore) {
-        const { data, error } = await buildQuery().range(from, from + step - 1);
-        if (error) {
-            lastError = error;
-            break;
+    while (!done) {
+        const batch = Array.from({ length: BATCH_SIZE }, (_, i) => {
+            const start = from + i * step;
+            return fetchPageWithRetry(buildQuery, start, start + step - 1);
+        });
+        const results = await Promise.all(batch);
+
+        for (const { data, error } of results) {
+            if (error) {
+                lastError = error;
+                done = true;
+                break;
+            }
+            if (data && data.length > 0) {
+                allRows = allRows.concat(data);
+                if (data.length < step) done = true; // reached the end mid-batch
+            } else {
+                done = true; // empty page -- definitely past the end
+            }
         }
-        if (data && data.length > 0) {
-            allRows = allRows.concat(data);
-            from += step;
-            if (data.length < step) fetchMore = false;
-        } else {
-            fetchMore = false;
-        }
+        from += BATCH_SIZE * step;
     }
     return { data: allRows, error: lastError };
 }
@@ -47,6 +77,174 @@ const FOS_RECEIVERS = [
     "MANOSH ROY CHOUDHURY",
     "AMAN JHA"
 ];
+
+const formatMetricValue = (value, format) => {
+    if (format === "currency") return (value || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+    if (format === "percent") return `${(value || 0).toFixed(1)}%`;
+    return value || 0;
+};
+
+// Green/amber/rose thresholds for at-a-glance conversion health -- applied
+// to both % metric cells, consistent across the whole page.
+const getPercentColorClass = (pct) => {
+    if (pct >= 50) return "text-emerald-700 bg-emerald-50";
+    if (pct >= 25) return "text-amber-700 bg-amber-50";
+    return "text-rose-600 bg-rose-50";
+};
+
+function Spinner({ className = "h-4 w-4" }) {
+    return (
+        <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+    );
+}
+
+// Shared Start/End date filter bar for Calling Data + SC Pipeline. Both tabs
+// default to a fixed window (per task.txt) with no filter applied -- setting
+// either date here switches that tab over to a server-queried custom range
+// instead of the default, until "Reset to default" is pressed.
+function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateChange, onReset, defaultRangeLabel }) {
+    const hasCustomRange = !!(startDate || endDate);
+    return (
+        <div className="bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 mb-5 flex flex-col md:flex-row gap-3 items-end md:items-center">
+            <div className="w-full md:w-1/5">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Start Date</label>
+                <input
+                    type="date"
+                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
+                    value={startDate}
+                    onChange={(e) => onStartDateChange(e.target.value)}
+                />
+            </div>
+            <div className="w-full md:w-1/5">
+                <label className="block text-xs font-medium text-gray-600 mb-1">End Date</label>
+                <input
+                    type="date"
+                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
+                    value={endDate}
+                    onChange={(e) => onEndDateChange(e.target.value)}
+                />
+            </div>
+            <div className="w-full md:w-auto">
+                <button
+                    onClick={onReset}
+                    disabled={!hasCustomRange}
+                    className="w-full md:w-auto bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 font-medium text-sm py-2 px-4 rounded-md transition-colors"
+                >
+                    Reset to default
+                </button>
+            </div>
+            <div className="text-xs text-gray-400 md:ml-1">
+                {hasCustomRange ? "Showing custom range" : defaultRangeLabel}
+            </div>
+        </div>
+    );
+}
+
+const PIPELINE_METRIC_ROWS = [
+    { key: "enquiries", label: "Total Enquiries / Leads", format: "int" },
+    { key: "enquiryValue", label: "Enquiry Value", format: "currency" },
+    { key: "pipelineValue", label: "Pipeline Value (60d)", format: "currency" },
+    { key: "noOrder", label: "No. of Orders", format: "int" },
+    { key: "billValue", label: "Bill Value", format: "currency" },
+    { key: "engConv", label: "Conversion %", format: "percent" },
+    { key: "valueConv", label: "Value Conversion %", format: "percent" },
+    { key: "avgTicket", label: "Avg Ticket Size", format: "currency" },
+];
+
+// Renders one SC Pipeline table (Leads or Enquiries): metrics as rows,
+// SC/category as columns. `visibleLabels === null` means "no restriction"
+// (admin); otherwise only columns whose label is in the array are kept --
+// since "TOTAL" is never a real SC name, this naturally hides team-total
+// columns from non-admins with no extra special-casing needed.
+function PipelineTable({ title, section, visibleLabels, isLoading }) {
+    // Was previously a silent `return null` -- both "still loading" (this
+    // fetch pages through ~35k tracker rows, so it's genuinely slow) and "the
+    // fetch failed" looked identical to the user: a blank page. Now shows an
+    // explicit state either way instead of nothing.
+    if (!section) {
+        return (
+            <div className="mb-8">
+                <h3 className="text-base font-semibold text-gray-800 mb-3">{title}</h3>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-8 text-center text-sm text-gray-500">
+                    {isLoading ? (
+                        <span className="inline-flex items-center gap-2 text-primary">
+                            <Spinner className="h-4 w-4" /> Loading data for this range...
+                        </span>
+                    ) : "No data available."}
+                </div>
+            </div>
+        );
+    }
+
+    const keep = (label) => visibleLabels === null || visibleLabels.includes(label);
+
+    const allColumns = [];
+    section.categoryGroups.forEach(g => {
+        const cols = g.columns.filter(c => keep(c.label));
+        cols.forEach((c, i) => allColumns.push({ ...c, groupStart: i === 0, groupLabel: g.category, groupSpan: cols.length }));
+    });
+    const visibleNbdColumns = section.nbdColumns.filter(c => keep(c.label));
+    visibleNbdColumns.forEach((c, i) => allColumns.push({ ...c, groupStart: i === 0, groupLabel: i === 0 ? "NBD" : null, groupSpan: visibleNbdColumns.length }));
+
+    return (
+        <div className="mb-8">
+            <h3 className="text-base font-semibold text-gray-800 mb-3">{title}</h3>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                {allColumns.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-sm text-gray-500">No rows to show</div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-gray-100">
+                            <thead className="bg-gray-50/80">
+                                <tr>
+                                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide sticky left-0 bg-gray-50/80">Metric</th>
+                                    {allColumns.filter(c => c.groupStart).map(c => (
+                                        <th key={`grp-${c.key}`} colSpan={c.groupSpan} className="px-4 py-2 text-center text-xs font-bold text-primary uppercase tracking-wide border-l border-gray-200">
+                                            {c.groupLabel}
+                                        </th>
+                                    ))}
+                                </tr>
+                                <tr>
+                                    <th className="px-4 py-2 text-left text-xs text-gray-400 sticky left-0 bg-gray-50/80"></th>
+                                    {allColumns.map(c => (
+                                        <th key={c.key} className={`px-4 py-2 text-center text-xs font-semibold text-gray-600 ${c.groupStart ? "border-l border-gray-200" : ""}`}>
+                                            {c.label}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {isLoading ? (
+                                    <tr><td colSpan={allColumns.length + 1} className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading data for this range...</span></td></tr>
+                                ) : (
+                                    PIPELINE_METRIC_ROWS.map(row => (
+                                        <tr key={row.key} className="hover:bg-gray-50/60">
+                                            <td className="px-4 py-2.5 text-sm font-medium text-gray-700 whitespace-nowrap sticky left-0 bg-white">{row.label}</td>
+                                            {allColumns.map(c => {
+                                                const val = c.metrics[row.key];
+                                                return (
+                                                    <td
+                                                        key={c.key}
+                                                        className={`px-4 py-2.5 text-center text-sm whitespace-nowrap ${c.groupStart ? "border-l border-gray-200" : ""} ${c.isTotal ? "font-semibold bg-gray-50" : "text-gray-700"} ${row.format === "percent" ? getPercentColorClass(val) : ""}`}
+                                                    >
+                                                        {formatMetricValue(val, row.format)}
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
 
 function Report() {
     const { isAdmin, getUsernamesToFilter } = useContext(AuthContext);
@@ -70,6 +268,11 @@ function Report() {
     const [leadsReportRows, setLeadsReportRows] = useState([]);
     const [enquiriesReportRows, setEnquiriesReportRows] = useState([]);
     const [scNames, setScNames] = useState([]);
+    // Empty = default window (current week, per task.txt). Setting either
+    // date switches this tab's queries over to that custom range instead --
+    // fetched server-side (not client-filtered from a full-table pull), so
+    // picking a range doesn't cost more than the default view does.
+    const [callingFilters, setCallingFilters] = useState({ startDate: "", endDate: "" });
 
     // FOS report state
     const [fosMetrics, setFosMetrics] = useState({
@@ -87,18 +290,19 @@ function Report() {
         totalValue: 0,
     });
 
-    // SC Pipeline state
-    const [scPipelineMetrics, setScPipelineMetrics] = useState({
-        leadsCount: 0,
-        leadsValue: 0,
-        enquiryCount: 0,
-        enquiryValue: 0,
-    });
-    const [scPipelineFilters, setScPipelineFilters] = useState({
-        scName: "all",
-        startDate: "",
-        endDate: "",
-    });
+    // SC Pipeline state -- no filters, same "always this week" convention as
+    // Calling Data: Geeta/Priya/Nikita are broken out by category (CRR /
+    // NBD_CRR, plus a team TOTAL per category); Ganga/Chahat get one column
+    // each, scoped to their NBD-category work only (per confirmed template).
+    const [scPipelineData, setScPipelineData] = useState({ leads: null, enquiries: null });
+    // Surfaced in the UI if the fetch throws -- previously only logged to
+    // console, so a real failure looked identical to "still loading": a
+    // blank page with zero feedback either way.
+    const [scPipelineError, setScPipelineError] = useState(null);
+    // Empty = default (this-week window for Enquiry-Value/Orders/Bill-Value,
+    // rolling 60 days for Pipeline Value, per task.txt#26-33). Setting either
+    // date collapses BOTH of those windows onto the same custom range instead.
+    const [scPipelineFilters, setScPipelineFilters] = useState({ startDate: "", endDate: "" });
 
     // Conversion Metrics Table (per enquiry receiver)
     const [conversionMetrics, setConversionMetrics] = useState([]);
@@ -164,13 +368,22 @@ function Report() {
         if (activeTab !== "calling") return;
         setIsLoading(true);
         try {
+            // Default window is the current week (Monday 00:00 -> now), per
+            // task.txt. Setting either filter date swaps in that custom range
+            // instead -- every "this week" query below is scoped to
+            // [rangeStart, rangeEnd], so a filtered view queries the DB for
+            // exactly that range rather than fetching everything and
+            // re-filtering client-side.
             const monday = getMondayStart();
-            const mondayISO = monday.toISOString();
             const now = new Date();
+            const rangeStart = callingFilters.startDate ? new Date(`${callingFilters.startDate}T00:00:00`) : monday;
+            const rangeEnd = callingFilters.endDate ? new Date(getEndDateWithTime(callingFilters.endDate)) : now;
+            const rangeStartISO = rangeStart.toISOString();
+            const rangeEndISO = rangeEnd.toISOString();
             const inThisWeek = (dateStr) => {
                 if (!dateStr) return false;
                 const d = new Date(dateStr);
-                return !isNaN(d.getTime()) && d >= monday && d <= now;
+                return !isNaN(d.getTime()) && d >= rangeStart && d <= rangeEnd;
             };
 
             // Visible rows: admin sees every known SC; a non-admin sees only
@@ -190,15 +403,17 @@ function Report() {
             // lead_no/enquiry_no -> sc_name lookup needs the full table) ----
             const [{ data: allLeads }, { data: allEnquiries }] = await Promise.all([
                 fetchAllRows(() => supabase.from("lto_leads").select("id, lead_no, sc_name, created_at")),
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, sc_name, enquiry_approach, created_at")),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, sales_coordinator_name, enquiry_approach, created_at")),
             ]);
 
-            // ---- This week's call-tracker rows (leads only -- there is no
-            // equivalent call-tracker table for direct enquiries) ----
+            // ---- This week's (or the filtered range's) call-tracker rows
+            // (leads only -- there is no equivalent call-tracker table for
+            // direct enquiries) ----
             const { data: weekCalls } = await fetchAllRows(() =>
                 supabase.from("lto_call_tracker_for_leads")
                     .select("lead_id, sc_name, created_at, enquiry_approach")
-                    .gte("created_at", mondayISO)
+                    .gte("created_at", rangeStartISO)
+                    .lte("created_at", rangeEndISO)
             );
 
             // ---- Full tracker history per lead, needed to determine
@@ -219,27 +434,30 @@ function Report() {
                 return s !== "yes" && s !== "no";
             });
 
-            // ---- Order conversions THIS WEEK (any lead/enquiry, regardless
+            // ---- Order conversions in-range (any lead/enquiry, regardless
             // of its own creation date -- "their updation has been done
-            // within this week") ----
+            // within this week/range") ----
             const [{ data: weekLeadOrders }, { data: weekEnquiryOrders }] = await Promise.all([
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads")
                     .select("lead_id, created_at")
-                    .gte("created_at", mondayISO)
+                    .gte("created_at", rangeStartISO)
+                    .lte("created_at", rangeEndISO)
                     .eq("is_order_received_status", "yes")),
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker")
                     .select("enquiry_id, created_at")
-                    .gte("created_at", mondayISO)
+                    .gte("created_at", rangeStartISO)
+                    .lte("created_at", rangeEndISO)
                     .eq("is_order_received_status", "yes")),
             ]);
 
-            // ---- Root quotations created this week, plus their pre-tax
+            // ---- Root quotations created in-range, plus their pre-tax
             // item totals (lto_make_quotations has no "value without tax"
             // column of its own -- grand_total is post-tax) ----
             const { data: weekQuotations } = await fetchAllRows(() =>
                 supabase.from("lto_make_quotations")
                     .select("id, quotation_no, enquiry_reference_no, created_at")
-                    .gte("created_at", mondayISO)
+                    .gte("created_at", rangeStartISO)
+                    .lte("created_at", rangeEndISO)
             );
             const rootWeekQuotations = (weekQuotations || []).filter(q => isRootQuotationNo(q.quotation_no));
 
@@ -266,7 +484,7 @@ function Report() {
             const enquiryScByEnquiryNo = new Map();
             (allEnquiries || []).forEach(e => {
                 enquiryById.set(e.id, e);
-                if (e.enquiry_no) enquiryScByEnquiryNo.set(e.enquiry_no.trim().toUpperCase(), e.sc_name);
+                if (e.enquiry_no) enquiryScByEnquiryNo.set(e.enquiry_no.trim().toUpperCase(), e.sales_coordinator_name);
             });
 
             // ==================== LEADS SECTION ====================
@@ -338,7 +556,7 @@ function Report() {
 
             (allEnquiries || []).forEach(e => {
                 if (!inThisWeek(e.created_at)) return;
-                const sc = e.sc_name;
+                const sc = e.sales_coordinator_name;
                 if (!sc || !enquiryStats[sc]) return;
                 enquiryStats[sc].totalEnquiries++;
                 const approach = String(e.enquiry_approach || "").trim().toUpperCase();
@@ -348,7 +566,7 @@ function Report() {
 
             (weekEnquiryOrders || []).forEach(row => {
                 const e = enquiryById.get(row.enquiry_id);
-                if (e?.sc_name && enquiryStats[e.sc_name]) enquiryStats[e.sc_name].orderConverted++;
+                if (e?.sales_coordinator_name && enquiryStats[e.sales_coordinator_name]) enquiryStats[e.sales_coordinator_name].orderConverted++;
             });
 
             rootWeekQuotations.forEach(q => {
@@ -368,7 +586,7 @@ function Report() {
         } finally {
             setIsLoading(false);
         }
-    }, [activeTab, isAdmin, getUsernamesToFilter, scNames]);
+    }, [activeTab, isAdmin, getUsernamesToFilter, scNames, callingFilters]);
 
     // Fetch FOS Data
     const fetchFosMetrics = useCallback(async () => {
@@ -572,132 +790,191 @@ function Report() {
     }, [fosFilters, activeTab, isAdmin, getUsernamesToFilter]);
 
     // Fetch SC Pipeline Metrics
+    // "Category" = sales_type, normalized -- the raw data has inconsistent
+    // spacing/underscores ("NBD CRR" vs "NBD_CRR" vs "NBD " with a trailing
+    // space all meaning the same thing) that need collapsing before grouping.
+    // Values outside these three (Direct Enquiry, NBD DM, blank) don't fit
+    // any of the report's target categories and are simply excluded.
+    const normalizeCategory = (rawSalesType) => {
+        const s = String(rawSalesType || "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+        if (s === "NBD_CRR") return "NBD_CRR";
+        if (s === "CRR") return "CRR";
+        if (s === "NBD") return "NBD";
+        return null;
+    };
+
+    // Geeta/Priya/Nikita are broken out by category (CRR / NBD_CRR) with a
+    // team TOTAL per category; Ganga/Chahat get a single column each,
+    // scoped to their NBD-category work only -- per the confirmed template,
+    // this deliberately excludes any CRR/NBD_CRR activity Ganga/Chahat have
+    // (Ganga in particular has substantial real CRR volume) from this
+    // specific report, it is not a data bug.
+    const SC_PIPELINE_MULTI_SCS = ["GEETA", "PRIYA", "NIKITA"];
+    const SC_PIPELINE_NBD_ONLY_SCS = ["GANGA", "CHAHAT"];
+
     const fetchScPipelineMetrics = useCallback(async () => {
         if (activeTab !== "sc_pipeline") return;
         setIsLoading(true);
+        setScPipelineError(null);
         try {
-            const parseDate = (dateStr) => {
-                if (!dateStr) return null;
-                const datePart = String(dateStr).split(" ")[0];
+            // Default (no filter): task.txt's two windows apply as-is --
+            // this-week for Enquiry-Value/Orders/Bill-Value, rolling 60 days
+            // for Pipeline Value. Setting either filter date collapses BOTH
+            // onto that same custom range instead (confirmed behaviour), and
+            // -- critically for performance -- the fetch below is bounded to
+            // exactly the widest window actually needed rather than pulling
+            // the entire table: previously this fetched all ~26k tracker
+            // rows/~8k enquiries unconditionally (42s, later 15-16s even
+            // parallelized); the last-60-days default alone cuts that to
+            // ~1.3k enquiries / ~4k tracker rows -- the same reduction a
+            // custom range gets automatically since it's now a real
+            // server-side filter, not a client-side one.
+            const monday = getMondayStart();
+            const now = new Date();
+            const defaultSixtyDaysAgo = new Date(now);
+            defaultSixtyDaysAgo.setDate(defaultSixtyDaysAgo.getDate() - 60);
+            const hasCustomRange = !!(scPipelineFilters.startDate || scPipelineFilters.endDate);
 
-                const parts = datePart.split(/[/|-]/);
-                if (parts.length === 3) {
-                    if (parts[0].length === 4) {
-                        return new Date(parts[0], parts[1] - 1, parts[2]);
-                    } else {
-                        return new Date(parts[2], parts[1] - 1, parts[0]);
+            const rangeStart = hasCustomRange
+                ? (scPipelineFilters.startDate ? new Date(`${scPipelineFilters.startDate}T00:00:00`) : defaultSixtyDaysAgo)
+                : monday;
+            const rangeEnd = hasCustomRange
+                ? (scPipelineFilters.endDate ? new Date(getEndDateWithTime(scPipelineFilters.endDate)) : now)
+                : now;
+
+            // Widest bound actually needed server-side: default mode still
+            // needs the full 60-day lookback for Pipeline Value even though
+            // most metrics only need this week; custom mode needs exactly
+            // the chosen range since both windows collapse onto it.
+            const fetchStart = hasCustomRange ? rangeStart : defaultSixtyDaysAgo;
+            const fetchEnd = hasCustomRange ? rangeEnd : now;
+            const fetchStartISO = fetchStart.toISOString();
+            const fetchEndISO = fetchEnd.toISOString();
+
+            const inThisWeek = (d) => {
+                const dt = new Date(d);
+                return !isNaN(dt.getTime()) && dt >= rangeStart && dt <= rangeEnd;
+            };
+            // Under a custom range there is only one window, not two.
+            const inLast60Days = hasCustomRange ? inThisWeek : (d) => {
+                const dt = new Date(d);
+                return !isNaN(dt.getTime()) && dt >= defaultSixtyDaysAgo && dt <= now;
+            };
+            const isYes = (status) => String(status || "").trim().toLowerCase() === "yes";
+
+            // For one filtered slice of records (already scoped to a single
+            // SC+category, or a team-total group), compute all 8 metrics.
+            const computeGroupMetrics = (records, trackerByRecordId) => {
+                let enquiries = 0, enquiryValue = 0, pipelineValue = 0, noOrder = 0, billValue = 0;
+
+                records.forEach(rec => {
+                    const trackerRows = trackerByRecordId.get(rec.id) || [];
+                    const isConverted = trackerRows.some(t => isYes(t.is_order_received_status));
+
+                    let latestRow = null;
+                    trackerRows.forEach(t => {
+                        if (!latestRow || new Date(t.created_at) > new Date(latestRow.created_at)) latestRow = t;
+                    });
+                    const latestQuotationValue = latestRow?.quotation_value_without_tax ? parseMoney(latestRow.quotation_value_without_tax) : 0;
+
+                    if (inThisWeek(rec.created_at)) {
+                        enquiries++;
+                        enquiryValue += latestQuotationValue;
                     }
-                }
+                    if (inLast60Days(rec.created_at) && !isConverted) {
+                        pipelineValue += latestQuotationValue;
+                    }
 
-                const isoDate = new Date(dateStr);
-                return isNaN(isoDate.getTime()) ? null : isoDate;
-            };
-
-            const isDateInRange = (date, start, end) => {
-                if (!date) return false;
-                const target = new Date(date).getTime();
-                const s = start ? new Date(start).setHours(0, 0, 0, 0) : null;
-                const e = end ? new Date(end).setHours(23, 59, 59, 999) : null;
-
-                if (s && target < s) return false;
-                if (e && target > e) return false;
-                return true;
-            };
-
-            const { data: leadsData, error: leadsError } = await fetchAllRows(() => {
-                let q = supabase.from("lto_leads").select("*");
-                const scList = getScFilterList(scPipelineFilters.scName);
-                if (scList) {
-                    q = q.in("sc_name", scList);
-                }
-                return q;
-            });
-
-            let leadsCount = 0;
-            let leadsValue = 0;
-            let enquiryCount = 0;
-            let enquiryValue = 0;
-
-            if (leadsError) {
-                console.error("Error fetching SC Pipeline data:", leadsError);
-            } else if (leadsData) {
-                leadsData.forEach(row => {
-                    const tDate = parseDate(row.created_at);
-
-                    // Total Leads + Total Value logic
-                    if (tDate) {
-                        if (isDateInRange(tDate, scPipelineFilters.startDate, scPipelineFilters.endDate)) {
-                            leadsCount++;
-                        }
+                    // Orders converted THIS WEEK specifically (the tracker row
+                    // recording "yes" was itself created this week) -- counted
+                    // once per record even if (unexpectedly) more than one
+                    // such row exists, using the latest one's bill value.
+                    const yesThisWeekRows = trackerRows.filter(t => isYes(t.is_order_received_status) && inThisWeek(t.created_at));
+                    if (yesThisWeekRows.length > 0) {
+                        noOrder++;
+                        const latestYes = yesThisWeekRows.reduce((a, b) => (new Date(a.created_at) > new Date(b.created_at) ? a : b));
+                        billValue += parseMoney(latestYes.amount_with_tax);
                     }
                 });
-            }
 
-            // Fetch No. of Enquiry from enquiries table
-            const { data: enquiryData, error: enquiryError } = await fetchAllRows(() =>
-                supabase.from("lto_enquiries").select("id, created_at, enquiry_assign_to_project")
-            );
+                return {
+                    enquiries, enquiryValue, pipelineValue, noOrder, billValue,
+                    engConv: enquiries > 0 ? (noOrder / enquiries) * 100 : 0,
+                    valueConv: enquiryValue > 0 ? (billValue / enquiryValue) * 100 : 0,
+                    avgTicket: noOrder > 0 ? billValue / noOrder : 0,
+                };
+            };
 
-            // quotation_value_with_tax lives on lto_enquiry_tracker, not on
-            // lto_enquiries -- reduce to one representative (latest) value per enquiry.
-            const { data: scTrackerRows, error: scTrackerError } = await fetchAllRows(() =>
-                supabase.from("lto_enquiry_tracker").select("enquiry_id, created_at, quotation_value_with_tax")
-            );
-            if (scTrackerError) console.error("Error fetching enquiry tracker data for SC Pipeline:", scTrackerError);
-
-            const latestQuotationValueByEnquiryId = new Map();
-            (scTrackerRows || []).forEach(t => {
-                const existing = latestQuotationValueByEnquiryId.get(t.enquiry_id);
-                if (!existing || new Date(t.created_at) > new Date(existing.created_at)) {
-                    latestQuotationValueByEnquiryId.set(t.enquiry_id, t);
-                }
-            });
-
-            if (enquiryError) {
-                console.error("Error fetching enquiry data:", enquiryError);
-            } else if (enquiryData) {
-                // Extract first word of a string, lowercased for partial name matching
-                const firstWord = (str) => String(str || '').trim().toLowerCase().split(/\s+/)[0];
-
-                const scList = getScFilterList(scPipelineFilters.scName);
-                const scFirstWords = scList ? scList.map(firstWord) : null;
-
-                enquiryData.forEach(row => {
-                    const eDate = parseDate(row.created_at);
-
-                    // Name matching: compare first word of enquiry_assign_to_project against allowed SC names
-                    const nameMatches = scFirstWords === null
-                        ? true // no restriction — count every record
-                        : scFirstWords.includes(firstWord(row.enquiry_assign_to_project));
-
-                    if (!nameMatches) return;
-
-                    // Date filter using the enquiry's own created_at
-                    if (isDateInRange(eDate, scPipelineFilters.startDate, scPipelineFilters.endDate)) {
-                        enquiryCount++;
-                        // Sum quotation_value_with_tax (from the latest tracker row) for Total Value of Enquiries
-                        const quotationValueWithTax = latestQuotationValueByEnquiryId.get(row.id)?.quotation_value_with_tax;
-                        if (quotationValueWithTax) {
-                            const parsed = parseFloat(String(quotationValueWithTax).replace(/,/g, '').replace(/[^\d.-]/g, ''));
-                            if (!isNaN(parsed)) enquiryValue += parsed;
-                        }
-                    }
+            // Builds the full column set (2 category groups x [3 SCs + TOTAL],
+            // plus 2 NBD-only single columns) for either leads or enquiries.
+            const buildSection = (records, trackerByRecordId, scField) => {
+                const categoryGroups = ["CRR", "NBD_CRR"].map(category => {
+                    const perSc = SC_PIPELINE_MULTI_SCS.map(sc => ({
+                        key: `${sc}_${category}`, label: sc,
+                        metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === category), trackerByRecordId),
+                    }));
+                    const totalRecords = records.filter(r => SC_PIPELINE_MULTI_SCS.includes(r[scField]) && normalizeCategory(r.sales_type) === category);
+                    return {
+                        category,
+                        columns: [...perSc, { key: `TOTAL_${category}`, label: "TOTAL", isTotal: true, metrics: computeGroupMetrics(totalRecords, trackerByRecordId) }],
+                    };
                 });
-            }
+                const nbdColumns = SC_PIPELINE_NBD_ONLY_SCS.map(sc => ({
+                    key: sc, label: sc,
+                    metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === "NBD"), trackerByRecordId),
+                }));
+                return { categoryGroups, nbdColumns };
+            };
 
-            setScPipelineMetrics({
-                leadsCount,
-                leadsValue,
-                enquiryCount,
-                enquiryValue
+            // ---- Leads ----
+            // Base records bounded to [fetchStart, fetchEnd] on both ends --
+            // that's the actual set of records this tab can ever show.
+            // Tracker rows bounded with a floor only (no upper bound): a
+            // tracker row can never predate the record it belongs to, so
+            // `created_at >= fetchStart` already captures every tracker row
+            // for any in-range record with zero risk of missing one, while
+            // deliberately NOT capping the upper end keeps "is it currently
+            // converted" correct even when fetchEnd is a past custom date
+            // (an order logged after that date still counts).
+            const [{ data: allLeads }, { data: allLeadTrackers }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_leads").select("id, sc_name, sales_type, created_at")
+                    .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
+                fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, created_at, is_order_received_status, quotation_value_without_tax, amount_with_tax")
+                    .gte("created_at", fetchStartISO)),
+            ]);
+            const leadTrackerByLeadId = new Map();
+            (allLeadTrackers || []).forEach(t => {
+                if (!t.lead_id) return;
+                if (!leadTrackerByLeadId.has(t.lead_id)) leadTrackerByLeadId.set(t.lead_id, []);
+                leadTrackerByLeadId.get(t.lead_id).push(t);
             });
+            const leadsSection = buildSection(allLeads || [], leadTrackerByLeadId, "sc_name");
+
+            // ---- Enquiries ---- (lto_enquiries has NO sc_name column --
+            // the real field is sales_coordinator_name)
+            const [{ data: allEnquiries }, { data: allEnquiryTrackers }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, sales_coordinator_name, sales_type, created_at")
+                    .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
+                fetchAllRows(() => supabase.from("lto_enquiry_tracker").select("enquiry_id, created_at, is_order_received_status, quotation_value_without_tax, amount_with_tax")
+                    .gte("created_at", fetchStartISO)),
+            ]);
+            const enquiryTrackerByEnquiryId = new Map();
+            (allEnquiryTrackers || []).forEach(t => {
+                if (!t.enquiry_id) return;
+                if (!enquiryTrackerByEnquiryId.has(t.enquiry_id)) enquiryTrackerByEnquiryId.set(t.enquiry_id, []);
+                enquiryTrackerByEnquiryId.get(t.enquiry_id).push(t);
+            });
+            const enquiriesSection = buildSection(allEnquiries || [], enquiryTrackerByEnquiryId, "sales_coordinator_name");
+
+            setScPipelineData({ leads: leadsSection, enquiries: enquiriesSection });
 
         } catch (error) {
             console.error("Error fetching SC Pipeline metrics:", error);
+            setScPipelineError(error?.message || "Failed to load SC Pipeline data.");
         } finally {
             setIsLoading(false);
         }
-    }, [scPipelineFilters, activeTab, isAdmin, getUsernamesToFilter]);
+    }, [activeTab, scPipelineFilters]);
 
 
     useEffect(() => {
@@ -735,43 +1012,43 @@ function Report() {
 
 
     return (
-        <div className="min-h-screen bg-gray-50">
-            <div className="container mx-auto py-8 px-4 sm:px-6 lg:px-8">
+        <div className="min-h-screen bg-slate-50">
+            <div className="container mx-auto py-6 px-4 sm:px-6 lg:px-8 max-w-[1600px]">
                 {/* Header */}
-                <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">Reports</h1>
-                    <p className="mt-2 text-sm text-gray-600">
+                <div className="mb-5">
+                    <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Reports</h1>
+                    <p className="mt-1 text-sm text-gray-500">
                         Overview of calls, enquiries, quotations, and orders.
                     </p>
                 </div>
 
                 {/* Tabs */}
-                <div className="mb-6 border-b border-gray-200">
-                    <nav className="-mb-px flex space-x-8">
+                <div className="mb-5 border-b border-gray-200">
+                    <nav className="-mb-px flex space-x-6">
                         <button
                             onClick={() => setActiveTab("calling")}
                             className={`${activeTab === "calling"
-                                ? "border-info/40 text-info"
+                                ? "border-primary text-primary"
                                 : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+                                } whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors`}
                         >
                             Calling Data
                         </button>
                         <button
                             onClick={() => setActiveTab("fos")}
                             className={`${activeTab === "fos"
-                                ? "border-info/40 text-info"
+                                ? "border-primary text-primary"
                                 : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+                                } whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors`}
                         >
                             FOS Report
                         </button>
                         <button
                             onClick={() => setActiveTab("sc_pipeline")}
                             className={`${activeTab === "sc_pipeline"
-                                ? "border-info/40 text-info"
+                                ? "border-primary text-primary"
                                 : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                                } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+                                } whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors`}
                         >
                             SC Pipeline
                         </button>
@@ -781,47 +1058,61 @@ function Report() {
                 {/* CALLING DATA TAB CONTENT */}
                 {activeTab === "calling" && (
                     <>
-                        <p className="text-sm text-gray-500 mb-6">
-                            Current week (Monday through today) -- one row per Sales Coordinator.
+                        <p className="text-sm text-gray-500 mb-3 flex items-center gap-2">
+                            {callingFilters.startDate || callingFilters.endDate
+                                ? "Custom date range -- one row per Sales Coordinator."
+                                : "Current week (Monday through today) -- one row per Sales Coordinator."}
                             {!isAdmin() && " You're seeing only your own row."}
+                            {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
                         </p>
 
+                        <DateRangeFilterBar
+                            startDate={callingFilters.startDate}
+                            endDate={callingFilters.endDate}
+                            onStartDateChange={(v) => setCallingFilters(prev => ({ ...prev, startDate: v }))}
+                            onEndDateChange={(v) => setCallingFilters(prev => ({ ...prev, endDate: v }))}
+                            onReset={() => setCallingFilters({ startDate: "", endDate: "" })}
+                            defaultRangeLabel="Showing current week (Mon-today)"
+                        />
+
                         {/* Leads Section */}
-                        <div className="mb-12">
-                            <h2 className="text-xl font-semibold text-gray-800 mb-4">Leads</h2>
-                            <div className="bg-white rounded-lg shadow overflow-hidden">
+                        <div className="mb-8">
+                            <h3 className="text-base font-semibold text-gray-800 mb-3">Leads</h3>
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                                 <div className="overflow-x-auto">
-                                    <table className="min-w-full divide-y divide-gray-200">
-                                        <thead className="bg-gray-50">
+                                    <table className="min-w-full divide-y divide-gray-100">
+                                        <thead className="bg-gray-50/80">
                                             <tr>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SC Name</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Leads</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">No. of Calls</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Converted to Enquiries</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Quotations</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Quotation Amount</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order Converted</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incoming</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outgoing</th>
+                                                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">SC Name</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Leads</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">No. of Calls</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Converted to Enquiries</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Quotations</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Quotation Amount</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Order Converted</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Incoming</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Outgoing</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="bg-white divide-y divide-gray-200">
+                                        <tbody className="divide-y divide-gray-100">
                                             {isLoading ? (
-                                                <tr><td colSpan="9" className="px-4 py-4 text-center text-sm text-gray-500">Loading...</td></tr>
+                                                <tr><td colSpan="9" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
                                             ) : leadsReportRows.length === 0 ? (
-                                                <tr><td colSpan="9" className="px-4 py-4 text-center text-sm text-gray-500">No rows to show</td></tr>
+                                                <tr><td colSpan="9" className="px-4 py-6 text-center text-sm text-gray-500">No rows to show</td></tr>
                                             ) : (
                                                 leadsReportRows.map(row => (
-                                                    <tr key={row.name} className="hover:bg-gray-50">
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.totalLeads}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.calls}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.convertedToEnquiry}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.quotations}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.orderConverted}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.incoming}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.outgoing}</td>
+                                                    <tr key={row.name} className="hover:bg-gray-50/60">
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.totalLeads}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.calls}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.convertedToEnquiry}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.quotations}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
+                                                            <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.orderConverted > 0 ? "bg-emerald-50 text-emerald-700" : "text-gray-400"}`}>{row.orderConverted}</span>
+                                                        </td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-sky-700">{row.incoming}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-amber-700">{row.outgoing}</td>
                                                     </tr>
                                                 ))
                                             )}
@@ -833,36 +1124,38 @@ function Report() {
 
                         {/* Enquiries Section */}
                         <div>
-                            <h2 className="text-xl font-semibold text-gray-800 mb-4">Enquiries</h2>
-                            <div className="bg-white rounded-lg shadow overflow-hidden">
+                            <h3 className="text-base font-semibold text-gray-800 mb-3">Enquiries</h3>
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                                 <div className="overflow-x-auto">
-                                    <table className="min-w-full divide-y divide-gray-200">
-                                        <thead className="bg-gray-50">
+                                    <table className="min-w-full divide-y divide-gray-100">
+                                        <thead className="bg-gray-50/80">
                                             <tr>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SC Name</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Enquiries</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Quotations</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Quotation Amount</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order Converted</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incoming</th>
-                                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outgoing</th>
+                                                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">SC Name</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Enquiries</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Quotations</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Quotation Amount</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Order Converted</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Incoming</th>
+                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Outgoing</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="bg-white divide-y divide-gray-200">
+                                        <tbody className="divide-y divide-gray-100">
                                             {isLoading ? (
-                                                <tr><td colSpan="7" className="px-4 py-4 text-center text-sm text-gray-500">Loading...</td></tr>
+                                                <tr><td colSpan="7" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
                                             ) : enquiriesReportRows.length === 0 ? (
-                                                <tr><td colSpan="7" className="px-4 py-4 text-center text-sm text-gray-500">No rows to show</td></tr>
+                                                <tr><td colSpan="7" className="px-4 py-6 text-center text-sm text-gray-500">No rows to show</td></tr>
                                             ) : (
                                                 enquiriesReportRows.map(row => (
-                                                    <tr key={row.name} className="hover:bg-gray-50">
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.totalEnquiries}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.quotations}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.orderConverted}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.incoming}</td>
-                                                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">{row.outgoing}</td>
+                                                    <tr key={row.name} className="hover:bg-gray-50/60">
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.totalEnquiries}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.quotations}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
+                                                            <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.orderConverted > 0 ? "bg-emerald-50 text-emerald-700" : "text-gray-400"}`}>{row.orderConverted}</span>
+                                                        </td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-sky-700">{row.incoming}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-amber-700">{row.outgoing}</td>
                                                     </tr>
                                                 ))
                                             )}
@@ -878,12 +1171,12 @@ function Report() {
                 {activeTab === "fos" && (
                     <>
                         {/* FOS Filters */}
-                        <div className="bg-white p-4 rounded-lg shadow mb-8 flex flex-col md:flex-row gap-4 items-end md:items-center">
+                        <div className="bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 mb-6 flex flex-col md:flex-row gap-3 items-end md:items-center">
                             {isAdmin() && (
                                 <div className="w-full md:w-1/3">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Enquiry Receiver Name</label>
+                                    <label className="block text-xs font-medium text-gray-600 mb-1">Enquiry Receiver Name</label>
                                     <select
-                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
+                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
                                         value={fosFilters.receiverName}
                                         onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
                                     >
@@ -895,19 +1188,19 @@ function Report() {
                                 </div>
                             )}
                             <div className="w-full md:w-1/4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Start Date</label>
                                 <input
                                     type="date"
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
+                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
                                     value={fosFilters.startDate}
                                     onChange={(e) => setFosFilters(prev => ({ ...prev, startDate: e.target.value }))}
                                 />
                             </div>
                             <div className="w-full md:w-1/4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">End Date</label>
                                 <input
                                     type="date"
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
+                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
                                     value={fosFilters.endDate}
                                     onChange={(e) => setFosFilters(prev => ({ ...prev, endDate: e.target.value }))}
                                 />
@@ -915,7 +1208,7 @@ function Report() {
                             <div className="w-full md:w-1/6">
                                 <button
                                     onClick={() => setFosFilters({ receiverName: "all", startDate: "", endDate: "" })}
-                                    className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded-md transition-colors"
+                                    className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium text-sm py-2 px-4 rounded-md transition-colors"
                                 >
                                     Reset
                                 </button>
@@ -923,126 +1216,116 @@ function Report() {
                         </div>
 
                         {/* FOS Team and Pipeline Sections */}
-                        <div className="space-y-12">
+                        <div className="space-y-8">
                             {/* Section 1: FOS Team */}
                             <div>
-                                <h2 className="text-xl font-semibold text-gray-800 mb-4">FOS Team</h2>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                                <h3 className="text-base font-semibold text-gray-800 mb-3">FOS Team</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                                     {/* Total Visit */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-info/40">
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
                                         <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">
+                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
                                                 Total Visit
                                             </p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">
+                                            <p className="text-2xl font-bold text-gray-900 mt-1">
                                                 {isLoading ? "..." : totalVisitCount}
                                             </p>
                                         </div>
-                                        <div className="p-3 rounded-full bg-info/10 text-info">
-                                            <MapPin className="h-8 w-8" />
+                                        <div className="p-2.5 rounded-lg bg-info/10 text-info">
+                                            <MapPin className="h-5 w-5" />
                                         </div>
                                     </div>
-
-
 
                                     {/* No. of Enquiry */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-primary">
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
                                         <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">No. of Enquiries</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{isLoading ? "..." : fosMetrics.enquiryCount}</p>
+                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">No. of Enquiries</p>
+                                            <p className="text-2xl font-bold text-gray-900 mt-1">{isLoading ? "..." : fosMetrics.enquiryCount}</p>
                                         </div>
-                                        <div className="p-3 rounded-full bg-primary/5 text-primary">
-                                            <UsersIcon className="h-8 w-8" />
+                                        <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
+                                            <UsersIcon className="h-5 w-5" />
                                         </div>
                                     </div>
-
 
                                     {/* Total Enquiry Value */}
-
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-success/40">
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
                                         <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Total Enquiry Value </p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">
-                                                {isLoading ? "..." : (fosMetrics.totalValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
+                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Enquiry Value</p>
+                                            <p className="text-xl font-bold text-gray-900 mt-1">
+                                                {isLoading ? "..." : (fosMetrics.totalValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}
                                             </p>
                                         </div>
-                                        <div className="p-3 rounded-full bg-success/5 text-success">
-                                            <span className="text-2xl font-bold">₹</span>
+                                        <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600">
+                                            <span className="text-lg font-bold">₹</span>
                                         </div>
                                     </div>
-
 
                                     {/* Order Convert */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-primary">
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
                                         <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Orders Converted</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{isLoading ? "..." : fosMetrics.orderConvert}</p>
+                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Orders Converted</p>
+                                            <p className="text-2xl font-bold text-gray-900 mt-1">{isLoading ? "..." : fosMetrics.orderConvert}</p>
                                         </div>
-                                        <div className="p-3 rounded-full bg-primary/5 text-primary">
-                                            <ShoppingCartIcon className="h-8 w-8" />
+                                        <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
+                                            <ShoppingCartIcon className="h-5 w-5" />
                                         </div>
                                     </div>
-
 
                                     {/*Order Converted Total Value */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-success/40">
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
                                         <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Order Converted Total Value </p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">
-                                                {/* {isLoading ? "..." : (fosMetrics.totalValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })} */}
-                                                {isLoading ? "..." : (fosMetrics.convertedValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
+                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Order Value Converted</p>
+                                            <p className="text-xl font-bold text-gray-900 mt-1">
+                                                {isLoading ? "..." : (fosMetrics.convertedValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}
                                             </p>
                                         </div>
-                                        <div className="p-3 rounded-full bg-success/5 text-success">
-                                            <span className="text-2xl font-bold">₹</span>
+                                        <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600">
+                                            <span className="text-lg font-bold">₹</span>
                                         </div>
                                     </div>
-
 
                                     {/* Avg Ticket Size */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-warning/40">
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
                                         <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Avg Ticket Size</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">
+                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Avg Ticket Size</p>
+                                            <p className="text-xl font-bold text-gray-900 mt-1">
                                                 {isLoading ? "..." : fosMetrics.orderConvert > 0
-                                                    ? (fosMetrics.convertedValue / fosMetrics.orderConvert).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })
-                                                    : '₹0.00'}
+                                                    ? (fosMetrics.convertedValue / fosMetrics.orderConvert).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
+                                                    : '₹0'}
                                             </p>
                                         </div>
-                                        <div className="p-3 rounded-full bg-warning/5 text-warning-foreground">
-                                            <span className="text-2xl font-bold">₹</span>
+                                        <div className="p-2.5 rounded-lg bg-amber-50 text-amber-600">
+                                            <span className="text-lg font-bold">₹</span>
                                         </div>
                                     </div>
-
-
                                 </div>
                             </div>
 
                             {/* Section 2: Pipeline (Non-converted Enquiries Only) */}
                             <div>
-                                <h2 className="text-xl font-semibold text-gray-800 mb-4">Pipeline</h2>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <h3 className="text-base font-semibold text-gray-800 mb-3">Pipeline</h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {/* No. of Enquiry (Non-converted only) */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-primary">
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
                                         <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">No. of Enquiries</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{isLoading ? "..." : pipelineMetrics.enquiryCount}</p>
+                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">No. of Enquiries</p>
+                                            <p className="text-2xl font-bold text-gray-900 mt-1">{isLoading ? "..." : pipelineMetrics.enquiryCount}</p>
                                         </div>
-                                        <div className="p-3 rounded-full bg-primary/5 text-primary">
-                                            <UsersIcon className="h-8 w-8" />
+                                        <div className="p-2.5 rounded-lg bg-primary/10 text-primary">
+                                            <UsersIcon className="h-5 w-5" />
                                         </div>
                                     </div>
 
                                     {/* Value (Non-converted only) */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-success/40">
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-4 flex items-center justify-between">
                                         <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Total Value</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">
-                                                {isLoading ? "..." : (pipelineMetrics.totalValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
+                                            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Total Value</p>
+                                            <p className="text-xl font-bold text-gray-900 mt-1">
+                                                {isLoading ? "..." : (pipelineMetrics.totalValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}
                                             </p>
                                         </div>
-                                        <div className="p-3 rounded-full bg-success/5 text-success">
-                                            <span className="text-2xl font-bold">₹</span>
+                                        <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600">
+                                            <span className="text-lg font-bold">₹</span>
                                         </div>
                                     </div>
                                 </div>
@@ -1050,49 +1333,51 @@ function Report() {
 
                             {/* Section 3: Conversion Metrics Table */}
                             <div>
-                                <h2 className="text-xl font-semibold text-gray-800 mb-4">Enquiry to Order Conversion Metrics</h2>
-                                <div className="bg-white rounded-lg shadow overflow-hidden">
+                                <h3 className="text-base font-semibold text-gray-800 mb-3">Enquiry to Order Conversion Metrics</h3>
+                                <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                                     <div className="overflow-x-auto">
-                                        <table className="min-w-full divide-y divide-gray-200">
-                                            <thead className="bg-gray-50">
+                                        <table className="min-w-full divide-y divide-gray-100">
+                                            <thead className="bg-gray-50/80">
                                                 <tr>
-                                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">
                                                         Enquiry Receiver Name
                                                     </th>
-                                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                    <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
                                                         Enquiry to Order Conversion
                                                     </th>
-                                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                                        Enquiry to Order (Avg Ticket Size)
+                                                    <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                                                        Avg Ticket Size
                                                     </th>
                                                 </tr>
                                             </thead>
-                                            <tbody className="bg-white divide-y divide-gray-200">
+                                            <tbody className="divide-y divide-gray-100">
                                                 {isLoading ? (
                                                     <tr>
-                                                        <td colSpan="3" className="px-6 py-4 text-center text-sm text-gray-500">
-                                                            Loading...
+                                                        <td colSpan="3" className="px-4 py-8 text-center text-sm text-primary">
+                                                            <span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span>
                                                         </td>
                                                     </tr>
                                                 ) : conversionMetrics.length === 0 ? (
                                                     <tr>
-                                                        <td colSpan="3" className="px-6 py-4 text-center text-sm text-gray-500">
+                                                        <td colSpan="3" className="px-4 py-6 text-center text-sm text-gray-500">
                                                             No data available
                                                         </td>
                                                     </tr>
                                                 ) : (
                                                     conversionMetrics.map((person, index) => (
-                                                        <tr key={index} className="hover:bg-gray-50">
-                                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                        <tr key={index} className="hover:bg-gray-50/60">
+                                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-gray-900">
                                                                 {person.name}
                                                             </td>
-                                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                                                                {person.conversionPercentage.toFixed(2)}%
+                                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
+                                                                <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${getPercentColorClass(person.conversionPercentage)}`}>
+                                                                    {person.conversionPercentage.toFixed(1)}%
+                                                                </span>
                                                             </td>
-                                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">
                                                                 {person.avgTicketSize > 0
-                                                                    ? person.avgTicketSize.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })
-                                                                    : '₹0.00'
+                                                                    ? person.avgTicketSize.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
+                                                                    : '₹0'
                                                                 }
                                                             </td>
                                                         </tr>
@@ -1110,108 +1395,37 @@ function Report() {
                 {/* SC PIPELINE TAB CONTENT */}
                 {activeTab === "sc_pipeline" && (
                     <>
-                        {/* Filters */}
-                        <div className="bg-white p-4 rounded-lg shadow mb-8 flex flex-col md:flex-row gap-4 items-end md:items-center">
-                            {isAdmin() && (
-                                <div className="w-full md:w-1/4">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">SC Name</label>
-                                    <select
-                                        className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                        value={scPipelineFilters.scName}
-                                        onChange={(e) => setScPipelineFilters(prev => ({ ...prev, scName: e.target.value }))}
-                                    >
-                                        <option value="all">All Sales Coordinators</option>
-                                        {scNames.map(name => (
-                                            <option key={name} value={name}>{name}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            )}
-                            <div className="w-full md:w-1/4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-                                <input
-                                    type="date"
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                    value={scPipelineFilters.startDate}
-                                    onChange={(e) => setScPipelineFilters(prev => ({ ...prev, startDate: e.target.value }))}
-                                />
+                        <p className="text-sm text-gray-500 mb-3 flex items-center gap-2">
+                            {scPipelineFilters.startDate || scPipelineFilters.endDate
+                                ? "Custom date range applies to every metric below, including Pipeline Value."
+                                : "This week (Monday through today) for Enquiries/Orders columns; Pipeline Value looks back 60 days at non-converted work."}
+                            {!isAdmin() && " You're seeing only your own column(s)."}
+                            {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
+                        </p>
+
+                        <DateRangeFilterBar
+                            startDate={scPipelineFilters.startDate}
+                            endDate={scPipelineFilters.endDate}
+                            onStartDateChange={(v) => setScPipelineFilters(prev => ({ ...prev, startDate: v }))}
+                            onEndDateChange={(v) => setScPipelineFilters(prev => ({ ...prev, endDate: v }))}
+                            onReset={() => setScPipelineFilters({ startDate: "", endDate: "" })}
+                            defaultRangeLabel="Showing this week + rolling 60-day pipeline"
+                        />
+
+                        {scPipelineError && (
+                            <div className="mb-5 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-700">
+                                Couldn't load SC Pipeline data: {scPipelineError}
                             </div>
-                            <div className="w-full md:w-1/4">
-                                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-                                <input
-                                    type="date"
-                                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm p-2 border"
-                                    value={scPipelineFilters.endDate}
-                                    onChange={(e) => setScPipelineFilters(prev => ({ ...prev, endDate: e.target.value }))}
-                                />
-                            </div>
-                            <div className="w-full md:w-1/4">
-                                <button
-                                    onClick={() => setScPipelineFilters({ scName: "all", startDate: "", endDate: "" })}
-                                    className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded-md transition-colors"
-                                >
-                                    Reset
-                                </button>
-                            </div>
-                        </div>
-
-                        {/* Pipeline Section */}
-                        <div className="space-y-12">
-                            <div>
-                                <h2 className="text-xl font-semibold text-gray-800 mb-4">SC Pipeline</h2>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-
-                                    {/* No. of Leads */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-info/40">
-                                        <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">No. of Leads</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{isLoading ? "..." : scPipelineMetrics.leadsCount}</p>
-                                        </div>
-                                        <div className="p-3 rounded-full bg-info/10 text-info">
-                                            <UsersIcon className="h-8 w-8" />
-                                        </div>
-                                    </div>
-
-                                    {/* Total Value */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-primary">
-                                        <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Total Value</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">
-                                                {isLoading ? "..." : (scPipelineMetrics.leadsValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
-                                            </p>
-                                        </div>
-                                        <div className="p-3 rounded-full bg-primary/5 text-primary">
-                                            <span className="text-2xl font-bold">₹</span>
-                                        </div>
-                                    </div>
-
-                                    {/* No. of Enquiry */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-success/40">
-                                        <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">No. of Enquiries</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">{isLoading ? "..." : scPipelineMetrics.enquiryCount}</p>
-                                        </div>
-                                        <div className="p-3 rounded-full bg-success/5 text-success">
-                                            <FileTextIcon className="h-8 w-8" />
-                                        </div>
-                                    </div>
-
-                                    {/* Total Value of Enquiries */}
-                                    <div className="bg-white rounded-lg shadow px-6 py-8 flex items-center justify-between border-l-4 border-primary">
-                                        <div>
-                                            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Total Value of Enquiries</p>
-                                            <p className="text-3xl font-bold text-gray-900 mt-2">
-                                                {isLoading ? "..." : (scPipelineMetrics.enquiryValue || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
-                                            </p>
-                                        </div>
-                                        <div className="p-3 rounded-full bg-primary/5 text-primary">
-                                            <span className="text-2xl font-bold">₹</span>
-                                        </div>
-                                    </div>
-
-                                </div>
-                            </div>
-                        </div>
+                        )}
+                        {(() => {
+                            const visibleLabels = isAdmin() ? null : (getUsernamesToFilter() || []);
+                            return (
+                                <>
+                                    <PipelineTable title="Leads" section={scPipelineData.leads} visibleLabels={visibleLabels} isLoading={isLoading} />
+                                    <PipelineTable title="Enquiries" section={scPipelineData.enquiries} visibleLabels={visibleLabels} isLoading={isLoading} />
+                                </>
+                            );
+                        })()}
                     </>
                 )}
 
