@@ -1,6 +1,69 @@
 import { useQuery } from "@tanstack/react-query";
 import supabase from "../../utils/supabase";
 
+// enquiry_pending_view's quotation_number / quotation_value_without_tax /
+// quotation_value_with_tax / quotation_upload columns come straight from
+// lto_enquiry_tracker, which is only ever written when someone manually
+// fills in the "Process" stage form -- a quotation created directly from
+// the Quotation module (or a later revision of one) never reaches the
+// tracker on its own, so those columns render blank even though a real
+// quotation exists. This overlays the true latest quotation (by
+// created_at -- always the newest revision, since Quotation.jsx inserts a
+// new row per revision rather than updating in place) from
+// lto_make_quotations on top of whatever the view already has, per
+// enquiry/lead reference number.
+async function attachLatestQuotations(rows) {
+  const refs = Array.from(new Set(
+    rows.map((r) => String(r.display_no || "").trim().toUpperCase()).filter(Boolean)
+  ));
+  if (refs.length === 0) return rows;
+
+  const { data: quotations, error: qErr } = await supabase
+    .from("lto_make_quotations")
+    .select("id, quotation_no, enquiry_reference_no, grand_total, pdf_url, created_at")
+    .in("enquiry_reference_no", refs);
+  if (qErr || !quotations || quotations.length === 0) return rows;
+
+  const latestByRef = new Map();
+  quotations.forEach((q) => {
+    const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
+    if (!ref) return;
+    const existing = latestByRef.get(ref);
+    if (!existing || new Date(q.created_at) > new Date(existing.created_at)) {
+      latestByRef.set(ref, q);
+    }
+  });
+
+  // lto_make_quotations has no "value without tax" column of its own
+  // (grand_total is post-tax) -- it has to be summed from the line items,
+  // same approach Report.jsx uses for the same table.
+  const latestIds = Array.from(latestByRef.values()).map((q) => q.id);
+  const amountByQId = new Map();
+  if (latestIds.length > 0) {
+    const { data: items } = await supabase
+      .from("lto_make_quotation_items")
+      .select("quotation_id, amount")
+      .in("quotation_id", latestIds);
+    (items || []).forEach((it) => {
+      const amt = parseFloat(String(it.amount ?? 0).replace(/,/g, "")) || 0;
+      amountByQId.set(it.quotation_id, (amountByQId.get(it.quotation_id) || 0) + amt);
+    });
+  }
+
+  return rows.map((row) => {
+    const ref = String(row.display_no || "").trim().toUpperCase();
+    const latest = latestByRef.get(ref);
+    if (!latest) return row; // no quotation exists yet -- genuinely blank
+    return {
+      ...row,
+      quotation_number: latest.quotation_no,
+      quotation_value_without_tax: amountByQId.get(latest.id) ?? row.quotation_value_without_tax,
+      quotation_value_with_tax: latest.grand_total ?? row.quotation_value_with_tax,
+      quotation_upload: latest.pdf_url || row.quotation_upload,
+    };
+  });
+}
+
 // Applies the filters shared by both the pending and history views. Every
 // filter is a real WHERE clause against the view, not a client-side re-scan
 // of whatever rows happen to already be loaded -- this is what lets a
@@ -78,7 +141,8 @@ export function usePendingEnquiries({
 
       const { data, error, count } = await query;
       if (error) throw error;
-      return { rows: data || [], totalCount: count || 0 };
+      const rows = await attachLatestQuotations(data || []);
+      return { rows, totalCount: count || 0 };
     },
     enabled,
     placeholderData: (prev) => prev,

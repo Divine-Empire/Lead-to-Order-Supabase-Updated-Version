@@ -42,7 +42,6 @@ export const COLUMNS = {
     SOURCE: 'lead_source',
     COMPANY_NAME: 'company_name',
     PHONE_NUMBER: 'phone_number',
-    SALESPERSON_NAME: 'salesperson_name',
     LOCATION: 'location',
     EMAIL: 'email_address',
     STATE: 'state',
@@ -157,58 +156,7 @@ export const COLUMNS = {
   },
 } as const;
 
-/**
- * Helper mapper: Converts DB row from `leads` to frontend object
- */
-export function mapLeadRowFromDB(row: Record<string, any>) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    timestamp: row.created_at,
-    leadNumber: row.lead_no || row['LD-Lead-No'],
-    receiverName: row.lead_receiver_name || row['Lead_Receiver_Name'],
-    source: row.lead_source || row['Lead_Source'],
-    companyName: row.company_name || row['Company_Name'],
-    phoneNumber: row.phone_number || row['Phone_Number'],
-    salespersonName: row.salesperson_name || row['Salesperson_Name'],
-    location: row.location || row['Location'],
-    email: row.email_address || row['Email_Address'],
-    state: row.state || row['State'],
-    address: row.address || row['Address'],
-    nob: row.nob || row['NOB'],
-    gstNumber: row.gst_number || row['GST_Number'],
-    additionalNotes: row.additional_notes || row['Additional_Notes'],
-    status: row.lead_status || row['Status'] || 'New Lead',
-    salesType: row.sales_type || row['Sales_Type'],
-    handlePerson: row.handle_person,
-    approvedBy: row.approved_by,
-    plannedAt: row.planned_at,
-    contacts: row.lead_contacts || [],
-    items: row.lead_items || [],
-  };
-}
-
-/**
- * Helper mapper: Converts frontend Lead object to `leads` DB row
- */
-export function mapLeadToDBRow(lead: Record<string, any>) {
-  return {
-    lead_no: lead.leadNumber,
-    lead_receiver_name: lead.receiverName || '',
-    lead_source: lead.source || '',
-    company_name: lead.companyName || '',
-    phone_number: lead.phoneNumber || '',
-    salesperson_name: lead.salespersonName || '',
-    location: lead.location || '',
-    email_address: lead.email || '',
-    state: lead.state || '',
-    address: lead.address || '',
-    nob: lead.nob || '',
-    gst_number: lead.gstNumber || '',
-    additional_notes: lead.additionalNotes || '',
-    lead_status: lead.status || 'New Lead',
-    sales_type: lead.salesType || '',
-    handle_person: lead.handlePerson || '',
-    approved_by: lead.approvedBy || '',
-  };
-}
+// mapLeadRowFromDB / mapLeadToDBRow used to live here but referenced columns
+// that were never real on lto_leads (salesperson_name, handle_person -- the
+// actual columns are person_name and sc_name) and had zero callers anywhere
+// in the codebase. Removed rather than fixed, since nothing depends on them.

@@ -29,12 +29,20 @@ import { getStateCodeFromName } from "./gstStateCodes";
  * @param {string} enquiryNo - "EN-..." or "LD-..." identifier. Everything
  *   else needed is resolved internally from this one value, same as the
  *   original inline code did.
+ * @param {{ creditDays?: string|number, creditLimit?: string|number }} [creditTerms] -
+ *   Credit Days/Credit Limit as captured on OrderStatusFrom.jsx -- these had
+ *   no column on lto_enquiry_tracker(_for_leads) to be written to at all, so
+ *   they're applied here instead, onto the client record they actually
+ *   belong to. Omitted (or falsy) leaves client_master's existing value
+ *   untouched rather than clobbering it, same convention as state/gst/etc.
+ *   below.
  * @returns {Promise<{ scName: string, crmName: string|null }>} whatever got
  *   resolved/assigned, in case a caller wants to reflect it in the UI.
  *   Never throws -- logs and returns best-effort values on failure, same
  *   as the original code's try/catch-per-step shape.
  */
-export const syncClientOnOrderConversion = async (enquiryNo) => {
+export const syncClientOnOrderConversion = async (enquiryNo, creditTerms = {}) => {
+  const { creditDays, creditLimit } = creditTerms;
   let resolvedHandlePerson = "";
   let assignedCrmName = null;
 
@@ -70,7 +78,7 @@ export const syncClientOnOrderConversion = async (enquiryNo) => {
 
     const { data: clientMatches } = await supabase
       .from("lto_client_master")
-      .select("uuid, company_name, crm_name, company_group_name, sales_type, sc_name, state, state_code, client_mobile_number, billing_address, gst_number")
+      .select("uuid, company_name, crm_name, company_group_name, sales_type, sc_name, state, state_code, client_mobile_number, billing_address, gst_number, credit_days, credit_limit")
       .ilike("company_name", compName)
       .limit(1);
     const existingClient = clientMatches && clientMatches.length > 0 ? clientMatches[0] : null;
@@ -262,6 +270,8 @@ export const syncClientOnOrderConversion = async (enquiryNo) => {
       billing_address: leadData?.address || enqData?.shipping_address || enqData?.shippingAddress || existingClient?.billing_address || "",
       gst_number: leadData?.gst_number || enqData?.gst_number || enqData?.gstNumber || existingClient?.gst_number || "",
       already_in_tracker: `Order Received (${enquiryNo})`,
+      credit_days: creditDays ? (parseInt(creditDays, 10) || null) : (existingClient?.credit_days ?? null),
+      credit_limit: creditLimit ? (parseFloat(creditLimit) || null) : (existingClient?.credit_limit ?? null),
     };
 
     let cmError = null;

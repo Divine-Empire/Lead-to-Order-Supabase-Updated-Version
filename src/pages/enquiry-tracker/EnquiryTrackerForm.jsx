@@ -4,7 +4,6 @@ import { useState, useContext, useEffect } from "react"
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import { AuthContext } from "../../App"
 import MakeQuotationForm from "../../components/enquiry-tracker/MakeQuotationFrom"
-import QuotationValidationForm from "../../components/enquiry-tracker/QuotationValidationForm"
 import OrderExpectedForm from "../../components/enquiry-tracker/OrderExpectedForm"
 import OrderStatusForm from "../../components/enquiry-tracker/OrderStatusFrom"
 import supabase from "../../utils/supabase"
@@ -47,19 +46,6 @@ function NewEnquiryTracker() {
     remarks: "",
     quotationFile: null,
     quotationFileUrl: "",
-  })
-
-  // State for QuotationValidationForm data
-  const [validationData, setValidationData] = useState({
-    validationQuotationNumber: "",
-    validatorName: "",
-    sendStatus: "",
-    validationRemark: "",
-    faqVideo: "no",
-    productVideo: "no",
-    offerVideo: "no",
-    productCatalog: "no",
-    productImage: "no",
   })
 
   // State for OrderExpectedForm data
@@ -244,14 +230,6 @@ function NewEnquiryTracker() {
 
 
 
-  // Handler for validation form data updates
-  const handleValidationChange = (field, value) => {
-    setValidationData(prev => ({
-      ...prev,
-      [field]: value
-    }))
-  }
-
   // Handler for order expected form data updates
   const handleOrderExpectedChange = (field, value) => {
     setOrderExpectedData(prev => ({
@@ -345,50 +323,22 @@ function NewEnquiryTracker() {
   }
 
 
+  // The lead's actual state (stage, quotation info, order status) is
+  // already persisted for real via the lto_enquiry_tracker_for_leads insert
+  // in handleSubmit below. This function used to also build an `updateData`
+  // object with legacy sheet-style column names (Order_No, Quotation_Number,
+  // etc.) that don't exist on any real table -- and never once passed it to
+  // a supabase call. Its only actual effect was generateAndAssignClientCode;
+  // stripped down to just that (also drops a redundant generateNextOrderNumber
+  // fallback call that, had it ever fired, would have burned a real sequence
+  // number on a value nothing used).
   const updateLeadToOrderTable = async (enquiryNo, allFormData, currentStage, orderStatusData = {}) => {
     try {
-      // ✅ Base fields
-      let updateData = {
-        "LD-Lead-No": enquiryNo,
-        Enquiry_Status: allFormData.enquiryStatus,
-        What_Did_Customer_Say: allFormData.customerFeedback,
-        Current_Stage: currentStage,
-        Leads_Tracking_Status: (currentStage === "order-status" && (orderStatusData.orderStatus?.toLowerCase() === "yes" || orderStatusData.orderStatus?.toLowerCase() === "no")) ? "Completed" : "Pending",
-      };
-
-      // ✅ Add Order Number if status is "yes"
       if (currentStage === "order-status" && orderStatusData.orderStatus?.toLowerCase() === "yes") {
-        // Generate order number if not already in orderStatusData
-        let orderNumber = orderStatusData.generatedOrderNumber;
-        if (!orderNumber) {
-          orderNumber = await generateNextOrderNumber();
-        }
-
-        updateData.Order_No = orderNumber;
-
-        if (orderStatusData.resolvedHandlePerson) {
-          updateData.handle_person = orderStatusData.resolvedHandlePerson;
-        }
-
         const companyName = allFormData.companyName || allFormData.Company_Name || allFormData.company_name || orderStatusData.companyName;
         if (companyName) {
           await generateAndAssignClientCode(companyName);
         }
-      }
-
-      switch (currentStage) {
-        case "Make Quotation":
-        case "make-quotation":
-          Object.assign(updateData, {
-            "Send_Quotation_No.": allFormData.sendQuotationNo,
-            Quotation_Shared_By: allFormData.quotationSharedBy,
-            Quotation_Number: allFormData.quotationNumber,
-            Quotation_Value_Without_Tax: allFormData.valueWithoutTax,
-            Quotation_Value_With_Tax: allFormData.valueWithTax,
-            Quotation_Upload: allFormData.quotationFileUrl,
-            Quotation_Remarks: allFormData.remarks,
-          });
-          break;
       }
       return true;
     } catch (error) {
@@ -552,6 +502,12 @@ function NewEnquiryTracker() {
             acceptance_file_upload: typeof orderStatusData.acceptanceFile === "string" ? orderStatusData.acceptanceFile : null,
             remark: orderStatusData.orderRemark || null,
             order_no: orderNumber || null,
+            // Both collected by OrderStatusFrom.jsx but previously never
+            // made it into this payload at all -- conveyed_for_registration_form
+            // had a real column sitting unused; approved_by needs
+            // sql/add-approved-by-to-tracker-tables.sql run first.
+            conveyed_for_registration_form: orderStatusData.conveyedForRegistration === "yes",
+            approved_by: orderStatusData.approvedBy || null,
           });
         } else if (orderStatusData.orderStatus === "no") {
           Object.assign(trackerPayload, {
@@ -571,7 +527,10 @@ function NewEnquiryTracker() {
       const isOrderYes = orderStatusData.orderStatus && orderStatusData.orderStatus.toLowerCase() === "yes";
 
       if (isOrderStatusStage && isOrderYes) {
-        const { scName } = await syncClientOnOrderConversion(formData.enquiryNo);
+        const { scName } = await syncClientOnOrderConversion(formData.enquiryNo, {
+          creditDays: orderStatusData.creditDays,
+          creditLimit: orderStatusData.creditLimit,
+        });
         orderStatusData.resolvedHandlePerson = scName || "";
       }
       // --- END: Client Master Sync ---
@@ -855,13 +814,6 @@ function NewEnquiryTracker() {
                 enquiryNo={formData.enquiryNo}
                 formData={quotationData}
                 onFieldChange={handleQuotationChange}
-              />
-            )}
-            {currentStage === "quotation-validation" && (
-              <QuotationValidationForm
-                enquiryNo={formData.enquiryNo}
-                formData={validationData}
-                onFieldChange={handleValidationChange}
               />
             )}
             {currentStage === "order-expected" && (

@@ -339,39 +339,17 @@ function Report() {
         return null;
     };
 
-    // Calling Data tab state -- one row per SC (from `login`, admin/user role
-    // excluded), always scoped to the current week (Monday 00:00 -> now), no
-    // date/SC filters since the whole point is "everyone's current-week
-    // snapshot at a glance". Non-admins only ever see their own row (or none,
-    // if their name isn't a known SC).
     const [leadsReportRows, setLeadsReportRows] = useState([]);
     const [enquiriesReportRows, setEnquiriesReportRows] = useState([]);
     const [scNames, setScNames] = useState([]);
-    // Empty = default window (current week, per task.txt). Setting either
-    // date switches this tab's queries over to that custom range instead --
-    // fetched server-side (not client-filtered from a full-table pull), so
-    // picking a range doesn't cost more than the default view does.
     const [callingFilters, setCallingFilters] = useState({ startDate: "", endDate: "" });
 
-    // FOS report state -- two sections (Leads, Enquiries), one row per
-    // FOS_RECEIVERS member per section, mirroring the SC Pipeline tab's
-    // layout. null = not loaded yet (or fetch failed); [] = loaded, empty.
     const [fosTableData, setFosTableData] = useState({ leads: null, enquiries: null });
     // Surfaced in the UI if the fetch throws, same convention as SC Pipeline.
     const [fosError, setFosError] = useState(null);
 
-    // SC Pipeline state -- no filters, same "always this week" convention as
-    // Calling Data: Geeta/Priya/Nikita are broken out by category (CRR /
-    // NBD_CRR, plus a team TOTAL per category); Ganga/Chahat get one column
-    // each, scoped to their NBD-category work only (per confirmed template).
     const [scPipelineData, setScPipelineData] = useState({ leads: null, enquiries: null });
-    // Surfaced in the UI if the fetch throws -- previously only logged to
-    // console, so a real failure looked identical to "still loading": a
-    // blank page with zero feedback either way.
     const [scPipelineError, setScPipelineError] = useState(null);
-    // Empty = default (this-week window for Enquiry-Value/Orders/Bill-Value,
-    // rolling 60 days for Pipeline Value, per task.txt#26-33). Setting either
-    // date collapses BOTH of those windows onto the same custom range instead.
     const [scPipelineFilters, setScPipelineFilters] = useState({ startDate: "", endDate: "" });
 
     const [fosFilters, setFosFilters] = useState({
@@ -655,11 +633,6 @@ function Report() {
         }
     }, [activeTab, isAdmin, getUsernamesToFilter, scNames, callingFilters]);
 
-    // Fetch FOS Data -- two sections (Leads, Enquiries), one row per
-    // FOS_RECEIVERS member per section. Default window: last Monday 00:00
-    // -> now for enquiries/orders columns, rolling 60 days for Pipeline
-    // (same convention as SC Pipeline); setting either filter date collapses
-    // BOTH windows onto that one custom range instead.
     const fetchFosMetrics = useCallback(async () => {
         if (activeTab !== "fos") return;
         setIsLoading(true);
@@ -678,11 +651,6 @@ function Report() {
                 ? (fosFilters.endDate ? new Date(getEndDateWithTime(fosFilters.endDate)) : now)
                 : now;
 
-            // Widest bound actually needed server-side, same reasoning as SC
-            // Pipeline: default mode still needs the full 60-day lookback for
-            // Pipeline even though the other columns only need this week;
-            // custom mode needs exactly the chosen range since both windows
-            // collapse onto it.
             const fetchStart = hasCustomRange ? rangeStart : defaultSixtyDaysAgo;
             const fetchEnd = hasCustomRange ? rangeEnd : now;
             const fetchStartISO = fetchStart.toISOString();
@@ -791,12 +759,6 @@ function Report() {
         }
     }, [fosFilters, activeTab]);
 
-    // Fetch SC Pipeline Metrics
-    // "Category" = sales_type, normalized -- the raw data has inconsistent
-    // spacing/underscores ("NBD CRR" vs "NBD_CRR" vs "NBD " with a trailing
-    // space all meaning the same thing) that need collapsing before grouping.
-    // Values outside these three (Direct Enquiry, NBD DM, blank) don't fit
-    // any of the report's target categories and are simply excluded.
     const normalizeCategory = (rawSalesType) => {
         const s = String(rawSalesType || "").trim().toUpperCase().replace(/[\s-]+/g, "_");
         if (s === "NBD_CRR") return "NBD_CRR";
@@ -804,13 +766,6 @@ function Report() {
         if (s === "NBD") return "NBD";
         return null;
     };
-
-    // Geeta/Priya/Nikita are broken out by category (CRR / NBD_CRR) with a
-    // team TOTAL per category; Ganga/Chahat get a single column each,
-    // scoped to their NBD-category work only -- per the confirmed template,
-    // this deliberately excludes any CRR/NBD_CRR activity Ganga/Chahat have
-    // (Ganga in particular has substantial real CRR volume) from this
-    // specific report, it is not a data bug.
     const SC_PIPELINE_MULTI_SCS = ["GEETA", "PRIYA", "NIKITA"];
     const SC_PIPELINE_NBD_ONLY_SCS = ["GANGA", "CHAHAT"];
 
@@ -819,18 +774,6 @@ function Report() {
         setIsLoading(true);
         setScPipelineError(null);
         try {
-            // Default (no filter): task.txt's two windows apply as-is --
-            // this-week for Enquiry-Value/Orders/Bill-Value, rolling 60 days
-            // for Pipeline Value. Setting either filter date collapses BOTH
-            // onto that same custom range instead (confirmed behaviour), and
-            // -- critically for performance -- the fetch below is bounded to
-            // exactly the widest window actually needed rather than pulling
-            // the entire table: previously this fetched all ~26k tracker
-            // rows/~8k enquiries unconditionally (42s, later 15-16s even
-            // parallelized); the last-60-days default alone cuts that to
-            // ~1.3k enquiries / ~4k tracker rows -- the same reduction a
-            // custom range gets automatically since it's now a real
-            // server-side filter, not a client-side one.
             const monday = getMondayStart();
             const now = new Date();
             const defaultSixtyDaysAgo = new Date(now);
@@ -994,16 +937,9 @@ function Report() {
         }
     }, [fetchCallingDataReport, fetchFosMetrics, fetchScPipelineMetrics, activeTab]);
 
-
-
-
-
-
-
-
     return (
         <div className="min-h-screen bg-slate-50">
-            <div className="container mx-auto py-6 px-4 sm:px-6 lg:px-8 max-w-[1600px]">
+            <div className="container mx-auto max-w-[1600px]">
                 {/* Header */}
                 <div className="mb-5">
                     <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Reports</h1>

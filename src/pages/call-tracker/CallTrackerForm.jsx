@@ -243,10 +243,10 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
           if (data) {
             const compName = data.Company_Name || data.company_name || "";
             setLeadSource(data.Lead_Source || data.lead_source || "")
-            setScName(data.sc_name || data.SC_Name || data.handle_person || data.salesperson_name || "")
+            setScName(data.sc_name || data.SC_Name || "")
             setCompanyName(compName)
             setPhoneNumber(data.Phone_Number || data.phone_number || "")
-            setSalesPersonName(data.person_name || data.Person_Name || data.client_name || data.Salesperson_Name || data.salesperson_name || "")
+            setSalesPersonName(data.person_name || data.Person_Name || data.client_name || "")
 
             let billingAddr = data.Location || data.location || "";
             if (compName) {
