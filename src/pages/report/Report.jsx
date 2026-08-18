@@ -64,26 +64,106 @@ async function fetchAllRows(buildQuery) {
     return { data: allRows, error: lastError };
 }
 
-// FOS Team Members List
-const FOS_RECEIVERS = [
-    "PRANAV VINAYAKRAO BHOGAWAR",
-    "RANJAN KUMAR PRUSTY",
-    "SAMIRAN RAJBONGSHI",
-    "ROSHAN DEWANGAN",
-    "TUSHAR ATRAM",
-    "SUBHRAJIT BEHERA",
-    "MANOSH ROY CHOUDHURY",
-    "AMAN JHA"
-];
+// Master "who shows up on this report tab" lists are curated on the Report
+// Persons master page (Master > Report Persons) rather than derived from
+// whatever raw values happen to appear in the data -- see fetchCallingPersons
+// / fetchScPipelinePersons / fetchFosPersons below. All 3 reuse the existing
+// lto_dropdown table (category/value pairs), one category per tab.
+const REPORT_PERSON_CATEGORY = {
+    CALLING: "report_person_calling",
+    SC_PIPELINE: "report_person_sc_pipeline",
+    FOS: "report_person_fos",
+};
 
 const formatMetricValue = (value, format) => {
-    // Total Visit is not wired up yet (pending a separate sheet source) --
-    // rendered as a placeholder rather than a misleading "0".
     if (format === "blank") return "--";
+    // Visit counts: null means the sheet fetch itself failed (shown as "--",
+    // distinct from a real 0 -- a person can genuinely have zero visits
+    // this week, which shouldn't look the same as "couldn't load this").
+    if (format === "visitCount") return (value === null || value === undefined) ? "--" : value;
     if (format === "currency") return (value || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
     if (format === "percent") return `${(value || 0).toFixed(1)}%`;
     return value || 0;
 };
+
+// ---- Field Sales "Data" sheet (Total Visit count) -----------------------
+// Read-only source: Code.gs's doGet on the "Data" sheet, columns A-F =
+// Timestamp / SN / Sale Person Name / Date and Time to Visit /
+// City-Location of Visit / Type of Visit, per task.txt. This is a plain
+// GET against the Apps Script webapp (VITE_SALES_SHEET) -- Apps Script web
+// apps allow cross-origin GET by default, so no proxy/no-cors workaround
+// is needed here (unlike the POST sync in sheetSync.js).
+const SALES_SHEET_URL = import.meta.env.VITE_SALES_SHEET;
+
+const normalizeName = (n) => String(n || "").trim().toUpperCase();
+
+// Column F is free text entered via the field app -- normalize casing so
+// "new f2f" / "New F2F " etc. all land in the right bucket instead of
+// silently falling through unmatched.
+const normalizeVisitType = (raw) => {
+    const s = String(raw || "").trim().toLowerCase();
+    if (s === "new f2f") return "newF2F";
+    if (s === "existing f2f") return "existingF2F";
+    return null;
+};
+
+// Sheet timestamps come back either as ISO strings (Apps Script serializes
+// real Date cells that way via JSON.stringify) or as "YYYY-MM-DD HH:mm:ss"
+// plain text (seen in the raw sheet for some rows) -- the latter isn't
+// reliably parsed by `new Date()` in every browser, so normalize the
+// separator before parsing.
+const parseSheetTimestamp = (raw) => {
+    if (!raw) return null;
+    if (raw instanceof Date) return isNaN(raw.getTime()) ? null : raw;
+    const s = String(raw).trim();
+    if (!s) return null;
+    const normalized = s.includes("T") ? s : s.replace(" ", "T");
+    const d = new Date(normalized);
+    return isNaN(d.getTime()) ? null : d;
+};
+
+// Counts New F2F / Existing F2F rows per Sale Person Name whose Timestamp
+// falls in [rangeStart, rangeEnd] -- per task.txt this window is always
+// "last Monday through today", independent of whatever date filter the FOS
+// tab itself has applied. Returns a map keyed by normalized (trim+upper)
+// name; throws on any fetch/parse failure so the caller can distinguish
+// "genuinely zero visits" from "couldn't load the sheet".
+async function fetchFosVisitCounts(rangeStart, rangeEnd) {
+    if (!SALES_SHEET_URL) throw new Error("VITE_SALES_SHEET is not configured");
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    let res;
+    try {
+        res = await fetch(SALES_SHEET_URL, { signal: controller.signal });
+    } finally {
+        clearTimeout(timeoutId);
+    }
+    if (!res.ok) throw new Error(`Sheet request failed (${res.status})`);
+
+    const json = await res.json();
+    if (!json.success) throw new Error(json.error || "Sheet request failed");
+
+    const allRows = json.data || [];
+    // Header row is wherever column A reads "Timestamp" -- avoids hardcoding
+    // a row index that would break if a banner row is added/removed above it.
+    const headerIdx = allRows.findIndex(r => normalizeName(r?.[0]) === "TIMESTAMP");
+    const dataRows = headerIdx === -1 ? [] : allRows.slice(headerIdx + 1);
+
+    const counts = {};
+    dataRows.forEach(row => {
+        const timestamp = parseSheetTimestamp(row[0]);
+        if (!timestamp || timestamp < rangeStart || timestamp > rangeEnd) return;
+
+        const name = normalizeName(row[2]);
+        const visitType = normalizeVisitType(row[5]);
+        if (!name || !visitType) return;
+
+        if (!counts[name]) counts[name] = { newF2F: 0, existingF2F: 0 };
+        counts[name][visitType]++;
+    });
+    return counts;
+}
 
 // Green/amber/rose thresholds for at-a-glance conversion health -- applied
 // to both % metric cells, consistent across the whole page.
@@ -248,7 +328,8 @@ function PipelineTable({ title, section, visibleLabels, isLoading }) {
 }
 
 const FOS_METRIC_COLUMNS = [
-    { key: "totalVisit", label: "Total Visit", format: "blank" },
+    { key: "newF2FVisits", label: "New F2F Visits", format: "visitCount" },
+    { key: "existingF2FVisits", label: "Existing F2F Visits", format: "visitCount" },
     { key: "enquiries", label: "No. of Enquiries", format: "int" },
     { key: "enquiryValue", label: "Total Enquiry Value", format: "currency" },
     { key: "ordersConverted", label: "Orders Converted", format: "int" },
@@ -341,16 +422,38 @@ function Report() {
 
     const [leadsReportRows, setLeadsReportRows] = useState([]);
     const [enquiriesReportRows, setEnquiriesReportRows] = useState([]);
-    const [scNames, setScNames] = useState([]);
+    // Master "Person" list for the Calling Data tab -- curated on the
+    // Report Persons master page (Master > Report Persons; lto_dropdown,
+    // category "report_person_calling"), not derived from whatever raw
+    // enquiry_assign_to_person values happen to appear in the data.
+    // Deliberately NOT sourced from `login` -- a person can be curated here
+    // without having a login account.
+    const [callingPersons, setCallingPersons] = useState([]);
     const [callingFilters, setCallingFilters] = useState({ startDate: "", endDate: "" });
 
     const [fosTableData, setFosTableData] = useState({ leads: null, enquiries: null });
     // Surfaced in the UI if the fetch throws, same convention as SC Pipeline.
     const [fosError, setFosError] = useState(null);
+    // Separate error slot for the Total Visit count sheet fetch -- a failure
+    // there shouldn't blank out the rest of the (Supabase-backed) FOS table.
+    const [fosVisitError, setFosVisitError] = useState(null);
 
     const [scPipelineData, setScPipelineData] = useState({ leads: null, enquiries: null });
     const [scPipelineError, setScPipelineError] = useState(null);
     const [scPipelineFilters, setScPipelineFilters] = useState({ startDate: "", endDate: "" });
+    // Master SC list for the SC Pipeline tab -- WHO gets a column comes from
+    // the curated master list (lto_dropdown, category
+    // "report_person_sc_pipeline"); the split into `multi` (CRR/NBD_CRR
+    // groups + TOTAL) vs `nbdOnly` (flat NBD-only column, no TOTAL) -- same
+    // two-tier shape the old hardcoded SC_PIPELINE_MULTI_SCS/
+    // SC_PIPELINE_NBD_ONLY_SCS arrays had -- is still derived from each
+    // curated person's actual sales_type records.
+    const [scPipelinePersons, setScPipelinePersons] = useState({ multi: [], nbdOnly: [] });
+
+    // Master FOS receiver list -- curated on the Report Persons master page
+    // (lto_dropdown, category "report_person_fos"); replaces the old
+    // hardcoded FOS_RECEIVERS array.
+    const [fosPersons, setFosPersons] = useState([]);
 
     const [fosFilters, setFosFilters] = useState({
         receiverName: "all",
@@ -366,26 +469,86 @@ function Report() {
         return `${date}T23:59:59`
     }
 
-    // Fetch unique SC names for the filter dropdown
-    const fetchSCNames = useCallback(async () => {
+    // Master "Person" list for the Calling Data tab -- curated on the
+    // Report Persons master page (Master > Report Persons), NOT derived
+    // from whatever raw enquiry_assign_to_person values happen to exist in
+    // the data (that showed every stray/typo'd value, including ones with
+    // zero real activity). Independent of `login` -- a person can be
+    // curated here without having a login account.
+    const fetchCallingPersons = useCallback(async () => {
         try {
-            const { data, error } = await supabase
-                .from("login")
-                .select("username")
-                .order("username", { ascending: true });
+            const { data, error } = await fetchAllRows(() =>
+                supabase.from("lto_dropdown").select("value").eq("category", REPORT_PERSON_CATEGORY.CALLING)
+            );
+            if (error) throw error;
 
-            if (error) {
-                console.error("Error fetching SC names from login:", error);
-                return;
-            }
-
-            const uniqueNames = (data || [])
-                .map(item => item.username)
-                .filter(Boolean)
-                .filter(name => name.toLowerCase() !== 'admin');
-            setScNames(uniqueNames);
+            const names = new Set();
+            (data || []).forEach(r => { if (r.value) names.add(r.value.trim()); });
+            setCallingPersons([...names].sort());
         } catch (error) {
-            console.error("Error fetching SC names:", error);
+            console.error("Error fetching calling data persons:", error);
+        }
+    }, []);
+
+    // Master SC list for the SC Pipeline tab -- see scPipelinePersons above.
+    // The curated master list (report_person_sc_pipeline) decides WHICH
+    // people get a column at all; the multi/nbd-only tier split is still
+    // derived from their actual sales_type records, same as before, just
+    // restricted to curated names.
+    const fetchScPipelinePersons = useCallback(async () => {
+        try {
+            const [{ data: masterData, error: masterErr }, { data: leadsData, error: leadsErr }, { data: enqData, error: enqErr }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_dropdown").select("value").eq("category", REPORT_PERSON_CATEGORY.SC_PIPELINE)),
+                fetchAllRows(() => supabase.from("lto_leads").select("sc_name, sales_type")),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("sales_coordinator_name, sales_type")),
+            ]);
+            if (masterErr) throw masterErr;
+            if (leadsErr) throw leadsErr;
+            if (enqErr) throw enqErr;
+
+            const masterNames = new Set();
+            (masterData || []).forEach(r => { if (r.value) masterNames.add(r.value.trim()); });
+
+            const multi = new Set();
+            const nbdOnly = new Set();
+            const classify = (name, salesType) => {
+                const trimmed = name?.trim();
+                if (!trimmed || !masterNames.has(trimmed)) return;
+                const category = normalizeCategory(salesType);
+                if (category === "CRR" || category === "NBD_CRR") multi.add(trimmed);
+                if (category === "NBD") nbdOnly.add(trimmed);
+            };
+            (leadsData || []).forEach(l => classify(l.sc_name, l.sales_type));
+            (enqData || []).forEach(e => classify(e.sales_coordinator_name, e.sales_type));
+
+            // A curated person with literally zero matching records yet
+            // (e.g. newly added, hasn't handled anything of this kind) would
+            // otherwise vanish from the table entirely -- default them into
+            // the CRR/NBD_CRR ("multi") group so they still get a column
+            // (all zeros) instead of silently disappearing.
+            masterNames.forEach(name => {
+                if (!multi.has(name) && !nbdOnly.has(name)) multi.add(name);
+            });
+
+            setScPipelinePersons({ multi: [...multi].sort(), nbdOnly: [...nbdOnly].sort() });
+        } catch (error) {
+            console.error("Error fetching SC Pipeline persons:", error);
+        }
+    }, []);
+
+    // Master FOS receiver list -- see fosPersons above.
+    const fetchFosPersons = useCallback(async () => {
+        try {
+            const { data, error } = await fetchAllRows(() =>
+                supabase.from("lto_dropdown").select("value").eq("category", REPORT_PERSON_CATEGORY.FOS)
+            );
+            if (error) throw error;
+
+            const names = new Set();
+            (data || []).forEach(r => { if (r.value) names.add(r.value.trim()); });
+            setFosPersons([...names].sort());
+        } catch (error) {
+            console.error("Error fetching FOS persons:", error);
         }
     }, []);
 
@@ -431,13 +594,15 @@ function Report() {
                 return !isNaN(d.getTime()) && d >= rangeStart && d <= rangeEnd;
             };
 
-            // Visible rows: admin sees every known SC; a non-admin sees only
-            // their own row (by exact name match against `login`), or none
-            // at all if their name isn't a recognized SC.
-            const allowedNames = isAdmin() ? scNames : (getUsernamesToFilter() || []);
-            const visibleScNames = scNames.filter(name => allowedNames.includes(name));
+            // Visible rows: admin sees every known Person; a non-admin sees
+            // only a row whose Person name matches their login username, or
+            // none at all if their username never appears as an assigned
+            // person (Person values aren't login-linked, unlike the old SC
+            // Name list).
+            const allowedNames = isAdmin() ? callingPersons : (getUsernamesToFilter() || []);
+            const visiblePersons = callingPersons.filter(name => allowedNames.includes(name));
 
-            if (visibleScNames.length === 0) {
+            if (visiblePersons.length === 0) {
                 setLeadsReportRows([]);
                 setEnquiriesReportRows([]);
                 return;
@@ -445,10 +610,12 @@ function Report() {
 
             // ---- Base tables (unbounded -- a quotation created this week can
             // reference a lead/enquiry created any time in the past, so the
-            // lead_no/enquiry_no -> sc_name lookup needs the full table) ----
+            // lead_no/enquiry_no -> assigned person lookup needs the full
+            // table). lto_leads has no assign-to-person column of its own --
+            // see the allLeadCalls lookup below for how leads get attributed.
             const [{ data: allLeads }, { data: allEnquiries }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_leads").select("id, lead_no, sc_name, created_at")),
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, sales_coordinator_name, enquiry_approach, created_at")),
+                fetchAllRows(() => supabase.from("lto_leads").select("id, lead_no, created_at")),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, enquiry_assign_to_person, enquiry_approach, created_at")),
             ]);
 
             // ---- This week's (or the filtered range's) call-tracker rows
@@ -456,10 +623,31 @@ function Report() {
             // direct enquiries) ----
             const { data: weekCalls } = await fetchAllRows(() =>
                 supabase.from("lto_call_tracker_for_leads")
-                    .select("lead_id, sc_name, created_at, enquiry_approach")
+                    .select("lead_id, enquiry_assign_to_person, created_at, enquiry_approach")
                     .gte("created_at", rangeStartISO)
                     .lte("created_at", rangeEndISO)
             );
+
+            // ---- All-time call-tracker rows, purely to determine which
+            // Person "owns" each lead. enquiry_assign_to_person only lives on
+            // lto_call_tracker_for_leads, and only gets set once a call is
+            // logged with "Enquiry Received = yes" -- a lead never called
+            // (or called with any other outcome) has no Person to attribute
+            // to, and won't count toward anyone below. A lead created this
+            // week can have been assigned at any point up to now, so this
+            // lookup is intentionally unbounded; the most recent assignment
+            // wins when a lead has more than one such row.
+            const { data: allLeadCalls } = await fetchAllRows(() =>
+                supabase.from("lto_call_tracker_for_leads").select("lead_id, enquiry_assign_to_person, created_at")
+            );
+            const personByLeadId = new Map();
+            (allLeadCalls || []).forEach(c => {
+                if (!c.lead_id || !c.enquiry_assign_to_person) return;
+                const existing = personByLeadId.get(c.lead_id);
+                if (!existing || new Date(c.created_at) > new Date(existing.at)) {
+                    personByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, at: c.created_at });
+                }
+            });
 
             // ---- Full tracker history per lead, needed to determine
             // "currently pending" regardless of when that history was
@@ -517,24 +705,24 @@ function Report() {
                 });
             }
 
-            // ---- Lookups: lead_no / enquiry_no -> owning SC, for tying a
-            // quotation back to whichever SC's lead/enquiry it belongs to ----
-            const leadById = new Map();
-            const leadScByLeadNo = new Map();
+            // ---- Lookups: lead_no / enquiry_no -> assigned person, for
+            // tying a quotation back to whichever person's lead/enquiry it
+            // belongs to ----
+            const leadPersonByLeadNo = new Map();
             (allLeads || []).forEach(l => {
-                leadById.set(l.id, l);
-                if (l.lead_no) leadScByLeadNo.set(l.lead_no.trim().toUpperCase(), l.sc_name);
+                const person = personByLeadId.get(l.id)?.person;
+                if (l.lead_no && person) leadPersonByLeadNo.set(l.lead_no.trim().toUpperCase(), person);
             });
             const enquiryById = new Map();
-            const enquiryScByEnquiryNo = new Map();
+            const enquiryPersonByEnquiryNo = new Map();
             (allEnquiries || []).forEach(e => {
                 enquiryById.set(e.id, e);
-                if (e.enquiry_no) enquiryScByEnquiryNo.set(e.enquiry_no.trim().toUpperCase(), e.sales_coordinator_name);
+                if (e.enquiry_no) enquiryPersonByEnquiryNo.set(e.enquiry_no.trim().toUpperCase(), e.enquiry_assign_to_person);
             });
 
             // ==================== LEADS SECTION ====================
             const leadStats = {};
-            visibleScNames.forEach(name => {
+            visiblePersons.forEach(name => {
                 leadStats[name] = {
                     name, totalLeads: 0, calls: 0, convertedToEnquiry: 0,
                     quotations: 0, quotationAmount: 0, orderConverted: 0, incoming: 0, outgoing: 0,
@@ -543,56 +731,56 @@ function Report() {
 
             const callsByLeadId = new Map();
             (weekCalls || []).forEach(c => {
-                if (!c.lead_id) return;
-                if (!callsByLeadId.has(c.lead_id)) callsByLeadId.set(c.lead_id, { sc_name: c.sc_name, approaches: new Set() });
+                if (!c.lead_id || !c.enquiry_assign_to_person) return;
+                if (!callsByLeadId.has(c.lead_id)) callsByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, approaches: new Set() });
                 if (c.enquiry_approach) callsByLeadId.get(c.lead_id).approaches.add(String(c.enquiry_approach).trim().toUpperCase());
             });
 
             (allLeads || []).forEach(lead => {
                 if (!inThisWeek(lead.created_at)) return;
-                const sc = lead.sc_name;
-                if (!sc || !leadStats[sc]) return;
-                leadStats[sc].totalLeads++;
+                const person = personByLeadId.get(lead.id)?.person;
+                if (!person || !leadStats[person]) return;
+                leadStats[person].totalLeads++;
 
-                if (isPending(leadTrackersByLeadId.get(lead.id) || [])) leadStats[sc].convertedToEnquiry++;
+                if (isPending(leadTrackersByLeadId.get(lead.id) || [])) leadStats[person].convertedToEnquiry++;
 
                 const callEntry = callsByLeadId.get(lead.id);
                 if (callEntry) {
-                    if (callEntry.approaches.has("INCOMING")) leadStats[sc].incoming++;
-                    if (callEntry.approaches.has("OUTGOING")) leadStats[sc].outgoing++;
+                    if (callEntry.approaches.has("INCOMING")) leadStats[person].incoming++;
+                    if (callEntry.approaches.has("OUTGOING")) leadStats[person].outgoing++;
                 }
             });
 
             // No. of Calls: distinct leads (any creation date) called this
-            // week, credited to the call's own sc_name, max one per lead.
+            // week, credited to that call's own assigned person, max one per lead.
             callsByLeadId.forEach(entry => {
-                if (entry.sc_name && leadStats[entry.sc_name]) leadStats[entry.sc_name].calls++;
+                if (entry.person && leadStats[entry.person]) leadStats[entry.person].calls++;
             });
 
             // Order Converted: any lead (any creation date) whose order was
-            // marked received this week, credited to the lead's own SC.
+            // marked received this week, credited to that lead's assigned person.
             (weekLeadOrders || []).forEach(row => {
-                const lead = leadById.get(row.lead_id);
-                if (lead?.sc_name && leadStats[lead.sc_name]) leadStats[lead.sc_name].orderConverted++;
+                const person = personByLeadId.get(row.lead_id)?.person;
+                if (person && leadStats[person]) leadStats[person].orderConverted++;
             });
 
             // Quotations: root quotations created this week whose reference
-            // no. points at a lead (LD-...), credited to that lead's SC.
+            // no. points at a lead (LD-...), credited to that lead's assigned person.
             rootWeekQuotations.forEach(q => {
                 const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
                 if (!ref.startsWith("LD-")) return;
-                const sc = leadScByLeadNo.get(ref);
-                if (sc && leadStats[sc]) {
-                    leadStats[sc].quotations++;
-                    leadStats[sc].quotationAmount += quotationAmountByQId.get(q.id) || 0;
+                const person = leadPersonByLeadNo.get(ref);
+                if (person && leadStats[person]) {
+                    leadStats[person].quotations++;
+                    leadStats[person].quotationAmount += quotationAmountByQId.get(q.id) || 0;
                 }
             });
 
-            setLeadsReportRows(visibleScNames.map(name => leadStats[name]));
+            setLeadsReportRows(visiblePersons.map(name => leadStats[name]));
 
             // ==================== ENQUIRIES SECTION ====================
             const enquiryStats = {};
-            visibleScNames.forEach(name => {
+            visiblePersons.forEach(name => {
                 enquiryStats[name] = {
                     name, totalEnquiries: 0, quotations: 0, quotationAmount: 0,
                     orderConverted: 0, incoming: 0, outgoing: 0,
@@ -601,45 +789,59 @@ function Report() {
 
             (allEnquiries || []).forEach(e => {
                 if (!inThisWeek(e.created_at)) return;
-                const sc = e.sales_coordinator_name;
-                if (!sc || !enquiryStats[sc]) return;
-                enquiryStats[sc].totalEnquiries++;
+                const person = e.enquiry_assign_to_person;
+                if (!person || !enquiryStats[person]) return;
+                enquiryStats[person].totalEnquiries++;
                 const approach = String(e.enquiry_approach || "").trim().toUpperCase();
-                if (approach === "INCOMING") enquiryStats[sc].incoming++;
-                if (approach === "OUTGOING") enquiryStats[sc].outgoing++;
+                if (approach === "INCOMING") enquiryStats[person].incoming++;
+                if (approach === "OUTGOING") enquiryStats[person].outgoing++;
             });
 
             (weekEnquiryOrders || []).forEach(row => {
                 const e = enquiryById.get(row.enquiry_id);
-                if (e?.sales_coordinator_name && enquiryStats[e.sales_coordinator_name]) enquiryStats[e.sales_coordinator_name].orderConverted++;
+                if (e?.enquiry_assign_to_person && enquiryStats[e.enquiry_assign_to_person]) enquiryStats[e.enquiry_assign_to_person].orderConverted++;
             });
 
             rootWeekQuotations.forEach(q => {
                 const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
                 if (!ref.startsWith("EN-")) return;
-                const sc = enquiryScByEnquiryNo.get(ref);
-                if (sc && enquiryStats[sc]) {
-                    enquiryStats[sc].quotations++;
-                    enquiryStats[sc].quotationAmount += quotationAmountByQId.get(q.id) || 0;
+                const person = enquiryPersonByEnquiryNo.get(ref);
+                if (person && enquiryStats[person]) {
+                    enquiryStats[person].quotations++;
+                    enquiryStats[person].quotationAmount += quotationAmountByQId.get(q.id) || 0;
                 }
             });
 
-            setEnquiriesReportRows(visibleScNames.map(name => enquiryStats[name]));
+            setEnquiriesReportRows(visiblePersons.map(name => enquiryStats[name]));
 
         } catch (error) {
             console.error("Error fetching calling data report:", error);
         } finally {
             setIsLoading(false);
         }
-    }, [activeTab, isAdmin, getUsernamesToFilter, scNames, callingFilters]);
+    }, [activeTab, isAdmin, getUsernamesToFilter, callingPersons, callingFilters]);
 
     const fetchFosMetrics = useCallback(async () => {
         if (activeTab !== "fos") return;
         setIsLoading(true);
         setFosError(null);
+        setFosVisitError(null);
         try {
             const monday = getMondayStart();
             const now = new Date();
+
+            // Kicked off up front so it overlaps with the Supabase fetches
+            // below rather than adding its own latency on top. Total Visit
+            // count is always "last Monday through today" per task.txt --
+            // deliberately NOT the fosFilters custom range/60-day pipeline
+            // windows used by the rest of this tab's metrics.
+            const visitCountsPromise = fetchFosVisitCounts(monday, now)
+                .then(counts => { setFosVisitError(null); return counts; })
+                .catch(err => {
+                    console.error("FOS visit-count fetch error:", err);
+                    setFosVisitError(err?.message || "Failed to load Total Visit count.");
+                    return null; // null (not {}) so it renders "--", not "0"
+                });
             const defaultSixtyDaysAgo = new Date(now);
             defaultSixtyDaysAgo.setDate(defaultSixtyDaysAgo.getDate() - 60);
             const hasCustomRange = !!(fosFilters.startDate || fosFilters.endDate);
@@ -703,12 +905,24 @@ function Report() {
 
                 return {
                     name,
-                    totalVisit: null, // pending -- to be wired to another sheet later
                     enquiries, enquiryValue, ordersConverted, orderConvertedValue,
                     avgTicket: ordersConverted > 0 ? orderConvertedValue / ordersConverted : 0,
                     pipelineCount, pipelineValue,
                 };
             };
+
+            // visitCounts is keyed by normalized (trim+upper) name; null
+            // means the sheet fetch failed, {} means it loaded but had no
+            // matching rows for anyone in-range -- both are handled by
+            // formatMetricValue's "visitCount" case ("--" vs a real 0/1/2/...
+            const withVisitCounts = (rows) => rows.map(r => {
+                const c = visitCounts ? visitCounts[normalizeName(r.name)] : null;
+                return {
+                    ...r,
+                    newF2FVisits: visitCounts ? (c?.newF2F ?? 0) : null,
+                    existingF2FVisits: visitCounts ? (c?.existingF2F ?? 0) : null,
+                };
+            });
 
             // ---- Leads section ----
             const [{ data: allLeads, error: leadsErr }, { data: allLeadTrackers, error: leadTrackersErr }] = await Promise.all([
@@ -727,7 +941,7 @@ function Report() {
                 leadTrackerByLeadId.get(t.lead_id).push(t);
             });
             const leadRecords = (allLeads || []).map(l => ({ ...l, _receiverName: l.lead_receiver_name }));
-            const leadsRows = FOS_RECEIVERS.map(name => computePersonMetrics(name, leadRecords, leadTrackerByLeadId));
+            const leadsRows = fosPersons.map(name => computePersonMetrics(name, leadRecords, leadTrackerByLeadId));
 
             // ---- Enquiries section ----
             const [{ data: allEnquiries, error: enqErr }, { data: allEnquiryTrackers, error: enqTrackersErr }] = await Promise.all([
@@ -746,9 +960,10 @@ function Report() {
                 enquiryTrackerByEnquiryId.get(t.enquiry_id).push(t);
             });
             const enquiryRecords = (allEnquiries || []).map(e => ({ ...e, _receiverName: e.enquiry_receiver_name }));
-            const enquiriesRows = FOS_RECEIVERS.map(name => computePersonMetrics(name, enquiryRecords, enquiryTrackerByEnquiryId));
+            const enquiriesRows = fosPersons.map(name => computePersonMetrics(name, enquiryRecords, enquiryTrackerByEnquiryId));
 
-            setFosTableData({ leads: leadsRows, enquiries: enquiriesRows });
+            const visitCounts = await visitCountsPromise;
+            setFosTableData({ leads: withVisitCounts(leadsRows), enquiries: withVisitCounts(enquiriesRows) });
 
         } catch (err) {
             console.error("FOS fetch error:", err);
@@ -757,7 +972,7 @@ function Report() {
         } finally {
             setIsLoading(false);
         }
-    }, [fosFilters, activeTab]);
+    }, [fosFilters, activeTab, fosPersons]);
 
     const normalizeCategory = (rawSalesType) => {
         const s = String(rawSalesType || "").trim().toUpperCase().replace(/[\s-]+/g, "_");
@@ -766,9 +981,6 @@ function Report() {
         if (s === "NBD") return "NBD";
         return null;
     };
-    const SC_PIPELINE_MULTI_SCS = ["GEETA", "PRIYA", "NIKITA"];
-    const SC_PIPELINE_NBD_ONLY_SCS = ["GANGA", "CHAHAT"];
-
     const fetchScPipelineMetrics = useCallback(async () => {
         if (activeTab !== "sc_pipeline") return;
         setIsLoading(true);
@@ -850,21 +1062,24 @@ function Report() {
                 };
             };
 
-            // Builds the full column set (2 category groups x [3 SCs + TOTAL],
-            // plus 2 NBD-only single columns) for either leads or enquiries.
-            const buildSection = (records, trackerByRecordId, scField) => {
+            // Builds the full column set (2 category groups x [multi SCs +
+            // TOTAL], plus the NBD-only single columns) for either leads or
+            // enquiries. `multiScs`/`nbdOnlyScs` come from scPipelinePersons
+            // (data-driven -- see fetchScPipelinePersons) rather than a fixed
+            // list, but the two-tier shape itself is unchanged.
+            const buildSection = (records, trackerByRecordId, scField, multiScs, nbdOnlyScs) => {
                 const categoryGroups = ["CRR", "NBD_CRR"].map(category => {
-                    const perSc = SC_PIPELINE_MULTI_SCS.map(sc => ({
+                    const perSc = multiScs.map(sc => ({
                         key: `${sc}_${category}`, label: sc,
                         metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === category), trackerByRecordId),
                     }));
-                    const totalRecords = records.filter(r => SC_PIPELINE_MULTI_SCS.includes(r[scField]) && normalizeCategory(r.sales_type) === category);
+                    const totalRecords = records.filter(r => multiScs.includes(r[scField]) && normalizeCategory(r.sales_type) === category);
                     return {
                         category,
                         columns: [...perSc, { key: `TOTAL_${category}`, label: "TOTAL", isTotal: true, metrics: computeGroupMetrics(totalRecords, trackerByRecordId) }],
                     };
                 });
-                const nbdColumns = SC_PIPELINE_NBD_ONLY_SCS.map(sc => ({
+                const nbdColumns = nbdOnlyScs.map(sc => ({
                     key: sc, label: sc,
                     metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === "NBD"), trackerByRecordId),
                 }));
@@ -893,7 +1108,7 @@ function Report() {
                 if (!leadTrackerByLeadId.has(t.lead_id)) leadTrackerByLeadId.set(t.lead_id, []);
                 leadTrackerByLeadId.get(t.lead_id).push(t);
             });
-            const leadsSection = buildSection(allLeads || [], leadTrackerByLeadId, "sc_name");
+            const leadsSection = buildSection(allLeads || [], leadTrackerByLeadId, "sc_name", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
 
             // ---- Enquiries ---- (lto_enquiries has NO sc_name column --
             // the real field is sales_coordinator_name)
@@ -909,7 +1124,7 @@ function Report() {
                 if (!enquiryTrackerByEnquiryId.has(t.enquiry_id)) enquiryTrackerByEnquiryId.set(t.enquiry_id, []);
                 enquiryTrackerByEnquiryId.get(t.enquiry_id).push(t);
             });
-            const enquiriesSection = buildSection(allEnquiries || [], enquiryTrackerByEnquiryId, "sales_coordinator_name");
+            const enquiriesSection = buildSection(allEnquiries || [], enquiryTrackerByEnquiryId, "sales_coordinator_name", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
 
             setScPipelineData({ leads: leadsSection, enquiries: enquiriesSection });
 
@@ -919,12 +1134,14 @@ function Report() {
         } finally {
             setIsLoading(false);
         }
-    }, [activeTab, scPipelineFilters]);
+    }, [activeTab, scPipelineFilters, scPipelinePersons]);
 
 
     useEffect(() => {
-        fetchSCNames();
-    }, [fetchSCNames]);
+        fetchCallingPersons();
+        fetchScPipelinePersons();
+        fetchFosPersons();
+    }, [fetchCallingPersons, fetchScPipelinePersons, fetchFosPersons]);
 
 
     useEffect(() => {
@@ -986,8 +1203,8 @@ function Report() {
                     <>
                         <p className="text-sm text-gray-500 mb-3 flex items-center gap-2">
                             {callingFilters.startDate || callingFilters.endDate
-                                ? "Custom date range -- one row per Sales Coordinator."
-                                : "Current week (Monday through today) -- one row per Sales Coordinator."}
+                                ? "Custom date range -- one row per Person."
+                                : "Current week (Monday through today) -- one row per Person."}
                             {!isAdmin() && " You're seeing only your own row."}
                             {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
                         </p>
@@ -1009,7 +1226,7 @@ function Report() {
                                     <table className="min-w-full divide-y divide-gray-100">
                                         <thead className="bg-gray-50/80">
                                             <tr>
-                                                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">SC Name</th>
+                                                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Person</th>
                                                 <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Leads</th>
                                                 <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">No. of Calls</th>
                                                 <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Converted to Enquiries</th>
@@ -1056,7 +1273,7 @@ function Report() {
                                     <table className="min-w-full divide-y divide-gray-100">
                                         <thead className="bg-gray-50/80">
                                             <tr>
-                                                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">SC Name</th>
+                                                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Person</th>
                                                 <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Enquiries</th>
                                                 <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Quotations</th>
                                                 <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Quotation Amount</th>
@@ -1096,12 +1313,15 @@ function Report() {
                 {/* FOS REPORT TAB CONTENT */}
                 {activeTab === "fos" && (
                     <>
-                        <p className="text-sm text-gray-500 mb-3 flex items-center gap-2">
+                        <p className="text-sm text-gray-500 mb-1 flex items-center gap-2">
                             {fosFilters.startDate || fosFilters.endDate
                                 ? "Custom date range applies to every metric below, including Pipeline."
                                 : "This week (Monday through today) for Enquiries/Orders columns; Pipeline looks back 60 days at non-converted work."}
                             {!isAdmin() && " You're seeing only your own row."}
                             {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
+                        </p>
+                        <p className="text-xs text-gray-400 mb-3">
+                            New/Existing F2F Visits always cover last Monday through today, regardless of the date filter below.
                         </p>
 
                         {isAdmin() && (
@@ -1113,7 +1333,7 @@ function Report() {
                                     onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
                                 >
                                     <option value="all">All Receivers</option>
-                                    {FOS_RECEIVERS.map(name => (
+                                    {fosPersons.map(name => (
                                         <option key={name} value={name}>{name}</option>
                                     ))}
                                 </select>
@@ -1132,6 +1352,12 @@ function Report() {
                         {fosError && (
                             <div className="mb-5 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-700">
                                 Couldn't load FOS report data: {fosError}
+                            </div>
+                        )}
+
+                        {fosVisitError && (
+                            <div className="mb-5 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-700">
+                                Couldn't load Total Visit count from the sheet: {fosVisitError}
                             </div>
                         )}
 

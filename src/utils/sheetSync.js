@@ -17,6 +17,7 @@
 // already been shown to the user, and never adds latency to the save path.
 
 import supabase from "./supabase";
+import { mergeRowsChronologically } from "./mergeTrackerRows";
 
 const MAX_ITEM_SLOTS = 10;
 
@@ -188,15 +189,7 @@ export const syncEnquiryToSheet = async ({ enquiryNo, trackerId }) => {
     // field, so e.g. quotation fields set at "Make Quotation" survive into
     // the merged view even though the "Order Status" row that actually
     // triggers this sync never touched them.
-    const tracker = trackerRows.reduce((merged, current) => {
-      Object.keys(current).forEach((key) => {
-        const value = current[key];
-        if (value !== null && value !== undefined && value !== "") {
-          merged[key] = value;
-        }
-      });
-      return merged;
-    }, {});
+    const tracker = mergeRowsChronologically(trackerRows);
 
     // trackerId (passed from a History-tab edit) pins which row must be
     // the one that actually qualifies this sync — the merge above still

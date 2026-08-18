@@ -18,21 +18,11 @@
 // "Delay1" -- opposite of what those numbers might suggest at a glance.
 
 import supabase from "./supabase";
+import { mergeRowsChronologically } from "./mergeTrackerRows";
 
 const MAX_ITEM_SLOTS = 5;
 
 const toYesNo = (value) => (value ? "Yes" : "No");
-
-const mergeRowsChronologically = (rows) =>
-  rows.reduce((merged, current) => {
-    Object.keys(current).forEach((key) => {
-      const value = current[key];
-      if (value !== null && value !== undefined && value !== "") {
-        merged[key] = value;
-      }
-    });
-    return merged;
-  }, {});
 
 const buildItemColumns = (items) => {
   const columns = {};

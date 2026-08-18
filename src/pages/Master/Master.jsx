@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Building2, Users, UserCheck, Layers, MapPin, Package, Clock, Database, ChevronRight } from "lucide-react";
+import { Building2, Users, UserCheck, Layers, MapPin, Package, Clock, Database, ChevronRight, UserCog } from "lucide-react";
 import supabase from "../../utils/supabase";
 import { AuthContext } from "../../App";
 
@@ -12,6 +12,7 @@ import Dropdowns from "./Dropdowns";
 import Consignors from "./Consignors";
 import Items from "./Items";
 import TatConfig from "./tatConfig";
+import ReportPersons from "./ReportPersons";
 
 const masterNavItems = [
   {
@@ -62,6 +63,16 @@ const masterNavItems = [
     icon: Clock,
     table: "lto_tat_config",
     description: "Turnaround time SLAs and alerts setup"
+  },
+  {
+    id: "report-persons",
+    label: "Report Persons",
+    icon: UserCog,
+    // Shares lto_dropdown with "Dropdowns" above (category = report_person_*),
+    // so this count reflects the whole dropdown table, not just report
+    // persons -- a minor cosmetic imprecision, not worth a separate table for.
+    table: "lto_dropdown",
+    description: "Manage who appears on the Calling Data, SC Pipeline, and FOS report tabs"
   },
 ];
 
@@ -156,6 +167,8 @@ export default function Master() {
       case "tat":
       case "tat-config":
         return <TatConfig />;
+      case "report-persons":
+        return <ReportPersons />;
       default:
         return <ClientMaster />;
     }

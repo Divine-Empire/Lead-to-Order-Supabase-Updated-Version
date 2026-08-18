@@ -1,5 +1,97 @@
 import { useQuery } from "@tanstack/react-query";
 import supabase from "../../utils/supabase";
+import { mergeRowsChronologically } from "../../utils/mergeTrackerRows";
+
+// enquiry_pending_view derives its quotation/validation/order columns from a
+// single tracker row per enquiry/lead (almost certainly the newest one) --
+// but lto_enquiry_tracker / lto_enquiry_tracker_for_leads are append-only,
+// one new row per stage submission, and each stage form only writes the few
+// columns it actually collects. So e.g. once a record reaches "Make
+// Quotation" (which sets quotation_number/quotation_value_without_tax/...)
+// and is later followed up via "Order Expected" (a new row that only sets
+// next_call_date/next_call_time), the view's newest-row-wins column picks
+// up the Order Expected row and the quotation columns render blank -- even
+// though the quotation still exists, it just isn't on the newest row.
+//
+// This re-fetches every tracker row per enquiry/lead and merges them
+// chronologically (see mergeTrackerRows.js: later non-empty value wins per
+// field), then overlays that merged, carry-forward-correct result onto the
+// view's row for exactly the columns tracker rows actually populate --
+// everything else on the view row (company name, phone, assigned_to, ...)
+// comes from the parent lead/enquiry table via the view's join and is left
+// untouched.
+//
+// Deliberately NOT customer_feedback / calling_days -- those two live on the
+// parent lto_enquiries / lto_leads table (see EnquiryTracker.jsx's
+// directEnquiryUpdateData, which writes them there, not to the tracker
+// tables), so the view already gets them correctly via its join and they'd
+// error out of this select if included. Every field below is confirmed to
+// exist on BOTH tracker tables via EnquiryTracker.jsx's own History-tab
+// update payload (`updateData`, written to whichever of
+// lto_enquiry_tracker / lto_enquiry_tracker_for_leads applies) and is one
+// mapPendingRow actually renders in the Pending table.
+const TRACKER_FIELDS = [
+  "current_stage", "enquiry_status",
+  "next_call_date", "next_call_time",
+  "send_quotation_no", "quotation_shared_by", "quotation_number",
+  "quotation_value_without_tax", "quotation_value_with_tax", "quotation_remarks", "quotation_upload",
+  "quotation_validator_name", "quotation_send_status", "quotation_validation_remark",
+  "send_faq_video", "send_product_video", "send_offer_video", "send_product_catalog", "send_product_image",
+  "is_order_received_status", "if_no_reason_status", "if_no_reason_remark",
+  "acceptance_via", "transport_mode",
+  "acceptance_file_upload", "order_no", "conveyed_for_registration_form",
+  "destination", "po_number",
+];
+
+async function attachMergedTrackerFields(rows) {
+  const enquiryIds = Array.from(new Set(
+    rows.filter((r) => r.source_type === "enquiry").map((r) => r.record_id).filter(Boolean)
+  ));
+  const leadIds = Array.from(new Set(
+    rows.filter((r) => r.source_type !== "enquiry").map((r) => r.record_id).filter(Boolean)
+  ));
+  if (enquiryIds.length === 0 && leadIds.length === 0) return rows;
+
+  const selectCols = `created_at, ${TRACKER_FIELDS.join(", ")}`;
+  const [{ data: enquiryTrackerRows, error: enqErr }, { data: leadTrackerRows, error: leadErr }] = await Promise.all([
+    enquiryIds.length > 0
+      ? supabase.from("lto_enquiry_tracker").select(`enquiry_id, ${selectCols}`).in("enquiry_id", enquiryIds)
+      : Promise.resolve({ data: [], error: null }),
+    leadIds.length > 0
+      ? supabase.from("lto_enquiry_tracker_for_leads").select(`lead_id, ${selectCols}`).in("lead_id", leadIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (enqErr) throw enqErr;
+  if (leadErr) throw leadErr;
+
+  const rowsByRecordId = new Map();
+  (enquiryTrackerRows || []).forEach((t) => {
+    if (!t.enquiry_id) return;
+    if (!rowsByRecordId.has(t.enquiry_id)) rowsByRecordId.set(t.enquiry_id, []);
+    rowsByRecordId.get(t.enquiry_id).push(t);
+  });
+  (leadTrackerRows || []).forEach((t) => {
+    if (!t.lead_id) return;
+    if (!rowsByRecordId.has(t.lead_id)) rowsByRecordId.set(t.lead_id, []);
+    rowsByRecordId.get(t.lead_id).push(t);
+  });
+
+  const mergedByRecordId = new Map();
+  rowsByRecordId.forEach((trackerRows, recordId) => {
+    const sorted = [...trackerRows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    mergedByRecordId.set(recordId, mergeRowsChronologically(sorted));
+  });
+
+  return rows.map((row) => {
+    const merged = mergedByRecordId.get(row.record_id);
+    if (!merged) return row;
+    const overlay = {};
+    TRACKER_FIELDS.forEach((field) => {
+      if (merged[field] !== undefined) overlay[field] = merged[field];
+    });
+    return { ...row, ...overlay };
+  });
+}
 
 // enquiry_pending_view's quotation_number / quotation_value_without_tax /
 // quotation_value_with_tax / quotation_upload columns come straight from
@@ -10,8 +102,8 @@ import supabase from "../../utils/supabase";
 // quotation exists. This overlays the true latest quotation (by
 // created_at -- always the newest revision, since Quotation.jsx inserts a
 // new row per revision rather than updating in place) from
-// lto_make_quotations on top of whatever the view already has, per
-// enquiry/lead reference number.
+// lto_make_quotations on top of whatever the view (now merge-corrected
+// above) already has, per enquiry/lead reference number.
 async function attachLatestQuotations(rows) {
   const refs = Array.from(new Set(
     rows.map((r) => String(r.display_no || "").trim().toUpperCase()).filter(Boolean)
@@ -134,14 +226,18 @@ export function usePendingEnquiries({
       let query = supabase
         .from("enquiry_pending_view")
         .select("*", { count: "exact" })
-        .order("last_activity_at", { ascending: false })
+        // Most-recently-CREATED enquiry/lead first -- not last_activity_at,
+        // which is the latest tracker update and would reorder the list
+        // every time an older enquiry gets followed up on.
+        .order("created_at", { ascending: false })
         .range(from, to);
 
       query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter });
 
       const { data, error, count } = await query;
       if (error) throw error;
-      const rows = await attachLatestQuotations(data || []);
+      const mergedRows = await attachMergedTrackerFields(data || []);
+      const rows = await attachLatestQuotations(mergedRows);
       return { rows, totalCount: count || 0 };
     },
     enabled,

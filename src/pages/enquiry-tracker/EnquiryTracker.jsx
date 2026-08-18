@@ -73,16 +73,22 @@ const columnsConfig = [
   { key: "acceptanceFile", label: "Acceptance File" },
 ];
 
+// Pending tab default: exactly [timestamp, lead number, enquiry source,
+// company name, phone number, quotation value without tax, quotation copy,
+// next follow-up date, customer feedback, current stage] visible; every
+// other column (including salespersonName/nextCallTime, on by default
+// before) starts hidden -- still toggleable per-user via the column
+// dropdown, this only changes what a first-time/reset view shows.
 const defaultVisibility = {
   timestamp: true,
   leadId: true,
   leadSource: true,
   companyName: true,
   phoneNumber: true,
-  salespersonName: true,
+  salespersonName: false,
   customerFeedback: true,
   nextCallDate: true,
-  nextCallTime: true,
+  nextCallTime: false,
   currentStage: true,
   callingDate: false,
   itemQty: false,
@@ -100,9 +106,9 @@ const defaultVisibility = {
   sendQuotationNo: false,
   quotationSharedBy: false,
   quotationNumber: false,
-  valueWithoutTax: false,
+  valueWithoutTax: true,
   valueWithTax: false,
-  quotationUpload: false,
+  quotationUpload: true,
   quotationRemarks: false,
   validatorName: false,
   sendStatus: false,
@@ -1444,7 +1450,11 @@ const handleSaveClick = async () => {
       enquiryIdVal: isEnquiry ? row.record_id : undefined,
       tableSource: isEnquiry ? "enquiries" : "call_tracker_for_leads",
       sourceType: row.source_type,
-      timestamp: formatDateToDDMMYYYY(row.last_activity_at || row.created_at) || "",
+      // Creation time, matching the list's sort order (queries.js orders
+      // this same view by created_at desc) -- previously showed
+      // last_activity_at (latest tracker update) instead, which didn't
+      // match "Timestamp" as a label nor the sort the user sees it in.
+      timestamp: formatDateToDDMMYYYY(row.created_at) || "",
       leadId: row.display_no || "",
       leadNo: row.display_no || "",
       lead_no: row.display_no || "",
