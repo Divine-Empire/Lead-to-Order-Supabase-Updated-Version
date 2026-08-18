@@ -9,6 +9,39 @@
 // two stay identical.
 
 import supabase from "./supabase";
+import { getStateCodeFromName } from "./gstStateCodes";
+
+// Re-resolves the quotation's linked lead/enquiry (if any), keyed by the
+// quotation's own enquiry_reference_no ("LD-..."/"EN-..."), so consignee
+// GST/address/state/state-code can be sourced LIVE from that record on every
+// revision -- the same source a brand-new quotation gets them from via the
+// Lead No. selection in quotation-form.jsx's handleLeadNoSelect -- instead of
+// solely from whatever currently sits in lto_client_master. client_master
+// remains the fallback below for quotations never tied to a specific
+// lead/enquiry (e.g. created via direct Company Name entry with "Show Lead
+// No." left off), or where the reference no longer resolves (record deleted
+// since, or blank on quotations saved before this field existed).
+const resolveLinkedLeadOrEnquiry = async (referenceNo) => {
+  const ref = String(referenceNo || "").trim();
+  if (!ref) return null;
+
+  const isLead = ref.toUpperCase().startsWith("LD-");
+  const isEnquiry = ref.toUpperCase().startsWith("EN-");
+  if (!isLead && !isEnquiry) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from(isLead ? "lto_leads" : "lto_enquiries")
+      .select("*")
+      .ilike(isLead ? "lead_no" : "enquiry_no", ref)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data;
+  } catch (err) {
+    console.error("loadQuotationDataByNumber: error resolving linked lead/enquiry", err);
+    return null;
+  }
+};
 
 /**
  * Loads a quotation by its quotation_no and maps it into the exact
@@ -41,6 +74,8 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
       console.error("loadQuotationDataByNumber: could not load quotation", error);
       return null;
     }
+
+    const linkedRecord = await resolveLinkedLeadOrEnquiry(loadedData.enquiry_reference_no);
 
     const refName = loadedData.reference_name || "";
     const selectedReferences = refName
@@ -153,14 +188,27 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
       consignorPhone: loadedData.reference_number || "",
       consignorGSTIN: loadedData.consignor_details?.gstin || "",
       consignorStateCode: loadedData.consignor_details?.state_code || "",
-      consigneeName: loadedData.client_master?.company_name || "",
-      consigneeAddress: loadedData.client_master?.billing_address || "",
+      // Priority: the linked lead/enquiry's OWN current fields (same source
+      // a brand-new quotation uses), falling back to client_master only
+      // when there's no resolvable lead/enquiry behind this quotation.
+      consigneeName: linkedRecord?.company_name || loadedData.client_master?.company_name || "",
+      consigneeAddress: linkedRecord
+        ? (linkedRecord.address || linkedRecord.location || linkedRecord.shipping_address || "")
+        : (loadedData.client_master?.billing_address || ""),
       shipTo: loadedData.ship_to_address || "",
-      consigneeState: loadedData.client_master?.state || "",
+      consigneeState: linkedRecord
+        ? (linkedRecord.state || linkedRecord.enquiry_for_state || "")
+        : (loadedData.client_master?.state || ""),
       consigneeContactName: loadedData.consignee_contact_name || "",
       consigneeContactNo: loadedData.consignee_contact_no || "",
-      consigneeGSTIN: loadedData.client_master?.gst_number || "",
-      consigneeStateCode: loadedData.client_master?.state_code || "",
+      consigneeGSTIN: linkedRecord?.gst_number || loadedData.client_master?.gst_number || "",
+      // Leads/enquiries have no state_code column of their own -- derive it
+      // from the resolved state name (same fallback quotation-form.jsx's
+      // handleLeadNoSelect uses), only falling back to client_master's
+      // stored code if that derivation comes up empty.
+      consigneeStateCode: (linkedRecord && getStateCodeFromName(linkedRecord.state || linkedRecord.enquiry_for_state || ""))
+        || loadedData.client_master?.state_code
+        || "",
       msmeNumber: loadedData.consignor_details?.msme_num || "",
       validity: loadedData.validity || "",
       paymentTerms: loadedData.payment_terms || "",
@@ -168,6 +216,11 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
       freight: loadedData.freight || "",
       insurance: loadedData.insurance || "",
       taxes: loadedData.taxes || "",
+      // Blank means either this quotation predates the column (created
+      // before it existed) or the field was never touched -- either way,
+      // TermsAndConditions/pdf-generator.jsx already fall back to the same
+      // hardcoded default text used for a brand-new quotation.
+      warranty: loadedData.warranty || "",
       accountNo: loadedData.account_no || "",
       bankName: loadedData.bank_name || "",
       bankAddress: loadedData.bank_address || "",

@@ -40,6 +40,15 @@ function App() {
   const [alternateAccess, setAlternateAccess] = useState(() => {
     return localStorage.getItem("alternateAccess") || null
   })
+  // If non-empty, this account is scoped by lead_source instead of by name
+  // (own Full Name + alternate_access) -- see getLeadSourcesToFilter below.
+  const [restrictedLeadSources, setRestrictedLeadSources] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("restrictedLeadSources") || "[]")
+    } catch {
+      return []
+    }
+  })
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   // Check if user is already logged in and fetch latest alternate_access from database
@@ -47,43 +56,53 @@ function App() {
     const auth = localStorage.getItem("isAuthenticated")
     const storedUser = localStorage.getItem("currentUser")
     const storedUserType = localStorage.getItem("userType")
-    
+
     if (auth === "true" && storedUser) {
       const parsedUser = JSON.parse(storedUser)
       setIsAuthenticated(true)
       setCurrentUser(parsedUser)
       setUserType(storedUserType)
-      
-      // Fetch latest alternate_access + full_name from database to ensure it's always up-to-date
+
+      // Fetch latest alternate_access + full_name + restricted_lead_sources
+      // from database to ensure it's always up-to-date
       const fetchLatestAlternateAccess = async () => {
         try {
           const { data, error } = await supabase
             .from('login')
-            .select('alternate_access, full_name')
+            .select('alternate_access, full_name, restricted_lead_sources')
             .eq('username', parsedUser.username)
             .single()
 
           if (!error && data) {
             const latestAlternateAccess = data.alternate_access || null
             const latestFullName = data.full_name || parsedUser.fullName || null
+            const latestRestrictedLeadSources = data.restricted_lead_sources || []
             setAlternateAccess(latestAlternateAccess)
+            setRestrictedLeadSources(latestRestrictedLeadSources)
             setCurrentUser(prev => ({ ...(prev || parsedUser), fullName: latestFullName }))
             localStorage.setItem("alternateAccess", latestAlternateAccess || '')
+            localStorage.setItem("restrictedLeadSources", JSON.stringify(latestRestrictedLeadSources))
             localStorage.setItem("currentUser", JSON.stringify({ ...parsedUser, fullName: latestFullName }))
             // Fetch data with latest alternate_access, scoped by full_name (matches SC Assigned)
-            fetchUserData(latestFullName, storedUserType, latestAlternateAccess)
+            fetchUserData(latestFullName, storedUserType, latestAlternateAccess, latestRestrictedLeadSources)
           } else {
             // Fallback to stored value if database fetch fails
             const storedAlternateAccess = localStorage.getItem("alternateAccess")
+            let storedRestrictedLeadSources = []
+            try { storedRestrictedLeadSources = JSON.parse(localStorage.getItem("restrictedLeadSources") || "[]") } catch { /* keep [] */ }
             setAlternateAccess(storedAlternateAccess || null)
-            fetchUserData(parsedUser.fullName, storedUserType, storedAlternateAccess)
+            setRestrictedLeadSources(storedRestrictedLeadSources)
+            fetchUserData(parsedUser.fullName, storedUserType, storedAlternateAccess, storedRestrictedLeadSources)
           }
         } catch (err) {
           console.error("Error fetching alternate_access:", err)
           // Fallback to stored value
           const storedAlternateAccess = localStorage.getItem("alternateAccess")
+          let storedRestrictedLeadSources = []
+          try { storedRestrictedLeadSources = JSON.parse(localStorage.getItem("restrictedLeadSources") || "[]") } catch { /* keep [] */ }
           setAlternateAccess(storedAlternateAccess || null)
-          fetchUserData(parsedUser.fullName, storedUserType, storedAlternateAccess)
+          setRestrictedLeadSources(storedRestrictedLeadSources)
+          fetchUserData(parsedUser.fullName, storedUserType, storedAlternateAccess, storedRestrictedLeadSources)
         }
       }
 
@@ -93,9 +112,15 @@ function App() {
 
   // Function to fetch data based on user type FROM SUPABASE.
   // For non-admins, `fullName` (the user's Full Name, matched against the
-  // "SC Assigned" / sales coordinator name on leads & enquiries) scopes the data.
-  const fetchUserData = async (fullName, userType, altAccess = null) => {
+  // "SC Assigned" / sales coordinator name on leads & enquiries) scopes the
+  // data -- UNLESS `restrictedLeadSources` is non-empty, in which case that
+  // completely replaces the name-based scoping with a lead_source-based one
+  // (see login.restricted_lead_sources): this account sees every record
+  // whose lead_source matches, regardless of who it's assigned to.
+  const fetchUserData = async (fullName, userType, altAccess = null, restrictedLeadSources = []) => {
     try {
+      const hasLeadSourceRestriction = Array.isArray(restrictedLeadSources) && restrictedLeadSources.length > 0;
+
       if (userType === "admin") {
         // Admin sees all data - fetch from appropriate Supabase tables
         const { data: leadsData, error: leadsError } = await supabase
@@ -123,6 +148,31 @@ function App() {
         };
         
         setUserData(combinedData);
+      } else if (hasLeadSourceRestriction) {
+        // Lead-source-restricted user: every record whose lead_source
+        // matches, regardless of who it's assigned to -- name-based scoping
+        // (fullName/altAccess) does not apply at all in this branch.
+        const { data: userLeads, error: userLeadsError } = await supabase
+          .from('lto_leads')
+          .select('*')
+          .in('lead_source', restrictedLeadSources)
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        const { data: userEnquiries, error: userEnquiriesError } = await supabase
+          .from('lto_enquiries')
+          .select('*')
+          .in('lead_source', restrictedLeadSources)
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        if (userLeadsError || userEnquiriesError) {
+          console.error("Error fetching lead-source-restricted data from Supabase:", userLeadsError || userEnquiriesError);
+          showNotification("Failed to fetch user data", "error");
+          return;
+        }
+
+        setUserData({ leads: userLeads || [], enquiries: userEnquiries || [] });
       } else {
         // Regular user sees data assigned to their Full Name + any alternate_access names
         // Build a list of full names to fetch data for
@@ -171,10 +221,10 @@ function App() {
 
   const login = async (username, password) => {
     try {
-      // Query Supabase login table - now also fetching alternate_access + full_name
+      // Query Supabase login table - now also fetching alternate_access + full_name + restricted_lead_sources
       const { data, error } = await supabase
         .from('login')
-        .select('username, usertype, alternate_access, full_name')
+        .select('username, usertype, alternate_access, full_name, restricted_lead_sources')
         .eq('username', username)
         .eq('password', password)
         .single()
@@ -192,20 +242,23 @@ function App() {
           fullName: data.full_name || null,
           loginTime: new Date().toISOString()
         }
+        const loginRestrictedLeadSources = data.restricted_lead_sources || [];
 
         setIsAuthenticated(true);
         setCurrentUser(userInfo);
         setUserType(data.usertype);
         setAlternateAccess(data.alternate_access || null);
+        setRestrictedLeadSources(loginRestrictedLeadSources);
 
         localStorage.setItem("isAuthenticated", "true");
         localStorage.setItem("currentUser", JSON.stringify(userInfo));
         localStorage.setItem("userType", data.usertype);
         localStorage.setItem("alternateAccess", data.alternate_access || '');
+        localStorage.setItem("restrictedLeadSources", JSON.stringify(loginRestrictedLeadSources));
 
-        // Fetch data based on user type FROM SUPABASE, scoped by full_name + alternate_access
-        await fetchUserData(data.full_name, data.usertype, data.alternate_access);
-        
+        // Fetch data based on user type FROM SUPABASE, scoped by full_name + alternate_access (or lead source restriction)
+        await fetchUserData(data.full_name, data.usertype, data.alternate_access, loginRestrictedLeadSources);
+
         showNotification(`Welcome, ${username}! (${data.usertype})`, "success");
         return true;
       } else {
@@ -225,10 +278,12 @@ function App() {
     setUserType(null);
     setUserData(null);
     setAlternateAccess(null);
+    setRestrictedLeadSources([]);
     localStorage.removeItem("isAuthenticated");
     localStorage.removeItem("currentUser");
     localStorage.removeItem("userType");
     localStorage.removeItem("alternateAccess");
+    localStorage.removeItem("restrictedLeadSources");
     localStorage.removeItem('quotation_auto_save');
     showNotification("Logged out successfully", "success");
   }
@@ -279,6 +334,21 @@ function App() {
     return names;
   }
 
+  // True when this account is scoped by lead_source (login.restricted_lead_sources
+  // is non-empty) rather than by name -- always false for admins, who are
+  // never restricted by either mechanism.
+  const hasLeadSourceRestriction = () => {
+    return !isAdmin() && Array.isArray(restrictedLeadSources) && restrictedLeadSources.length > 0;
+  }
+
+  // Lead_source values this account is restricted to. Callers should check
+  // hasLeadSourceRestriction() first and, when true, filter records by
+  // lead_source using this list INSTEAD OF the usual getUsernamesToFilter()
+  // name-based scoping -- the two are mutually exclusive per account.
+  const getLeadSourcesToFilter = () => {
+    return Array.isArray(restrictedLeadSources) ? restrictedLeadSources : [];
+  }
+
   // Protected route component
   const ProtectedRoute = ({ children, adminOnly = false }) => {
     if (!isAuthenticated) {
@@ -305,7 +375,10 @@ function App() {
       userType, 
       isAdmin: isAdmin,
       alternateAccess,
-      getUsernamesToFilter
+      getUsernamesToFilter,
+      restrictedLeadSources,
+      hasLeadSourceRestriction,
+      getLeadSourcesToFilter
     }}>
       <DataContext.Provider value={{ userData, fetchUserData }}>
         <Router>

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useContext } from "react"
-import { Shield, User, ShieldAlert, Check, Plus, Pencil, Trash2, X } from "lucide-react"
+import { Shield, User, ShieldAlert, Check, Plus, Pencil, Trash2, X, CheckSquare, Square, MapPin } from "lucide-react"
 import { AuthContext } from "../../App"
 import supabase from "../../utils/supabase"
 import LoadingSpinner from "../../components/LoadingSpinner"
@@ -25,13 +25,16 @@ function Setting() {
     username: '',
     password: '',
     userType: 'user',
-    fullName: ''
+    fullName: '',
+    restrictedLeadSources: []
   })
   const [employeeOptions, setEmployeeOptions] = useState([])
+  const [leadSourceOptions, setLeadSourceOptions] = useState([])
 
   useEffect(() => {
     fetchUsers()
     fetchEmployeeOptions()
+    fetchLeadSourceOptions()
   }, [])
 
   const fetchEmployeeOptions = async () => {
@@ -50,6 +53,22 @@ function Setting() {
     }
   }
 
+  const fetchLeadSourceOptions = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('lto_dropdown')
+        .select('value')
+        .eq('category', 'lead_source')
+        .order('value', { ascending: true })
+
+      if (error) throw error
+      setLeadSourceOptions((data || []).map(d => d.value).filter(Boolean))
+    } catch (error) {
+      console.error("Error fetching lead source options:", error)
+      showNotification("Failed to fetch lead source list", "error")
+    }
+  }
+
   const fetchUsers = async () => {
     setIsLoading(true)
     try {
@@ -62,7 +81,8 @@ function Setting() {
       const normalizedUsers = (data || []).map(u => ({
         ...u,
         userType: u.usertype || u.userType || 'user',
-        fullName: u.full_name || u.fullName || ''
+        fullName: u.full_name || u.fullName || '',
+        restrictedLeadSources: u.restricted_lead_sources || []
       }))
       setUsers(normalizedUsers)
     } catch (error) {
@@ -127,7 +147,7 @@ function Setting() {
 
   const openAddModal = () => {
     setModalMode('add')
-    setFormData({ username: '', password: '', userType: 'user', fullName: '' })
+    setFormData({ username: '', password: '', userType: 'user', fullName: '', restrictedLeadSources: [] })
     setIsModalOpen(true)
   }
 
@@ -138,9 +158,23 @@ function Setting() {
       username: user.username,
       password: user.password || '',
       userType: user.userType || user.usertype || 'user',
-      fullName: user.fullName || user.full_name || ''
+      fullName: user.fullName || user.full_name || '',
+      restrictedLeadSources: user.restrictedLeadSources || user.restricted_lead_sources || []
     })
     setIsModalOpen(true)
+  }
+
+  // Plain multi-select toggle -- unlike ScDistributionMaster's version there's
+  // no "ALL SOURCES" sentinel here: an empty list simply means "not
+  // restricted," so no shortcut/mutual-exclusion handling is needed.
+  const handleLeadSourceToggle = (option) => {
+    setFormData(prev => {
+      const current = prev.restrictedLeadSources || [];
+      const next = current.includes(option)
+        ? current.filter(v => v !== option)
+        : [...current, option];
+      return { ...prev, restrictedLeadSources: next };
+    });
   }
 
   const handleFormSubmit = async (e) => {
@@ -167,7 +201,8 @@ function Setting() {
             username: formData.username,
             password: formData.password,
             usertype: formData.userType,
-            full_name: formData.fullName
+            full_name: formData.fullName,
+            restricted_lead_sources: formData.restrictedLeadSources
           }])
         if (error) throw error
         showNotification("User added successfully", "success")
@@ -175,7 +210,8 @@ function Setting() {
         const updatePayload = {
           username: formData.username,
           usertype: formData.userType,
-          full_name: formData.fullName
+          full_name: formData.fullName,
+          restricted_lead_sources: formData.restrictedLeadSources
         }
         if (formData.password) {
           updatePayload.password = formData.password
@@ -255,6 +291,7 @@ function Setting() {
                     <tr>
                       <th className="px-6 py-4">User</th>
                       <th className="px-6 py-4">Current Role</th>
+                      <th className="px-6 py-4">Data Access</th>
                       <th className="px-6 py-4 text-right">Actions</th>
                     </tr>
                   </thead>
@@ -283,6 +320,22 @@ function Setting() {
                               <User className="w-3.5 h-3.5" />
                               Standard User
                             </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {user.userType === 'admin' ? (
+                            <span className="text-xs text-slate-400">All records</span>
+                          ) : user.restrictedLeadSources && user.restrictedLeadSources.length > 0 ? (
+                            <div className="flex flex-wrap gap-1 max-w-xs">
+                              {user.restrictedLeadSources.map((src) => (
+                                <span key={src} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                                  <MapPin className="w-3 h-3" />
+                                  {src}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400">Own records (by name)</span>
                           )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right">
@@ -325,7 +378,7 @@ function Setting() {
                     ))}
                     {users.length === 0 && (
                       <tr>
-                        <td colSpan="3" className="px-6 py-8 text-center text-gray-500">
+                        <td colSpan="4" className="px-6 py-8 text-center text-gray-500">
                           No users found.
                         </td>
                       </tr>
@@ -409,6 +462,43 @@ function Setting() {
                             <option value="admin">Administrator</option>
                         </select>
                     </div>
+
+                    {formData.userType !== 'admin' && (
+                        <div>
+                            <div className="flex items-center justify-between mb-1">
+                                <label className="block text-sm font-medium text-slate-700">
+                                    Restrict to Lead Source(s)
+                                </label>
+                                <span className="text-xs text-slate-400">Optional</span>
+                            </div>
+                            <p className="text-xs text-slate-400 mb-2">
+                                Leave unchecked to use the normal "own name" access above. If you check
+                                any source(s) here, this user will instead see EVERY record tagged with
+                                that source, regardless of who it's assigned to.
+                            </p>
+                            <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-200 max-h-40 overflow-y-auto">
+                                {leadSourceOptions.length === 0 ? (
+                                    <span className="text-xs text-slate-400 col-span-2">No lead sources configured yet.</span>
+                                ) : leadSourceOptions.map((opt) => {
+                                    const checked = (formData.restrictedLeadSources || []).includes(opt);
+                                    return (
+                                        <label
+                                            key={opt}
+                                            onClick={() => handleLeadSourceToggle(opt)}
+                                            className={`flex items-center gap-2 p-2 rounded-md cursor-pointer border text-xs font-medium transition-all ${
+                                                checked
+                                                    ? "bg-white text-slate-900 border-slate-300 shadow-sm font-bold"
+                                                    : "bg-transparent text-slate-500 border-transparent hover:bg-white/50"
+                                            }`}
+                                        >
+                                            {checked ? <CheckSquare className="w-4 h-4 text-primary shrink-0" /> : <Square className="w-4 h-4 text-slate-300 shrink-0" />}
+                                            <span className="truncate">{opt}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     <div className="pt-4 mt-6 border-t border-slate-100 flex justify-end gap-3">
                         <button 

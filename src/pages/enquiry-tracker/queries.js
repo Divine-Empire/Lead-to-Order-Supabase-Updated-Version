@@ -160,7 +160,7 @@ async function attachLatestQuotations(rows) {
 // filter is a real WHERE clause against the view, not a client-side re-scan
 // of whatever rows happen to already be loaded -- this is what lets a
 // filter surface matches that haven't been paged into the UI yet.
-function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter }) {
+function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction }) {
   let q = query;
 
   if (searchTerm) {
@@ -184,7 +184,14 @@ function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter
     if (clauses.length > 0) q = q.or(clauses.join(","));
   }
 
-  if (!isAdmin && usernamesToFilter && usernamesToFilter.length > 0) {
+  // A lead-source-restricted account (login.restricted_lead_sources) is
+  // scoped by lead_source INSTEAD OF the usual assigned_to/name-based
+  // scoping below -- they see every record from that source regardless of
+  // who it's assigned to, so this branch takes priority and skips the
+  // assigned_to filter entirely.
+  if (leadSourceRestriction && leadSourceRestriction.length > 0) {
+    q = q.in("lead_source", leadSourceRestriction);
+  } else if (!isAdmin && usernamesToFilter && usernamesToFilter.length > 0) {
     q = q.in("assigned_to", usernamesToFilter);
   } else if (isAdmin && scNameFilter && scNameFilter !== "all") {
     q = q.eq("assigned_to", scNameFilter);
@@ -203,6 +210,7 @@ export function usePendingEnquiries({
   scNameFilter,
   isAdmin,
   usernamesToFilter,
+  leadSourceRestriction,
   enabled = true,
 }) {
   return useQuery({
@@ -218,6 +226,7 @@ export function usePendingEnquiries({
       scNameFilter,
       isAdmin,
       usernamesToFilter,
+      leadSourceRestriction,
     ],
     queryFn: async () => {
       const from = (page - 1) * itemsPerPage;
@@ -232,7 +241,7 @@ export function usePendingEnquiries({
         .order("created_at", { ascending: false })
         .range(from, to);
 
-      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter });
+      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
 
       const { data, error, count } = await query;
       if (error) throw error;
@@ -255,6 +264,7 @@ export function useHistoryEnquiries({
   scNameFilter,
   isAdmin,
   usernamesToFilter,
+  leadSourceRestriction,
   enabled = true,
 }) {
   return useQuery({
@@ -270,6 +280,7 @@ export function useHistoryEnquiries({
       scNameFilter,
       isAdmin,
       usernamesToFilter,
+      leadSourceRestriction,
     ],
     queryFn: async () => {
       const from = (page - 1) * itemsPerPage;
@@ -281,7 +292,7 @@ export function useHistoryEnquiries({
         .order("created_at", { ascending: false })
         .range(from, to);
 
-      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter });
+      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
 
       const { data, error, count } = await query;
       if (error) throw error;

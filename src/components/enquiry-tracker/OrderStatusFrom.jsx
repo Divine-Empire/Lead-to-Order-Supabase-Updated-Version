@@ -664,7 +664,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
 
           <div className="space-y-2">
             <label htmlFor="apologyVideo" className="block text-sm font-medium text-gray-700">
-              Order Lost Apology Video <span className="text-destructive">*</span>
+              Order Lost Apology Video
             </label>
             <input
               id="apologyVideo"
@@ -672,7 +672,6 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
               type="file"
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
               onChange={handleFileChange}
-              required={!formData.apologyVideo}
             />
             {orderVideoError && (
               <p className="text-sm text-destructive">{orderVideoError}</p>

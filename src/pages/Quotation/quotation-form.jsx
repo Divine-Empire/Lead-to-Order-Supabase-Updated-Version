@@ -512,16 +512,14 @@ const QuotationForm = ({
     handleInputChange("consigneeGSTIN", leadData.gstin);
 
     // Lead/enquiry records (lto_leads/lto_enquiries) have no state_code
-    // column at all -- only lto_client_master does -- so State Code could
-    // never be filled by this Lead No. selection path, even when the
-    // matching client_master row already has one stored (this is a
-    // different path from handleCompanyChange below, which correctly
-    // pulls it from dropdownData.companies since it's keying off the
-    // Company Name field directly). Same lookup, keyed by the company name
-    // this lead/enquiry belongs to; falls back to deriving it from the
-    // state name if client_master doesn't have a code either.
+    // column at all -- only lto_client_master does -- so this derives it
+    // from the lead/enquiry's own state name first (keeping GST/address/
+    // state/state-code all sourced from the same place, the lead/enquiry
+    // itself, rather than mixing in client_master), only falling back to
+    // client_master's stored code (keyed by the company name this
+    // lead/enquiry belongs to) if that derivation comes up empty.
     const matchedCompany = dropdownData.companies && dropdownData.companies[companyName];
-    const resolvedStateCode = matchedCompany?.stateCode || getStateCodeFromName(leadData.state);
+    const resolvedStateCode = getStateCodeFromName(leadData.state) || matchedCompany?.stateCode;
     if (resolvedStateCode) {
       handleInputChange("consigneeStateCode", resolvedStateCode);
     }
@@ -598,6 +596,20 @@ const QuotationForm = ({
       console.error("Error fetching items from normalized tables:", fetchErr);
     }
 
+    // Preserve any discount/flatDiscount already sitting on the current
+    // items (by name, case-insensitive) across this refill -- this fires
+    // on every Lead No. selection/blur-commit, INCLUDING while revising an
+    // existing quotation whose items were just correctly populated (with
+    // real discount/flatDiscount values) by handleQuotationSelect. Without
+    // this, re-touching the Lead No. field after that load silently reset
+    // every item's discount/flatDiscount back to 0, clobbering what was
+    // just loaded -- same class of bug as the Freight-row drop fixed below.
+    const existingItemsByName = new Map();
+    (quotationData.items || []).forEach((it) => {
+      const key = (it.name || "").toLowerCase().trim();
+      if (key) existingItemsByName.set(key, it);
+    });
+
     // Helper: map a raw item {name, qty} to a full quotation row with product lookup
     const mapItemToQuotationRow = (item, index, nobVal) => {
       let productInfo = null;
@@ -623,6 +635,10 @@ const QuotationForm = ({
         productRate = isReseller ? (productInfo.reseller_rate || productInfo.rate || 0) : (productInfo.rate || 0);
       }
 
+      const existing = existingItemsByName.get((item.name || "").toLowerCase().trim());
+      const discount = existing?.discount || 0;
+      const flatDiscount = existing?.flatDiscount || 0;
+
       return {
         id: index + 1,
         code: productCode,
@@ -632,8 +648,8 @@ const QuotationForm = ({
         qty: item.qty,
         units: "Nos",
         rate: productRate,
-        discount: 0,
-        flatDiscount: 0,
+        discount,
+        flatDiscount,
         amount: item.qty * productRate,
         isFreight: item.name === "Freight",
       };

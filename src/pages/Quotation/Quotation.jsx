@@ -504,6 +504,7 @@ function Quotation() {
           freight: quotationData.freight || null,
           insurance: quotationData.insurance || null,
           taxes: quotationData.taxes || null,
+          warranty: quotationData.warranty || null,
           notes: quotationData.notes ? quotationData.notes.filter((note) => note && note.trim()).join("|") : null,
           account_no: quotationData.accountNo || null,
           bank_name: quotationData.bankName || null,

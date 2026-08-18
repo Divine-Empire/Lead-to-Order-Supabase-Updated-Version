@@ -211,6 +211,7 @@ function EnquiryTracker() {
     currentUser = null,
     isAdmin = () => false,
     getUsernamesToFilter = () => [],
+    getLeadSourcesToFilter = () => [],
     showNotification = () => {},
     dismissNotification = () => {}
   } = authContext;
@@ -1407,6 +1408,9 @@ const handleSaveClick = async () => {
   // a client-side re-scan of whatever happened to already be loaded.
   const queryClient = useQueryClient();
   const usernamesToFilter = isAdmin() ? [] : getUsernamesToFilter();
+  // Non-empty only for a lead-source-restricted account -- takes priority
+  // over usernamesToFilter inside applySharedFilters (queries.js).
+  const leadSourceRestriction = isAdmin() ? [] : getLeadSourcesToFilter();
 
   const pendingQuery = usePendingEnquiries({
     page: currentPage,
@@ -1418,6 +1422,7 @@ const handleSaveClick = async () => {
     scNameFilter,
     isAdmin: isAdmin(),
     usernamesToFilter,
+    leadSourceRestriction,
     enabled: activeTab === "pending",
   });
 
@@ -1431,6 +1436,7 @@ const handleSaveClick = async () => {
     scNameFilter,
     isAdmin: isAdmin(),
     usernamesToFilter,
+    leadSourceRestriction,
     enabled: activeTab === "history",
   });
 
@@ -1657,9 +1663,16 @@ const handleSaveClick = async () => {
       );
     }
 
-    if (!isAdmin() && currentUser && currentUser.username) {
-      const usernamesToFilter = getUsernamesToFilter();
-      query = query.in("sales_coordinator_name", usernamesToFilter);
+    if (!isAdmin()) {
+      const leadSourceRestriction = getLeadSourcesToFilter();
+      if (leadSourceRestriction && leadSourceRestriction.length > 0) {
+        // Lead-source-restricted account: every record from that source,
+        // regardless of assignee -- replaces the name-based filter below.
+        query = query.in("lead_source", leadSourceRestriction);
+      } else if (currentUser && currentUser.username) {
+        const usernamesToFilter = getUsernamesToFilter();
+        query = query.in("sales_coordinator_name", usernamesToFilter);
+      }
     }
 
     // Apply SC name filter for admin
