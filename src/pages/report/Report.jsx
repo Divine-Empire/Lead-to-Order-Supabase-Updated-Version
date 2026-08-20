@@ -497,13 +497,21 @@ function Report() {
     // restricted to curated names.
     const fetchScPipelinePersons = useCallback(async () => {
         try {
-            const [{ data: masterData, error: masterErr }, { data: leadsData, error: leadsErr }, { data: enqData, error: enqErr }] = await Promise.all([
+            // lto_leads has no enquiry_assign_to_person column -- the
+            // assigned person only lives on lto_call_tracker_for_leads
+            // (same attribution gap as fetchFosMetrics/fetchScPipelineMetrics
+            // below). Classification here must key off the SAME field the
+            // actual metrics are computed from, or a person's CRR/NBD_CRR
+            // vs NBD-only tier could disagree with what their column shows.
+            const [{ data: masterData, error: masterErr }, { data: leadsData, error: leadsErr }, { data: leadCallsData, error: leadCallsErr }, { data: enqData, error: enqErr }] = await Promise.all([
                 fetchAllRows(() => supabase.from("lto_dropdown").select("value").eq("category", REPORT_PERSON_CATEGORY.SC_PIPELINE)),
-                fetchAllRows(() => supabase.from("lto_leads").select("sc_name, sales_type")),
-                fetchAllRows(() => supabase.from("lto_enquiries").select("sales_coordinator_name, sales_type")),
+                fetchAllRows(() => supabase.from("lto_leads").select("id, sales_type")),
+                fetchAllRows(() => supabase.from("lto_call_tracker_for_leads").select("lead_id, enquiry_assign_to_person, created_at")),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("enquiry_assign_to_person, sales_type")),
             ]);
             if (masterErr) throw masterErr;
             if (leadsErr) throw leadsErr;
+            if (leadCallsErr) throw leadCallsErr;
             if (enqErr) throw enqErr;
 
             const masterNames = new Set();
@@ -518,8 +526,17 @@ function Report() {
                 if (category === "CRR" || category === "NBD_CRR") multi.add(trimmed);
                 if (category === "NBD") nbdOnly.add(trimmed);
             };
-            (leadsData || []).forEach(l => classify(l.sc_name, l.sales_type));
-            (enqData || []).forEach(e => classify(e.sales_coordinator_name, e.sales_type));
+
+            const personByLeadId = new Map();
+            (leadCallsData || []).forEach(c => {
+                if (!c.lead_id || !c.enquiry_assign_to_person) return;
+                const existing = personByLeadId.get(c.lead_id);
+                if (!existing || new Date(c.created_at) > new Date(existing.at)) {
+                    personByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, at: c.created_at });
+                }
+            });
+            (leadsData || []).forEach(l => classify(personByLeadId.get(l.id)?.person, l.sales_type));
+            (enqData || []).forEach(e => classify(e.enquiry_assign_to_person, e.sales_type));
 
             // A curated person with literally zero matching records yet
             // (e.g. newly added, hasn't handled anything of this kind) would
@@ -869,6 +886,18 @@ function Report() {
             };
             const isYes = (status) => String(status || "").trim().toLowerCase() === "yes";
 
+            // Pipeline = genuinely PENDING work: at least one tracker row
+            // exists (the record actually entered the tracker) and none of
+            // them have resolved to yes/no yet -- matches the app's real
+            // "Pending" definition (see EnquiryTrackerForm.jsx's
+            // isPending-style checks) rather than just "hasn't said yes".
+            // A brand-new record with zero tracker activity, or one
+            // explicitly marked order-lost ("no"), is NOT pipeline.
+            const isPendingRows = (rows) => rows.length > 0 && rows.every(t => {
+                const s = String(t.is_order_received_status || "").trim().toLowerCase();
+                return s !== "yes" && s !== "no";
+            });
+
             // Computes all 8 columns for one FOS person, given the full
             // (already date-bounded) record set for a section and its
             // tracker rows keyed by record id.
@@ -895,9 +924,7 @@ function Report() {
                             orderConvertedValue += latestValue;
                         }
                     }
-                    // Pipeline: open (non-converted) work only, per the
-                    // confirmed convention shared with SC Pipeline.
-                    if (inPipelineWindow(rec.created_at) && !isConverted) {
+                    if (inPipelineWindow(rec.created_at) && isPendingRows(trackerRows)) {
                         pipelineCount++;
                         pipelineValue += latestValue;
                     }
@@ -925,14 +952,31 @@ function Report() {
             });
 
             // ---- Leads section ----
-            const [{ data: allLeads, error: leadsErr }, { data: allLeadTrackers, error: leadTrackersErr }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_leads").select("id, lead_receiver_name, created_at")
+            // lto_leads has no enquiry_assign_to_person column of its own --
+            // that field only lives on lto_call_tracker_for_leads, set once
+            // a call is logged with "Enquiry Received = yes" (same
+            // attribution path the Calling Data tab uses). Fetched unbounded
+            // since a lead created this week could be assigned at any point
+            // up to now; most recent assignment wins if more than one exists.
+            const [{ data: allLeads, error: leadsErr }, { data: allLeadTrackers, error: leadTrackersErr }, { data: allLeadCalls, error: leadCallsErr }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_leads").select("id, created_at")
                     .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, created_at, is_order_received_status, quotation_value_without_tax")
                     .gte("created_at", fetchStartISO)),
+                fetchAllRows(() => supabase.from("lto_call_tracker_for_leads").select("lead_id, enquiry_assign_to_person, created_at")),
             ]);
             if (leadsErr) throw leadsErr;
             if (leadTrackersErr) throw leadTrackersErr;
+            if (leadCallsErr) throw leadCallsErr;
+
+            const personByLeadId = new Map();
+            (allLeadCalls || []).forEach(c => {
+                if (!c.lead_id || !c.enquiry_assign_to_person) return;
+                const existing = personByLeadId.get(c.lead_id);
+                if (!existing || new Date(c.created_at) > new Date(existing.at)) {
+                    personByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, at: c.created_at });
+                }
+            });
 
             const leadTrackerByLeadId = new Map();
             (allLeadTrackers || []).forEach(t => {
@@ -940,12 +984,12 @@ function Report() {
                 if (!leadTrackerByLeadId.has(t.lead_id)) leadTrackerByLeadId.set(t.lead_id, []);
                 leadTrackerByLeadId.get(t.lead_id).push(t);
             });
-            const leadRecords = (allLeads || []).map(l => ({ ...l, _receiverName: l.lead_receiver_name }));
+            const leadRecords = (allLeads || []).map(l => ({ ...l, _receiverName: personByLeadId.get(l.id)?.person || null }));
             const leadsRows = fosPersons.map(name => computePersonMetrics(name, leadRecords, leadTrackerByLeadId));
 
             // ---- Enquiries section ----
             const [{ data: allEnquiries, error: enqErr }, { data: allEnquiryTrackers, error: enqTrackersErr }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_receiver_name, created_at")
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_assign_to_person, created_at")
                     .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker").select("enquiry_id, created_at, is_order_received_status, quotation_value_without_tax")
                     .gte("created_at", fetchStartISO)),
@@ -959,7 +1003,7 @@ function Report() {
                 if (!enquiryTrackerByEnquiryId.has(t.enquiry_id)) enquiryTrackerByEnquiryId.set(t.enquiry_id, []);
                 enquiryTrackerByEnquiryId.get(t.enquiry_id).push(t);
             });
-            const enquiryRecords = (allEnquiries || []).map(e => ({ ...e, _receiverName: e.enquiry_receiver_name }));
+            const enquiryRecords = (allEnquiries || []).map(e => ({ ...e, _receiverName: e.enquiry_assign_to_person }));
             const enquiriesRows = fosPersons.map(name => computePersonMetrics(name, enquiryRecords, enquiryTrackerByEnquiryId));
 
             const visitCounts = await visitCountsPromise;
@@ -1019,6 +1063,14 @@ function Report() {
             };
             const isYes = (status) => String(status || "").trim().toLowerCase() === "yes";
 
+            // Pipeline = genuinely PENDING work, same tightened definition
+            // as the FOS Report tab: at least one tracker row exists and
+            // none have resolved to yes/no yet -- not just "hasn't said yes".
+            const isPendingRows = (rows) => rows.length > 0 && rows.every(t => {
+                const s = String(t.is_order_received_status || "").trim().toLowerCase();
+                return s !== "yes" && s !== "no";
+            });
+
             // For one filtered slice of records (already scoped to a single
             // SC+category, or a team-total group), compute all 8 metrics.
             const computeGroupMetrics = (records, trackerByRecordId) => {
@@ -1026,7 +1078,6 @@ function Report() {
 
                 records.forEach(rec => {
                     const trackerRows = trackerByRecordId.get(rec.id) || [];
-                    const isConverted = trackerRows.some(t => isYes(t.is_order_received_status));
 
                     let latestRow = null;
                     trackerRows.forEach(t => {
@@ -1038,7 +1089,7 @@ function Report() {
                         enquiries++;
                         enquiryValue += latestQuotationValue;
                     }
-                    if (inLast60Days(rec.created_at) && !isConverted) {
+                    if (inLast60Days(rec.created_at) && isPendingRows(trackerRows)) {
                         pipelineValue += latestQuotationValue;
                     }
 
@@ -1096,24 +1147,38 @@ function Report() {
             // deliberately NOT capping the upper end keeps "is it currently
             // converted" correct even when fetchEnd is a past custom date
             // (an order logged after that date still counts).
-            const [{ data: allLeads }, { data: allLeadTrackers }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_leads").select("id, sc_name, sales_type, created_at")
+            // lto_leads has no enquiry_assign_to_person column -- same
+            // attribution gap as FOS Report -- so the assigned person is
+            // looked up via lto_call_tracker_for_leads (unbounded, most
+            // recent assignment per lead wins) and attached as a synthetic
+            // `_assignedPerson` field for buildSection to key off.
+            const [{ data: allLeads }, { data: allLeadTrackers }, { data: allLeadCalls }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_leads").select("id, sales_type, created_at")
                     .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, created_at, is_order_received_status, quotation_value_without_tax, amount_with_tax")
                     .gte("created_at", fetchStartISO)),
+                fetchAllRows(() => supabase.from("lto_call_tracker_for_leads").select("lead_id, enquiry_assign_to_person, created_at")),
             ]);
+            const personByLeadId = new Map();
+            (allLeadCalls || []).forEach(c => {
+                if (!c.lead_id || !c.enquiry_assign_to_person) return;
+                const existing = personByLeadId.get(c.lead_id);
+                if (!existing || new Date(c.created_at) > new Date(existing.at)) {
+                    personByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, at: c.created_at });
+                }
+            });
             const leadTrackerByLeadId = new Map();
             (allLeadTrackers || []).forEach(t => {
                 if (!t.lead_id) return;
                 if (!leadTrackerByLeadId.has(t.lead_id)) leadTrackerByLeadId.set(t.lead_id, []);
                 leadTrackerByLeadId.get(t.lead_id).push(t);
             });
-            const leadsSection = buildSection(allLeads || [], leadTrackerByLeadId, "sc_name", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
+            const leadRecordsWithPerson = (allLeads || []).map(l => ({ ...l, _assignedPerson: personByLeadId.get(l.id)?.person || null }));
+            const leadsSection = buildSection(leadRecordsWithPerson, leadTrackerByLeadId, "_assignedPerson", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
 
-            // ---- Enquiries ---- (lto_enquiries has NO sc_name column --
-            // the real field is sales_coordinator_name)
+            // ---- Enquiries ----
             const [{ data: allEnquiries }, { data: allEnquiryTrackers }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, sales_coordinator_name, sales_type, created_at")
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_assign_to_person, sales_type, created_at")
                     .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker").select("enquiry_id, created_at, is_order_received_status, quotation_value_without_tax, amount_with_tax")
                     .gte("created_at", fetchStartISO)),
@@ -1124,7 +1189,7 @@ function Report() {
                 if (!enquiryTrackerByEnquiryId.has(t.enquiry_id)) enquiryTrackerByEnquiryId.set(t.enquiry_id, []);
                 enquiryTrackerByEnquiryId.get(t.enquiry_id).push(t);
             });
-            const enquiriesSection = buildSection(allEnquiries || [], enquiryTrackerByEnquiryId, "sales_coordinator_name", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
+            const enquiriesSection = buildSection(allEnquiries || [], enquiryTrackerByEnquiryId, "enquiry_assign_to_person", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
 
             setScPipelineData({ leads: leadsSection, enquiries: enquiriesSection });
 
