@@ -335,7 +335,7 @@ const FOS_METRIC_COLUMNS = [
     { key: "ordersConverted", label: "Orders Converted", format: "int" },
     { key: "orderConvertedValue", label: "Order Converted Value", format: "currency" },
     { key: "avgTicket", label: "Avg Ticket Size", format: "currency" },
-    { key: "pipelineCount", label: "Pipeline (Qty)", format: "int" },
+    { key: "pipelineCount", label: "Pipeline", format: "int" },
     { key: "pipelineValue", label: "Pipeline (Value)", format: "currency" },
 ];
 
@@ -627,61 +627,43 @@ function Report() {
 
             // ---- Base tables (unbounded -- a quotation created this week can
             // reference a lead/enquiry created any time in the past, so the
-            // lead_no/enquiry_no -> assigned person lookup needs the full
-            // table). lto_leads has no assign-to-person column of its own --
-            // see the allLeadCalls lookup below for how leads get attributed.
+            // lead_no/enquiry_no -> Person lookup needs the full table).
+            // Attribution is the lead/enquiry's OWN receiver-name column --
+            // lead_receiver_name / enquiry_receiver_name -- not any
+            // call-tracker or "assign to person" field.
             const [{ data: allLeads }, { data: allEnquiries }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_leads").select("id, lead_no, created_at")),
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, enquiry_assign_to_person, enquiry_approach, created_at")),
+                fetchAllRows(() => supabase.from("lto_leads").select("id, lead_no, lead_receiver_name, created_at")),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, enquiry_receiver_name, enquiry_approach, created_at")),
             ]);
+            const leadById = new Map();
+            (allLeads || []).forEach(l => leadById.set(l.id, l));
 
             // ---- This week's (or the filtered range's) call-tracker rows
             // (leads only -- there is no equivalent call-tracker table for
-            // direct enquiries) ----
+            // direct enquiries). Credited to the lead's OWN
+            // lead_receiver_name (via leadById), not this row's own
+            // enquiry_assign_to_person -- a call can be logged by someone
+            // other than the lead's receiver.
             const { data: weekCalls } = await fetchAllRows(() =>
                 supabase.from("lto_call_tracker_for_leads")
-                    .select("lead_id, enquiry_assign_to_person, created_at, enquiry_approach")
+                    .select("lead_id, created_at, enquiry_approach")
                     .gte("created_at", rangeStartISO)
                     .lte("created_at", rangeEndISO)
             );
 
-            // ---- All-time call-tracker rows, purely to determine which
-            // Person "owns" each lead. enquiry_assign_to_person only lives on
-            // lto_call_tracker_for_leads, and only gets set once a call is
-            // logged with "Enquiry Received = yes" -- a lead never called
-            // (or called with any other outcome) has no Person to attribute
-            // to, and won't count toward anyone below. A lead created this
-            // week can have been assigned at any point up to now, so this
-            // lookup is intentionally unbounded; the most recent assignment
-            // wins when a lead has more than one such row.
-            const { data: allLeadCalls } = await fetchAllRows(() =>
-                supabase.from("lto_call_tracker_for_leads").select("lead_id, enquiry_assign_to_person, created_at")
+            // ---- "Converted to Enquiries" = the lead is showing up in the
+            // Enquiry Tracker's Pending tab, i.e. lto_call_tracker_for_leads
+            // has planned_at set for it (written at the moment a call is
+            // logged with "Enquiry Received = yes" -- see
+            // CallTrackerForm.jsx). Fetched unbounded/all-time since a lead
+            // created this week could have been called (and had planned_at
+            // set) at any point up to now.
+            const { data: allLeadCallsForPlanning } = await fetchAllRows(() =>
+                supabase.from("lto_call_tracker_for_leads").select("lead_id, planned_at")
             );
-            const personByLeadId = new Map();
-            (allLeadCalls || []).forEach(c => {
-                if (!c.lead_id || !c.enquiry_assign_to_person) return;
-                const existing = personByLeadId.get(c.lead_id);
-                if (!existing || new Date(c.created_at) > new Date(existing.at)) {
-                    personByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, at: c.created_at });
-                }
-            });
-
-            // ---- Full tracker history per lead, needed to determine
-            // "currently pending" regardless of when that history was
-            // logged (a lead created this week could have tracker rows
-            // from any point up to now) ----
-            const { data: allLeadTrackers } = await fetchAllRows(() =>
-                supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, is_order_received_status")
-            );
-            const leadTrackersByLeadId = new Map();
-            (allLeadTrackers || []).forEach(t => {
-                if (!t.lead_id) return;
-                if (!leadTrackersByLeadId.has(t.lead_id)) leadTrackersByLeadId.set(t.lead_id, []);
-                leadTrackersByLeadId.get(t.lead_id).push(t);
-            });
-            const isPending = (rows) => rows.length > 0 && rows.every(r => {
-                const s = String(r.is_order_received_status || "").trim().toLowerCase();
-                return s !== "yes" && s !== "no";
+            const leadIdsWithPlannedAt = new Set();
+            (allLeadCallsForPlanning || []).forEach(c => {
+                if (c.lead_id && c.planned_at) leadIdsWithPlannedAt.add(c.lead_id);
             });
 
             // ---- Order conversions in-range (any lead/enquiry, regardless
@@ -722,19 +704,17 @@ function Report() {
                 });
             }
 
-            // ---- Lookups: lead_no / enquiry_no -> assigned person, for
-            // tying a quotation back to whichever person's lead/enquiry it
-            // belongs to ----
+            // ---- Lookups: lead_no / enquiry_no -> Person, for tying a
+            // quotation back to whichever person's lead/enquiry it belongs to ----
             const leadPersonByLeadNo = new Map();
             (allLeads || []).forEach(l => {
-                const person = personByLeadId.get(l.id)?.person;
-                if (l.lead_no && person) leadPersonByLeadNo.set(l.lead_no.trim().toUpperCase(), person);
+                if (l.lead_no && l.lead_receiver_name) leadPersonByLeadNo.set(l.lead_no.trim().toUpperCase(), l.lead_receiver_name);
             });
             const enquiryById = new Map();
             const enquiryPersonByEnquiryNo = new Map();
             (allEnquiries || []).forEach(e => {
                 enquiryById.set(e.id, e);
-                if (e.enquiry_no) enquiryPersonByEnquiryNo.set(e.enquiry_no.trim().toUpperCase(), e.enquiry_assign_to_person);
+                if (e.enquiry_no) enquiryPersonByEnquiryNo.set(e.enquiry_no.trim().toUpperCase(), e.enquiry_receiver_name);
             });
 
             // ==================== LEADS SECTION ====================
@@ -746,20 +726,24 @@ function Report() {
                 };
             });
 
+            // Credited to the lead's own lead_receiver_name (via leadById),
+            // not this call row's own enquiry_assign_to_person.
             const callsByLeadId = new Map();
             (weekCalls || []).forEach(c => {
-                if (!c.lead_id || !c.enquiry_assign_to_person) return;
-                if (!callsByLeadId.has(c.lead_id)) callsByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, approaches: new Set() });
+                if (!c.lead_id) return;
+                const person = leadById.get(c.lead_id)?.lead_receiver_name;
+                if (!person) return;
+                if (!callsByLeadId.has(c.lead_id)) callsByLeadId.set(c.lead_id, { person, approaches: new Set() });
                 if (c.enquiry_approach) callsByLeadId.get(c.lead_id).approaches.add(String(c.enquiry_approach).trim().toUpperCase());
             });
 
             (allLeads || []).forEach(lead => {
                 if (!inThisWeek(lead.created_at)) return;
-                const person = personByLeadId.get(lead.id)?.person;
+                const person = lead.lead_receiver_name;
                 if (!person || !leadStats[person]) return;
                 leadStats[person].totalLeads++;
 
-                if (isPending(leadTrackersByLeadId.get(lead.id) || [])) leadStats[person].convertedToEnquiry++;
+                if (leadIdsWithPlannedAt.has(lead.id)) leadStats[person].convertedToEnquiry++;
 
                 const callEntry = callsByLeadId.get(lead.id);
                 if (callEntry) {
@@ -769,20 +753,20 @@ function Report() {
             });
 
             // No. of Calls: distinct leads (any creation date) called this
-            // week, credited to that call's own assigned person, max one per lead.
+            // week, credited to that lead's own lead_receiver_name, max one per lead.
             callsByLeadId.forEach(entry => {
                 if (entry.person && leadStats[entry.person]) leadStats[entry.person].calls++;
             });
 
             // Order Converted: any lead (any creation date) whose order was
-            // marked received this week, credited to that lead's assigned person.
+            // marked received this week, credited to that lead's lead_receiver_name.
             (weekLeadOrders || []).forEach(row => {
-                const person = personByLeadId.get(row.lead_id)?.person;
+                const person = leadById.get(row.lead_id)?.lead_receiver_name;
                 if (person && leadStats[person]) leadStats[person].orderConverted++;
             });
 
             // Quotations: root quotations created this week whose reference
-            // no. points at a lead (LD-...), credited to that lead's assigned person.
+            // no. points at a lead (LD-...), credited to that lead's lead_receiver_name.
             rootWeekQuotations.forEach(q => {
                 const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
                 if (!ref.startsWith("LD-")) return;
@@ -806,7 +790,7 @@ function Report() {
 
             (allEnquiries || []).forEach(e => {
                 if (!inThisWeek(e.created_at)) return;
-                const person = e.enquiry_assign_to_person;
+                const person = e.enquiry_receiver_name;
                 if (!person || !enquiryStats[person]) return;
                 enquiryStats[person].totalEnquiries++;
                 const approach = String(e.enquiry_approach || "").trim().toUpperCase();
@@ -816,7 +800,7 @@ function Report() {
 
             (weekEnquiryOrders || []).forEach(row => {
                 const e = enquiryById.get(row.enquiry_id);
-                if (e?.enquiry_assign_to_person && enquiryStats[e.enquiry_assign_to_person]) enquiryStats[e.enquiry_assign_to_person].orderConverted++;
+                if (e?.enquiry_receiver_name && enquiryStats[e.enquiry_receiver_name]) enquiryStats[e.enquiry_receiver_name].orderConverted++;
             });
 
             rootWeekQuotations.forEach(q => {
@@ -886,17 +870,18 @@ function Report() {
             };
             const isYes = (status) => String(status || "").trim().toLowerCase() === "yes";
 
-            // Pipeline = genuinely PENDING work: at least one tracker row
-            // exists (the record actually entered the tracker) and none of
-            // them have resolved to yes/no yet -- matches the app's real
-            // "Pending" definition (see EnquiryTrackerForm.jsx's
-            // isPending-style checks) rather than just "hasn't said yes".
-            // A brand-new record with zero tracker activity, or one
-            // explicitly marked order-lost ("no"), is NOT pipeline.
-            const isPendingRows = (rows) => rows.length > 0 && rows.every(t => {
-                const s = String(t.is_order_received_status || "").trim().toLowerCase();
-                return s !== "yes" && s !== "no";
-            });
+            // Pipeline = genuinely PENDING work, matching the Enquiry
+            // Tracker's own "Pending" tab (enquiry_pending_view): anything
+            // that hasn't resolved to yes/no yet. A brand-new record with
+            // ZERO tracker activity still counts here -- it's untouched,
+            // not resolved, and it's exactly what shows up in that Pending
+            // tab -- only an explicit "yes" (converted) or "no" (order
+            // lost) removes it from pipeline.
+            const isPendingRows = (rows) => {
+                const hasYes = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "yes");
+                const hasNo = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "no");
+                return !hasYes && !hasNo;
+            };
 
             // Computes all 8 columns for one FOS person, given the full
             // (already date-bounded) record set for a section and its
@@ -1070,13 +1055,14 @@ function Report() {
             };
             const isYes = (status) => String(status || "").trim().toLowerCase() === "yes";
 
-            // Pipeline = genuinely PENDING work, same tightened definition
-            // as the FOS Report tab: at least one tracker row exists and
-            // none have resolved to yes/no yet -- not just "hasn't said yes".
-            const isPendingRows = (rows) => rows.length > 0 && rows.every(t => {
-                const s = String(t.is_order_received_status || "").trim().toLowerCase();
-                return s !== "yes" && s !== "no";
-            });
+            // Pipeline = genuinely PENDING work, same definition as the FOS
+            // Report tab -- see the comment there. Zero tracker activity
+            // still counts as pending; only an explicit yes/no removes it.
+            const isPendingRows = (rows) => {
+                const hasYes = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "yes");
+                const hasNo = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "no");
+                return !hasYes && !hasNo;
+            };
 
             // For one filtered slice of records (already scoped to a single
             // SC+category, or a team-total group), compute all 8 metrics.

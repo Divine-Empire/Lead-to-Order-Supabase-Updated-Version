@@ -13,8 +13,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AuthContext } from "../../App";
 import DirectEnquiryForm from "./DirectEnquiryForm";
 import supabase from "../../utils/supabase";
-import { syncEnquiryToSheetInBackground } from "../../utils/sheetSync";
-import { syncLeadToSheetInBackground } from "../../utils/sheetSyncLeads";
 import { isUrlReachable, regenerateQuotationPdf } from "../../utils/regenerateQuotationPdf";
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync";
 import { generateNextOrderNumber as generateNextOrderNumberShared } from "../../utils/orderNumberGenerator";
@@ -618,27 +616,6 @@ const handleSaveClick = async () => {
         // itself.
         showNotification("Updated successfully!", "success");
 
-        // Only order-received enquiries get pushed to the sheet, and the
-        // sync itself must never block this save flow — fired here without
-        // an await; its own success/failure just gets logged. Persistent
-        // loading toast (own id, dismissed by id not message text) so the
-        // user gets the same "don't close this window" signal every other
-        // sync call site already shows.
-        if (editedData.orderStatus?.toLowerCase() === "yes") {
-          const syncToastId = showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
-          syncEnquiryToSheetInBackground(
-            { enquiryNo: editedData.enquiry_no || directEnquiryUpdateData.enquiry_no },
-            (success) => {
-              dismissNotification(syncToastId);
-              if (success) {
-                showNotification("Data synced to Google Sheets", "success");
-              } else {
-                showNotification("Enquiry updated but Google Sheets sync may be delayed", "warning");
-              }
-            }
-          );
-        }
-
         fetchPendingData();
         // The converted row just left enquiry_pending_view for
         // enquiry_history_view (is_order_received_status flipped) -- without
@@ -858,32 +835,6 @@ const handleSaveClick = async () => {
     }
 
     alert("Updated successfully!");
-
-    // Only order-received enquiries/leads get pushed to the sheet, and the
-    // sync itself must never block this save flow — fired here without an
-    // await. trackerId pins the sync to the exact row just updated, since
-    // History rows are an append-only log and there can be several per
-    // enquiry/lead.
-    if (editedData.orderStatus?.toLowerCase() === "yes") {
-      // Own toast id per sync -- dismissed here specifically, not by
-      // message-text match, so it can't be stomped by (or stomp) any other
-      // sync's toast that happens to be in flight at the same time.
-      const syncToastId = showNotification("Syncing to Google Sheets... please don't close this window", "loading", 0);
-      const onSettled = (success) => {
-        dismissNotification(syncToastId);
-        if (success) {
-          showNotification("Data synced to Google Sheets", "success");
-        } else {
-          showNotification("Enquiry updated but Google Sheets sync may be delayed", "warning");
-        }
-      };
-
-      if (isLeadNumber) {
-        syncLeadToSheetInBackground({ leadNo: identifier, trackerId: editedData.id }, onSettled);
-      } else {
-        syncEnquiryToSheetInBackground({ enquiryNo: identifier, trackerId: editedData.id }, onSettled);
-      }
-    }
 
     // Refresh data
     fetchHistoryData(1, searchTerm, false, getDateFiltersFromCallingDays());
