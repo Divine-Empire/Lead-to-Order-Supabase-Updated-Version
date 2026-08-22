@@ -12,6 +12,7 @@ import { getNextQuotationNumber } from "./quotation-service";
 import { useQuotationData } from "./use-quotation-data";
 import supabase from "../../utils/supabase";
 import { loadQuotationDataByNumber } from "../../utils/quotationDataLoader";
+import { putFreightLast } from "../../utils/quotationItemsOrder";
 
 function Quotation() {
   const [activeTab, setActiveTab] = useState("edit");
@@ -543,7 +544,7 @@ function Quotation() {
 
       // Insert line items into make_quotation_items
       if (authoritativeQuotationId) {
-        const itemsPayload = (quotationData.items || [])
+        const itemsPayload = putFreightLast(quotationData.items || [])
           .filter((it) => it && (it.name || it.code || Number(it.amount) > 0))
           .map((it) => ({
             quotation_id: authoritativeQuotationId,

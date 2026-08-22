@@ -910,11 +910,18 @@ function Report() {
                     const trackerRows = trackerByRecordId.get(rec.id) || [];
                     const isConverted = trackerRows.some(t => isYes(t.is_order_received_status));
 
-                    let latestRow = null;
+                    // Latest row that actually HAS a quotation value -- not
+                    // just the newest row overall. A later stage (e.g. Order
+                    // Expected) inserts its own tracker row without ever
+                    // touching quotation_value_without_tax, so picking the
+                    // literal newest row would silently zero this out even
+                    // though an earlier row already set it.
+                    let latestValueRow = null;
                     trackerRows.forEach(t => {
-                        if (!latestRow || new Date(t.created_at) > new Date(latestRow.created_at)) latestRow = t;
+                        if (t.quotation_value_without_tax === null || t.quotation_value_without_tax === undefined) return;
+                        if (!latestValueRow || new Date(t.created_at) > new Date(latestValueRow.created_at)) latestValueRow = t;
                     });
-                    const latestValue = latestRow?.quotation_value_without_tax ? parseMoney(latestRow.quotation_value_without_tax) : 0;
+                    const latestValue = latestValueRow ? parseMoney(latestValueRow.quotation_value_without_tax) : 0;
 
                     if (inRange(rec.created_at)) {
                         enquiries++;
@@ -1079,11 +1086,14 @@ function Report() {
                 records.forEach(rec => {
                     const trackerRows = trackerByRecordId.get(rec.id) || [];
 
-                    let latestRow = null;
+                    // Latest row that actually HAS a quotation value -- see
+                    // the identical fix/comment in fetchFosMetrics above.
+                    let latestValueRow = null;
                     trackerRows.forEach(t => {
-                        if (!latestRow || new Date(t.created_at) > new Date(latestRow.created_at)) latestRow = t;
+                        if (t.quotation_value_without_tax === null || t.quotation_value_without_tax === undefined) return;
+                        if (!latestValueRow || new Date(t.created_at) > new Date(latestValueRow.created_at)) latestValueRow = t;
                     });
-                    const latestQuotationValue = latestRow?.quotation_value_without_tax ? parseMoney(latestRow.quotation_value_without_tax) : 0;
+                    const latestQuotationValue = latestValueRow ? parseMoney(latestValueRow.quotation_value_without_tax) : 0;
 
                     if (inThisWeek(rec.created_at)) {
                         enquiries++;

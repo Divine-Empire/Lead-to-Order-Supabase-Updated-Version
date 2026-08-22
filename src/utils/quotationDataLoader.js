@@ -10,6 +10,7 @@
 
 import supabase from "./supabase";
 import { getStateCodeFromName } from "./gstStateCodes";
+import { putFreightLast } from "./quotationItemsOrder";
 
 // Re-resolves the quotation's linked lead/enquiry (if any), keyed by the
 // quotation's own enquiry_reference_no ("LD-..."/"EN-..."), so consignee
@@ -143,6 +144,14 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
         { id: 2, code: "", name: "Freight", description: "", gst: 0, qty: 1, units: "Nos", rate: 0, discount: 0, flatDiscount: 0, amount: 0, isFreight: true },
       ];
     }
+
+    // Freight was saved wherever it happened to sit in quotationData.items
+    // at save time (see Quotation.jsx's insert) -- PostgREST/the DB gives
+    // no ordering guarantee back, so re-derive "Freight last" here rather
+    // than trusting the fetched order. Ids are reassigned sequentially
+    // afterward so they stay 1..N in the new order (handleAddItem's
+    // `Math.max(...ids) + 1` and React's `key` both rely on that).
+    items = putFreightLast(items).map((item, index) => ({ ...item, id: index + 1 }));
 
     const subtotal = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
     // flat_discount is a fixed currency amount (not a %), already baked

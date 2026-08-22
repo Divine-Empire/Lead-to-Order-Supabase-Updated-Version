@@ -12,6 +12,7 @@ import {
 import logo from "../../assests/WhatsApp Image 2025-05-14 at 4.11.43 PM.jpeg";
 import qr from "../../assests/qrlogo.png";
 import maniquipLogo1 from "../../assests/maniquip-logo-screenshot.png";
+import { putFreightLast, isFreightItem } from "../../utils/quotationItemsOrder";
 
 // Register custom Google Font that contains the Indian Rupee symbol (₹) using stable CDNJS assets
 Font.register({
@@ -594,7 +595,11 @@ const QuotationPDFDocument = ({
   if (!hiddenColumns?.hideFlatDisc) tableHeaders.push("Flat Disc");
   if (!hiddenColumns?.hideAmount) tableHeaders.push("Amount");
 
-  const items = quotationData.items || [];
+  // Freight was previously rendered in raw array order (could land mid-table
+  // if items were added after a revision reload) with no highlight at all --
+  // the live editor and preview already put it last and grey it; the PDF
+  // is now brought in line with both.
+  const items = putFreightLast(quotationData.items || []);
 
   // Calculate dynamic scaled column widths so the sum is always exactly 100%
   const totalBaseWidth = tableHeaders.reduce((sum, h) => {
@@ -761,8 +766,10 @@ const QuotationPDFDocument = ({
             </View>
 
             {/* Data Rows */}
-            {items.map((item, index) => (
-              <View key={index} style={styles.tableRow} minPresenceAhead={40}>
+            {items.map((item, index) => {
+              const isFreightRow = isFreightItem(item);
+              return (
+              <View key={index} style={[styles.tableRow, isFreightRow ? { backgroundColor: "#9ca3af" } : {}]} minPresenceAhead={40}>
                 {tableHeaders.map((header, idx) => {
                   let cellContent = "";
                   if (header === "S No.") cellContent = index + 1;
@@ -782,6 +789,7 @@ const QuotationPDFDocument = ({
                       key={header}
                       style={[
                         styles.tableCell,
+                        isFreightRow ? { backgroundColor: "#9ca3af" } : {},
                         {
                           width: scaledColWidths[header],
                           flexGrow: colStyles[header].flexGrow,
@@ -801,7 +809,8 @@ const QuotationPDFDocument = ({
                   );
                 })}
               </View>
-            ))}
+              );
+            })}
 
             {/* Empty fallback row */}
             {items.length === 0 && (

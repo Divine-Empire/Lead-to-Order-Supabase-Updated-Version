@@ -5,6 +5,7 @@ import {
   EyeIcon,
   DownloadIcon,
 } from "../../components/Icons";
+import { putFreightLast } from "../../utils/quotationItemsOrder";
 
 // Function to convert number to words for Indian Rupees
 const numberToWords = (num) => {
@@ -149,7 +150,7 @@ const QuotationPreview = ({
               </tr>
             </thead>
             <tbody>
-              {quotationData.items.map((item, index) => (
+              {putFreightLast(quotationData.items).map((item, index) => (
                 <tr
                   key={item.id}
                   className={
