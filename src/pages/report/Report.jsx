@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect, useContext, useCallback } from "react";
+import { useState, useEffect, useContext, useCallback, useRef } from "react";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
 
@@ -463,6 +463,21 @@ function Report() {
 
     const [isLoading, setIsLoading] = useState(true);
 
+    // Each of the 3 tabs' fetches is async and slow enough (paginated,
+    // 1000+ row tables) that changing the date filter while a previous
+    // fetch for the same tab is still in flight is common, not an edge
+    // case. Without a guard, whichever fetch happens to RESOLVE last wins
+    // and overwrites state -- even if it was kicked off with the OLDER
+    // filter values -- which looks exactly like "the date filter doesn't
+    // work" (the picker changes, but the table snaps back to/stays on the
+    // previous range). Each fetch captures its own requestId at the start
+    // and only commits state if it's still the most recent call for that
+    // tab by the time its awaits resolve; a superseded (stale) call's
+    // result is silently discarded instead of applied.
+    const callingRequestIdRef = useRef(0);
+    const fosRequestIdRef = useRef(0);
+    const scPipelineRequestIdRef = useRef(0);
+
     // Helper to format date for query if needed, or use directly
     const getEndDateWithTime = (date) => {
         if (!date) return null
@@ -591,6 +606,7 @@ function Report() {
 
     const fetchCallingDataReport = useCallback(async () => {
         if (activeTab !== "calling") return;
+        const requestId = ++callingRequestIdRef.current;
         setIsLoading(true);
         try {
             // Default window is the current week (Monday 00:00 -> now), per
@@ -620,8 +636,10 @@ function Report() {
             const visiblePersons = callingPersons.filter(name => allowedNames.includes(name));
 
             if (visiblePersons.length === 0) {
-                setLeadsReportRows([]);
-                setEnquiriesReportRows([]);
+                if (requestId === callingRequestIdRef.current) {
+                    setLeadsReportRows([]);
+                    setEnquiriesReportRows([]);
+                }
                 return;
             }
 
@@ -703,6 +721,12 @@ function Report() {
                     quotationAmountByQId.set(it.quotation_id, (quotationAmountByQId.get(it.quotation_id) || 0) + parseMoney(it.amount));
                 });
             }
+
+            // A newer call for this tab (e.g. the date filter was changed
+            // again while all the fetches above were still in flight) has
+            // since started -- discard this now-stale result rather than
+            // overwriting whatever that newer call ends up committing.
+            if (requestId !== callingRequestIdRef.current) return;
 
             // ---- Lookups: lead_no / enquiry_no -> Person, for tying a
             // quotation back to whichever person's lead/enquiry it belongs to ----
@@ -818,12 +842,13 @@ function Report() {
         } catch (error) {
             console.error("Error fetching calling data report:", error);
         } finally {
-            setIsLoading(false);
+            if (requestId === callingRequestIdRef.current) setIsLoading(false);
         }
     }, [activeTab, isAdmin, getUsernamesToFilter, callingPersons, callingFilters]);
 
     const fetchFosMetrics = useCallback(async () => {
         if (activeTab !== "fos") return;
+        const requestId = ++fosRequestIdRef.current;
         setIsLoading(true);
         setFosError(null);
         setFosVisitError(null);
@@ -837,10 +862,10 @@ function Report() {
             // deliberately NOT the fosFilters custom range/60-day pipeline
             // windows used by the rest of this tab's metrics.
             const visitCountsPromise = fetchFosVisitCounts(monday, now)
-                .then(counts => { setFosVisitError(null); return counts; })
+                .then(counts => { if (requestId === fosRequestIdRef.current) setFosVisitError(null); return counts; })
                 .catch(err => {
                     console.error("FOS visit-count fetch error:", err);
-                    setFosVisitError(err?.message || "Failed to load Total Visit count.");
+                    if (requestId === fosRequestIdRef.current) setFosVisitError(err?.message || "Failed to load Total Visit count.");
                     return null; // null (not {}) so it renders "--", not "0"
                 });
             const defaultSixtyDaysAgo = new Date(now);
@@ -999,14 +1024,23 @@ function Report() {
             const enquiriesRows = fosPersons.map(name => computePersonMetrics(name, enquiryRecords, enquiryTrackerByEnquiryId));
 
             const visitCounts = await visitCountsPromise;
+
+            // A newer call for this tab has since started (e.g. the date
+            // filter changed again while this one was still fetching) --
+            // discard this now-stale result rather than overwriting
+            // whatever that newer call ends up committing.
+            if (requestId !== fosRequestIdRef.current) return;
+
             setFosTableData({ leads: withVisitCounts(leadsRows), enquiries: withVisitCounts(enquiriesRows) });
 
         } catch (err) {
             console.error("FOS fetch error:", err);
-            setFosError(err?.message || "Failed to load FOS report data.");
-            setFosTableData({ leads: [], enquiries: [] });
+            if (requestId === fosRequestIdRef.current) {
+                setFosError(err?.message || "Failed to load FOS report data.");
+                setFosTableData({ leads: [], enquiries: [] });
+            }
         } finally {
-            setIsLoading(false);
+            if (requestId === fosRequestIdRef.current) setIsLoading(false);
         }
     }, [fosFilters, activeTab, fosPersons]);
 
@@ -1019,6 +1053,7 @@ function Report() {
     };
     const fetchScPipelineMetrics = useCallback(async () => {
         if (activeTab !== "sc_pipeline") return;
+        const requestId = ++scPipelineRequestIdRef.current;
         setIsLoading(true);
         setScPipelineError(null);
         try {
@@ -1187,13 +1222,19 @@ function Report() {
             });
             const enquiriesSection = buildSection(allEnquiries || [], enquiryTrackerByEnquiryId, "enquiry_assign_to_person", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
 
+            // A newer call for this tab has since started (e.g. the date
+            // filter changed again while this one was still fetching) --
+            // discard this now-stale result rather than overwriting
+            // whatever that newer call ends up committing.
+            if (requestId !== scPipelineRequestIdRef.current) return;
+
             setScPipelineData({ leads: leadsSection, enquiries: enquiriesSection });
 
         } catch (error) {
             console.error("Error fetching SC Pipeline metrics:", error);
-            setScPipelineError(error?.message || "Failed to load SC Pipeline data.");
+            if (requestId === scPipelineRequestIdRef.current) setScPipelineError(error?.message || "Failed to load SC Pipeline data.");
         } finally {
-            setIsLoading(false);
+            if (requestId === scPipelineRequestIdRef.current) setIsLoading(false);
         }
     }, [activeTab, scPipelineFilters, scPipelinePersons]);
 
