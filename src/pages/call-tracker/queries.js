@@ -57,17 +57,18 @@ export function usePendingCallTracker({
       if (phoneFilter && phoneFilter.length > 0) {
         query = query.in("phone_number", phoneFilter);
       }
-      if (dateFilter && dateFilter !== "all") {
+      // dateFilter is an array (checkbox multi-select) -- OR the selected
+      // buckets together rather than comparing the whole array to a single
+      // string, which is what silently no-op'd this filter before.
+      if (Array.isArray(dateFilter) && dateFilter.length > 0) {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const todayStr = today.toISOString().split("T")[0];
-        if (dateFilter === "today") {
-          query = query.eq("next_call_date", todayStr);
-        } else if (dateFilter === "overdue") {
-          query = query.lt("next_call_date", todayStr);
-        } else if (dateFilter === "upcoming") {
-          query = query.gt("next_call_date", todayStr);
-        }
+        const clauses = [];
+        if (dateFilter.includes("today")) clauses.push(`next_call_date.eq.${todayStr}`);
+        if (dateFilter.includes("overdue")) clauses.push(`next_call_date.lt.${todayStr}`);
+        if (dateFilter.includes("upcoming")) clauses.push(`next_call_date.gt.${todayStr}`);
+        if (clauses.length > 0) query = query.or(clauses.join(","));
       }
 
       // Ascending by display_no -- matches the numeric-aware leadId sort the
@@ -131,14 +132,16 @@ export function useHistoryCallTracker({
       } else if (filterType === "multi") {
         query = query.ilike("status", "%expected%");
       }
-      if (dateFilter === "today") {
+      // History matches on Timestamp (created_at), not next_call_date --
+      // and, same as Pending above, dateFilter is an array so the selected
+      // buckets are OR'd together instead of compared as a whole to a string.
+      if (Array.isArray(dateFilter) && dateFilter.length > 0) {
         const today = new Date();
         const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-        query = query.gte("created_at", todayStr);
-      } else if (dateFilter === "older") {
-        const today = new Date();
-        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-        query = query.lt("created_at", todayStr);
+        const clauses = [];
+        if (dateFilter.includes("today")) clauses.push(`created_at.gte.${todayStr}`);
+        if (dateFilter.includes("older")) clauses.push(`created_at.lt.${todayStr}`);
+        if (clauses.length > 0) query = query.or(clauses.join(","));
       }
       if (startDate) query = query.gte("created_at", startDate);
       if (endDate) query = query.lte("created_at", endDate);

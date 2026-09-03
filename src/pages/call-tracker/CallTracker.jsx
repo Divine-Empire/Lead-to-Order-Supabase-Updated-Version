@@ -52,7 +52,11 @@ function CallTracker() {
   const [historyFollowUps, setHistoryFollowUps] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filterType, setFilterType] = useState("all");
-  const [dateFilter, setDateFilter] = useState("all");
+  // Multi-select checkbox filter (Today/Overdue/Upcoming for Pending,
+  // Today's Calls/Older Calls for History) -- must be an array, since
+  // CallTrackerFilter.jsx renders it via SearchableDropdown's isMulti mode
+  // and calls setDateFilter with an array of selected values.
+  const [dateFilter, setDateFilter] = useState([]);
   const [companyFilter, setCompanyFilter] = useState([]);
   const [personFilter, setPersonFilter] = useState([]);
   const [phoneFilter, setPhoneFilter] = useState([]);
@@ -69,7 +73,7 @@ function CallTracker() {
   const [editingRowId, setEditingRowId] = useState(null);
   const [editedData, setEditedData] = useState({});
 
-  const [, setHistoryCounts] = useState({ today: 0, older: 0 });
+  const [historyCounts, setHistoryCounts] = useState({ today: 0, older: 0 });
   const [, setFilteredCount] = useState(0);
 
   const [visibleColumns, setVisibleColumns] = useState({
@@ -1988,7 +1992,13 @@ function CallTracker() {
         setPhoneFilter={setPhoneFilter}
         dateFilter={dateFilter}
         setDateFilter={setDateFilter}
-        dateFilterCounts={dateFilterCounts}
+        // CallTrackerFilter reads `.today`/`.overdue`/`.upcoming` for the
+        // Pending tab and `.today`/`.older` for the History tab off this
+        // same prop -- dateFilterCounts only ever holds the Pending shape
+        // (no `older` key), so History picked its badge counts from the
+        // wrong state, showing e.g. "Older Calls (0)" no matter how many
+        // actually matched. Pick the tab-correct counts object here instead.
+        dateFilterCounts={activeTab === "history" ? historyCounts : dateFilterCounts}
         filterType={filterType}
         setFilterType={setFilterType}
         showColumnDropdown={showColumnDropdown}

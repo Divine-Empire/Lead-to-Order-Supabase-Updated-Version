@@ -160,7 +160,7 @@ async function attachLatestQuotations(rows) {
 // filter is a real WHERE clause against the view, not a client-side re-scan
 // of whatever rows happen to already be loaded -- this is what lets a
 // filter surface matches that haven't been paged into the UI yet.
-function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction }) {
+function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction }) {
   let q = query;
 
   if (searchTerm) {
@@ -173,15 +173,6 @@ function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter
     q = q.gte("quotation_value_without_tax", 100000);
   } else if (valueFilter === "lt100000") {
     q = q.lt("quotation_value_without_tax", 100000);
-  }
-  if (callingDaysFilter && callingDaysFilter.length > 0) {
-    const today = new Date().toISOString().split("T")[0];
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
-    const clauses = [];
-    if (callingDaysFilter.includes("today")) clauses.push(`and(next_call_date.gte.${today},next_call_date.lt.${tomorrow})`);
-    if (callingDaysFilter.includes("overdue") || callingDaysFilter.includes("older")) clauses.push(`next_call_date.lt.${today}`);
-    if (callingDaysFilter.includes("upcoming")) clauses.push(`next_call_date.gte.${tomorrow}`);
-    if (clauses.length > 0) q = q.or(clauses.join(","));
   }
 
   // A lead-source-restricted account (login.restricted_lead_sources) is
@@ -198,6 +189,35 @@ function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter
   }
 
   return q;
+}
+
+// Pending tab's calling-days filter (Today/Overdue/Upcoming) matches on
+// Next-Call Date.
+function applyPendingCallingDaysFilter(query, callingDaysFilter) {
+  if (!callingDaysFilter || callingDaysFilter.length === 0) return query;
+  const today = new Date().toISOString().split("T")[0];
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+  const clauses = [];
+  if (callingDaysFilter.includes("today")) clauses.push(`and(next_call_date.gte.${today},next_call_date.lt.${tomorrow})`);
+  if (callingDaysFilter.includes("overdue")) clauses.push(`next_call_date.lt.${today}`);
+  if (callingDaysFilter.includes("upcoming")) clauses.push(`next_call_date.gte.${tomorrow}`);
+  if (clauses.length === 0) return query;
+  return query.or(clauses.join(","));
+}
+
+// History tab's calling-days filter (Today's Calls/Older Calls) matches on
+// Timestamp (created_at) instead -- a closed/history row's next_call_date
+// isn't the meaningful date there, the Timestamp column (created_at) is
+// what's actually shown and what the filter should match, same as
+// CallTracker.jsx's history-tab date filter.
+function applyHistoryCallingDaysFilter(query, callingDaysFilter) {
+  if (!callingDaysFilter || callingDaysFilter.length === 0) return query;
+  const today = new Date().toISOString().split("T")[0];
+  const clauses = [];
+  if (callingDaysFilter.includes("today")) clauses.push(`created_at.gte.${today}`);
+  if (callingDaysFilter.includes("older")) clauses.push(`created_at.lt.${today}`);
+  if (clauses.length === 0) return query;
+  return query.or(clauses.join(","));
 }
 
 export function usePendingEnquiries({
@@ -241,7 +261,8 @@ export function usePendingEnquiries({
         .order("created_at", { ascending: false })
         .range(from, to);
 
-      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+      query = applyPendingCallingDaysFilter(query, callingDaysFilter);
 
       const { data, error, count } = await query;
       if (error) throw error;
@@ -292,7 +313,8 @@ export function useHistoryEnquiries({
         .order("created_at", { ascending: false })
         .range(from, to);
 
-      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+      query = applyHistoryCallingDaysFilter(query, callingDaysFilter);
 
       const { data, error, count } = await query;
       if (error) throw error;

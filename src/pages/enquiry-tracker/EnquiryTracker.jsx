@@ -1979,10 +1979,12 @@ const handleSaveClick = async () => {
         else if (isUpcoming(nextCallDate)) counts.upcoming++;
       });
     } else if (activeTab === "history") {
+      // History matches on Timestamp (created_at), not Next-Call Date --
+      // same field the "Timestamp" column itself renders (see mapHistoryRow).
       historyData.forEach((tracker) => {
-        const nextCallDate = tracker.nextCallDate || tracker.nextCallDate1 || tracker.calling_days || tracker.Calling_Days || tracker.plannedAt || "";
-        if (isToday(nextCallDate)) counts.today++;
-        else if (isOverdue(nextCallDate) || (nextCallDate && parseDateHelper(nextCallDate))) counts.older++;
+        const timestamp = tracker.created_at || "";
+        if (isToday(timestamp)) counts.today++;
+        else if (timestamp && parseDateHelper(timestamp)) counts.older++;
       });
     }
 
@@ -2385,8 +2387,10 @@ const handleSaveClick = async () => {
       if (!currentStageFilter.includes(tracker.currentStage || "")) return false;
     }
     if (callingDaysFilter.length > 0) {
-      const dateVal = tracker.nextCallDate || tracker.nextCallDate1 || tracker.Calling_Days || tracker.calling_days || tracker.callingDate || tracker.plannedAt || "";
       if (tab === "history") {
+        // History matches on Timestamp (created_at), not Next-Call Date --
+        // same field the "Timestamp" column itself renders.
+        const dateVal = tracker.created_at || "";
         const ok = callingDaysFilter.some(f => {
           if (f === "today") return isToday(dateVal);
           if (f === "older") return !isToday(dateVal) && !!parseDateHelper(dateVal);
@@ -2394,6 +2398,7 @@ const handleSaveClick = async () => {
         });
         if (!ok) return false;
       } else {
+        const dateVal = tracker.nextCallDate || tracker.nextCallDate1 || tracker.Calling_Days || tracker.calling_days || tracker.callingDate || tracker.plannedAt || "";
         const ok = callingDaysFilter.some(f => {
           if (f === "today") return isToday(dateVal);
           if (f === "overdue") return isOverdue(dateVal);
