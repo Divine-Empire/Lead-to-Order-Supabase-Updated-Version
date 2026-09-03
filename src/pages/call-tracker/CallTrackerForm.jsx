@@ -323,6 +323,16 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+
+    // The radio group below has no shared `name`-based HTML validation that
+    // actually blocks submit (see the `required` fix on each radio too) --
+    // this is the belt-and-suspenders check so a missed/unsupported case
+    // can't slip a record through with enquiry_received_status left blank.
+    if (!enquiryStatus) {
+      showNotification("Please select an Enquiry Received Status", "error")
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
@@ -626,6 +636,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                     checked={enquiryStatus === "yes"}
                     onChange={() => setEnquiryStatus("yes")}
                     className="h-4 w-4 text-warning-foreground focus:ring-primary"
+                    required
                   />
                   <label htmlFor="yes" className="text-sm text-gray-700">
                     Yes
@@ -640,6 +651,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                     checked={enquiryStatus === "expected"}
                     onChange={() => setEnquiryStatus("expected")}
                     className="h-4 w-4 text-warning-foreground focus:ring-primary"
+                    required
                   />
                   <label htmlFor="expected" className="text-sm text-gray-700">
                     Expected
@@ -654,6 +666,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                     checked={enquiryStatus === "not-interested"}
                     onChange={() => setEnquiryStatus("not-interested")}
                     className="h-4 w-4 text-warning-foreground focus:ring-primary"
+                    required
                   />
                   <label htmlFor="not-interested" className="text-sm text-gray-700">
                     Not Interested

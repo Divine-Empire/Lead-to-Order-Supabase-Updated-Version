@@ -104,7 +104,7 @@ const ConsignorDetails = ({
             <label className="block text-sm font-medium">Phone</label>
             <input
               type="text"
-              value={quotationData.consignorPhone || "0771-490-0515"}
+              value={quotationData.consignorPhone || "0772-400515"}
               readOnly
               className="w-full p-2 border border-gray-300 rounded-md"
             />

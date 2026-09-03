@@ -1,6 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import supabase from "../../utils/supabase";
 
+// Today's date as a local YYYY-MM-DD string. NOT `date.toISOString().split("T")[0]`
+// -- toISOString() converts to UTC first, so in any timezone ahead of UTC
+// (IST, +5:30) local midnight becomes the previous day's evening in UTC,
+// silently shifting every "today" cutoff (Today/Overdue/Upcoming/First Call
+// Pending) back by a day.
+function getLocalTodayStr() {
+  const today = new Date();
+  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+}
+
 // Shared by both tabs: search + SC-name scoping.
 function applyCommonFilters(query, { searchTerm, scNameFilter, isAdmin, usernamesToFilter }) {
   let q = query;
@@ -20,8 +30,6 @@ export function usePendingCallTracker({
   itemsPerPage,
   searchTerm,
   scNameFilter,
-  personFilter,
-  phoneFilter,
   dateFilter,
   isAdmin,
   usernamesToFilter,
@@ -35,8 +43,6 @@ export function usePendingCallTracker({
       itemsPerPage,
       searchTerm,
       scNameFilter,
-      personFilter,
-      phoneFilter,
       dateFilter,
       isAdmin,
       usernamesToFilter,
@@ -49,24 +55,29 @@ export function usePendingCallTracker({
         .from("call_tracker_pending_view")
         .select("*", { count: "exact" });
 
+      // Company/Person/Phone are matched by the free-text search box (via
+      // search_text, which already includes all three) rather than
+      // dedicated dropdowns -- see applyCommonFilters above.
       query = applyCommonFilters(query, { searchTerm, scNameFilter, isAdmin, usernamesToFilter });
 
-      if (personFilter && personFilter.length > 0) {
-        query = query.in("person_name", personFilter);
-      }
-      if (phoneFilter && phoneFilter.length > 0) {
-        query = query.in("phone_number", phoneFilter);
-      }
       // dateFilter is an array (checkbox multi-select) -- OR the selected
       // buckets together rather than comparing the whole array to a single
       // string, which is what silently no-op'd this filter before.
+      //
+      // "Overdue" and "First Call Pending" both come from next_call_date
+      // being in the past, but pending_group ('new' = never called even
+      // once, its next_call_date is really the lead's own planned_at TAT
+      // deadline; 'existing' = already called at least once, next_call_date
+      // is a real logged follow-up date -- see call_tracker_pending_view)
+      // tells them apart, so "Overdue" only means already-contacted leads
+      // whose follow-up is late, and never-contacted leads show up under
+      // "First Call Pending" instead.
       if (Array.isArray(dateFilter) && dateFilter.length > 0) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayStr = today.toISOString().split("T")[0];
+        const todayStr = getLocalTodayStr();
         const clauses = [];
         if (dateFilter.includes("today")) clauses.push(`next_call_date.eq.${todayStr}`);
-        if (dateFilter.includes("overdue")) clauses.push(`next_call_date.lt.${todayStr}`);
+        if (dateFilter.includes("overdue")) clauses.push(`and(pending_group.eq.existing,next_call_date.lt.${todayStr})`);
+        if (dateFilter.includes("first-call-pending")) clauses.push(`and(pending_group.eq.new,next_call_date.lt.${todayStr})`);
         if (dateFilter.includes("upcoming")) clauses.push(`next_call_date.gt.${todayStr}`);
         if (clauses.length > 0) query = query.or(clauses.join(","));
       }
@@ -89,7 +100,6 @@ export function useHistoryCallTracker({
   itemsPerPage,
   searchTerm,
   scNameFilter,
-  companyFilter,
   filterType,
   dateFilter,
   startDate,
@@ -106,7 +116,6 @@ export function useHistoryCallTracker({
       itemsPerPage,
       searchTerm,
       scNameFilter,
-      companyFilter,
       filterType,
       dateFilter,
       startDate,
@@ -122,11 +131,10 @@ export function useHistoryCallTracker({
         .from("call_tracker_history_view")
         .select("*", { count: "exact" });
 
+      // Company is matched by the free-text search box (via search_text)
+      // rather than a dedicated dropdown -- see applyCommonFilters above.
       query = applyCommonFilters(query, { searchTerm, scNameFilter, isAdmin, usernamesToFilter });
 
-      if (companyFilter && companyFilter.length > 0) {
-        query = query.in("company_name", companyFilter);
-      }
       if (filterType === "first") {
         query = query.or('status.is.null,status.eq."",status.eq."New"');
       } else if (filterType === "multi") {
@@ -136,8 +144,7 @@ export function useHistoryCallTracker({
       // and, same as Pending above, dateFilter is an array so the selected
       // buckets are OR'd together instead of compared as a whole to a string.
       if (Array.isArray(dateFilter) && dateFilter.length > 0) {
-        const today = new Date();
-        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const todayStr = getLocalTodayStr();
         const clauses = [];
         if (dateFilter.includes("today")) clauses.push(`created_at.gte.${todayStr}`);
         if (dateFilter.includes("older")) clauses.push(`created_at.lt.${todayStr}`);
@@ -159,7 +166,7 @@ export function useHistoryCallTracker({
 
 // Lightweight count-only queries for the tab/filter badge numbers, so those
 // don't require pulling every row into memory just to count them.
-export async function fetchCallTrackerFilterTypeCounts({ activeTab, scNameFilter, companyFilter, isAdmin, usernamesToFilter }) {
+export async function fetchCallTrackerFilterTypeCounts({ activeTab, scNameFilter, isAdmin, usernamesToFilter }) {
   try {
     if (activeTab === "pending") {
       let q = supabase.from("call_tracker_pending_view").select("*", { count: "exact", head: true });
@@ -174,7 +181,6 @@ export async function fetchCallTrackerFilterTypeCounts({ activeTab, scNameFilter
 
     const base = () => {
       let q = supabase.from("call_tracker_history_view").select("*", { count: "exact", head: true });
-      if (companyFilter && companyFilter.length > 0) q = q.in("company_name", companyFilter);
       if (!isAdmin && usernamesToFilter && usernamesToFilter.length > 0) {
         q = q.in("assigned_to", usernamesToFilter);
       } else if (isAdmin && scNameFilter && scNameFilter.length > 0) {
@@ -195,37 +201,45 @@ export async function fetchCallTrackerFilterTypeCounts({ activeTab, scNameFilter
   }
 }
 
-// Today/overdue/upcoming badge counts for the Pending tab's date filter --
-// scoped by the same search/SC-name filters currently applied, matching what
-// the old client-side count (derived from the fully-loaded pending array)
-// used to reflect.
+// Today/overdue/first-call-pending/upcoming badge counts for the Pending
+// tab's date filter -- scoped by the same search/SC-name filters currently
+// applied, matching what the old client-side count (derived from the
+// fully-loaded pending array) used to reflect.
+//
+// "Overdue" is scoped to pending_group='existing' (already contacted at
+// least once) and "First Call Pending" to pending_group='new' (never
+// contacted -- next_call_date there is really the lead's planned_at TAT
+// deadline) -- see the matching split in usePendingCallTracker above.
 export async function fetchCallTrackerDateFilterCounts({ searchTerm, scNameFilter, isAdmin, usernamesToFilter }) {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().split("T")[0];
+    const todayStr = getLocalTodayStr();
 
     const base = () => applyCommonFilters(
       supabase.from("call_tracker_pending_view").select("*", { count: "exact", head: true }),
       { searchTerm, scNameFilter, isAdmin, usernamesToFilter }
     );
 
-    const [todayRes, overdueRes, upcomingRes] = await Promise.all([
+    const [todayRes, overdueRes, firstCallPendingRes, upcomingRes] = await Promise.all([
       base().eq("next_call_date", todayStr),
-      base().lt("next_call_date", todayStr),
+      base().eq("pending_group", "existing").lt("next_call_date", todayStr),
+      base().eq("pending_group", "new").lt("next_call_date", todayStr),
       base().gt("next_call_date", todayStr),
     ]);
-    return { today: todayRes.count || 0, overdue: overdueRes.count || 0, upcoming: upcomingRes.count || 0 };
+    return {
+      today: todayRes.count || 0,
+      overdue: overdueRes.count || 0,
+      firstCallPending: firstCallPendingRes.count || 0,
+      upcoming: upcomingRes.count || 0,
+    };
   } catch (error) {
     console.error("Error fetching call tracker date filter counts:", error);
-    return { today: 0, overdue: 0, upcoming: 0 };
+    return { today: 0, overdue: 0, firstCallPending: 0, upcoming: 0 };
   }
 }
 
 export async function fetchCallTrackerHistoryDateCounts({ scNameFilter, isAdmin, usernamesToFilter }) {
   try {
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const todayStr = getLocalTodayStr();
 
     const base = () => {
       let q = supabase.from("call_tracker_history_view").select("*", { count: "exact", head: true });
@@ -266,12 +280,13 @@ export async function fetchCallTrackerScNameOptions() {
   }
 }
 
-// CallTrackerFilter.jsx derives its Company/Person/Phone dropdown options
-// (with counts) from a `pendingFollowUps`-shaped array prop. Now that the
-// real pending data is paginated (only the current page ever loads), this
-// fetches just the 4 fields that component actually reads, chunked past the
-// 1000-row cap, as a separate lightweight source -- so that component needs
-// no changes at all.
+// CallTrackerFilter.jsx derives the History tab's "First Followup"/"Expected"
+// counts from a `pendingFollowUps`-shaped array prop, reading only
+// enquiryStatus off it (Company/Person/Phone dropdowns that used to read the
+// other 3 fields here were removed -- that filtering now goes through the
+// free-text search box instead, via search_text). Chunked past the 1000-row
+// cap since the real pending data is paginated and only the current page
+// ever loads.
 export async function fetchPendingFilterOptionsSource() {
   const rows = [];
   let from = 0;
@@ -281,16 +296,11 @@ export async function fetchPendingFilterOptionsSource() {
     while (fetchMore) {
       const { data, error } = await supabase
         .from("call_tracker_pending_view")
-        .select("company_name, person_name, phone_number, enquiry_status")
+        .select("enquiry_status")
         .range(from, from + step - 1);
       if (error) throw error;
       (data || []).forEach((r) => {
-        rows.push({
-          companyName: r.company_name || "",
-          personName: r.person_name || "",
-          phoneNumber: r.phone_number || "",
-          enquiryStatus: r.enquiry_status || "",
-        });
+        rows.push({ enquiryStatus: r.enquiry_status || "" });
       });
       if (!data || data.length < step) fetchMore = false;
       else from += step;

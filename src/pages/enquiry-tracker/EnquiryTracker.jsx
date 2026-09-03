@@ -270,6 +270,31 @@ function EnquiryTracker() {
   const [editingRowId, setEditingRowId] = useState(null);
   const [editedData, setEditedData] = useState({});
 
+  // Valid-value option lists for the inline Pending-row edit -- same
+  // lto_dropdown categories CallTrackerForm.jsx/MakeQuotationForm.jsx use,
+  // so a value typed here matches what those forms would have offered.
+  const [customerFeedbackOptions, setCustomerFeedbackOptions] = useState([]);
+  const [quotationSharedByOptions, setQuotationSharedByOptions] = useState([]);
+  useEffect(() => {
+    const fetchEditOptions = async () => {
+      try {
+        const [{ data: feedbackData }, { data: sharedByData }] = await Promise.all([
+          supabase.from("lto_dropdown").select("value").eq("category", "what_did_customer_say"),
+          supabase.from("lto_dropdown").select("value").eq("category", "quotation_shared_by"),
+        ]);
+        setCustomerFeedbackOptions(
+          Array.from(new Set((feedbackData || []).map((r) => r.value).filter(Boolean))).sort()
+        );
+        setQuotationSharedByOptions(
+          Array.from(new Set((sharedByData || []).map((r) => r.value).filter(Boolean))).sort()
+        );
+      } catch (err) {
+        console.error("Error fetching inline-edit dropdown options:", err);
+      }
+    };
+    fetchEditOptions();
+  }, []);
+
   // Tracks which quotation's "View File" link is mid-regeneration (keyed by
   // quotation number) so only that one link shows a loading state -- see
   // handleQuotationFileClick / regenerateQuotationPdf.js.
@@ -677,6 +702,40 @@ const handleSaveClick = async () => {
         console.error("Pending update error:", error);
         alert(`Error updating record: ${error.message}`);
         throw error;
+      }
+
+      // Fields that represent a stage/history change belong on
+      // lto_enquiry_tracker_for_leads as a new log row, not on lto_leads --
+      // this insert used to be missing entirely, which is why editing e.g.
+      // Current Stage, Next Follow-Up Date, Customer Feedback, Quotation
+      // Shared By or Quotation Remarks on a lead-sourced Pending row never
+      // actually saved anything beyond the lead's own master fields above.
+      const leadTrackerInsertData = {
+        lead_id: updateId,
+        current_stage: editedData.Current_Stage || editedData.currentStage,
+        what_did_customer_say: editedData.What_Did_The_Customer_Say || editedData.customerSay || editedData.customerFeedback,
+        next_call_date: convertDateToYYYYMMDD(editedData.Next_Call_Date_Field || editedData.nextCallDate),
+        next_call_time: convertTimeTo24Hour(editedData.Next_Call_Time || editedData.nextCallTime),
+        quotation_shared_by: editedData.quotationSharedBy,
+        quotation_remarks: editedData.quotationRemarks,
+      };
+
+      Object.keys(leadTrackerInsertData).forEach((key) => {
+        if (leadTrackerInsertData[key] === undefined || leadTrackerInsertData[key] === null || leadTrackerInsertData[key] === "") {
+          delete leadTrackerInsertData[key];
+        }
+      });
+
+      // Only worth logging a tracker row if there's more than just the lead_id.
+      if (Object.keys(leadTrackerInsertData).length > 1) {
+        const { error: trackerError } = await supabase
+          .from("lto_enquiry_tracker_for_leads")
+          .insert([leadTrackerInsertData]);
+
+        if (trackerError) {
+          console.error("Pending lead tracker insert error:", trackerError);
+          alert(`Lead updated, but stage/history details could not be saved: ${trackerError.message}`);
+        }
       }
 
       console.log("Successfully updated record:", updatedData);
@@ -2488,6 +2547,78 @@ const handleSaveClick = async () => {
             <option value="order-expected">order-expected</option>
             <option value="order-status">order-status</option>
           </select>
+        );
+      } else if (isEditing && opt.key === "nextCallDate") {
+        const currentVal = editedData.Next_Call_Date_Field || editedData.nextCallDate || val || "";
+        const dateVal = convertDateToYYYYMMDD(currentVal) || "";
+        cellContent = (
+          <input
+            type="date"
+            value={/^\d{4}-\d{2}-\d{2}$/.test(dateVal) ? dateVal : ""}
+            onChange={(e) => {
+              handleFieldChange("Next_Call_Date_Field", e.target.value);
+              handleFieldChange("nextCallDate", e.target.value);
+            }}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        );
+      } else if (isEditing && opt.key === "nextCallTime") {
+        const currentVal = editedData.Next_Call_Time || editedData.nextCallTime || val || "";
+        const timeVal = convertTimeTo24Hour(currentVal) || "";
+        const hhmm = /^\d{2}:\d{2}/.test(timeVal) ? timeVal.slice(0, 5) : "";
+        cellContent = (
+          <input
+            type="time"
+            value={hhmm}
+            onChange={(e) => {
+              handleFieldChange("Next_Call_Time", e.target.value);
+              handleFieldChange("nextCallTime", e.target.value);
+            }}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        );
+      } else if (isEditing && opt.key === "customerFeedback") {
+        const currentVal = editedData.What_Did_The_Customer_Say || editedData.customerSay || editedData.customerFeedback || val || "";
+        cellContent = (
+          <select
+            value={customerFeedbackOptions.includes(currentVal) ? currentVal : ""}
+            onChange={(e) => {
+              handleFieldChange("What_Did_The_Customer_Say", e.target.value);
+              handleFieldChange("customerSay", e.target.value);
+              handleFieldChange("customerFeedback", e.target.value);
+            }}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">Select feedback</option>
+            {customerFeedbackOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        );
+      } else if (isEditing && opt.key === "quotationSharedBy") {
+        const currentVal = editedData.quotationSharedBy || editedData.quotation_shared_by || val || "";
+        cellContent = (
+          <select
+            value={quotationSharedByOptions.includes(currentVal) ? currentVal : ""}
+            onChange={(e) => handleFieldChange("quotationSharedBy", e.target.value)}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">Select person</option>
+            {quotationSharedByOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        );
+      } else if (isEditing && opt.key === "quotationRemarks") {
+        const currentVal = editedData.quotationRemarks || (val !== "—" ? val : "") || "";
+        cellContent = (
+          <input
+            type="text"
+            value={currentVal}
+            onChange={(e) => handleFieldChange("quotationRemarks", e.target.value)}
+            placeholder="Remarks"
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-40 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
         );
       } else if (opt.key === "companyName") {
         cellContent = (

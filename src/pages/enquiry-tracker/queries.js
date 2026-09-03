@@ -2,6 +2,18 @@ import { useQuery } from "@tanstack/react-query";
 import supabase from "../../utils/supabase";
 import { mergeRowsChronologically } from "../../utils/mergeTrackerRows";
 
+// Local YYYY-MM-DD, NOT `date.toISOString().split("T")[0]` -- toISOString()
+// converts to UTC first, so in any timezone ahead of UTC (IST, +5:30) local
+// midnight becomes the previous day's evening in UTC, silently shifting
+// every "today" cutoff (Today/Overdue/Upcoming) back by a day. Same fix as
+// call-tracker/queries.js's getLocalTodayStr.
+function toLocalDateStr(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function getLocalTodayStr() {
+  return toLocalDateStr(new Date());
+}
+
 // enquiry_pending_view derives its quotation/validation/order columns from a
 // single tracker row per enquiry/lead (almost certainly the newest one) --
 // but lto_enquiry_tracker / lto_enquiry_tracker_for_leads are append-only,
@@ -195,8 +207,8 @@ function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter
 // Next-Call Date.
 function applyPendingCallingDaysFilter(query, callingDaysFilter) {
   if (!callingDaysFilter || callingDaysFilter.length === 0) return query;
-  const today = new Date().toISOString().split("T")[0];
-  const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+  const today = getLocalTodayStr();
+  const tomorrow = toLocalDateStr(new Date(Date.now() + 86400000));
   const clauses = [];
   if (callingDaysFilter.includes("today")) clauses.push(`and(next_call_date.gte.${today},next_call_date.lt.${tomorrow})`);
   if (callingDaysFilter.includes("overdue")) clauses.push(`next_call_date.lt.${today}`);
@@ -212,7 +224,7 @@ function applyPendingCallingDaysFilter(query, callingDaysFilter) {
 // CallTracker.jsx's history-tab date filter.
 function applyHistoryCallingDaysFilter(query, callingDaysFilter) {
   if (!callingDaysFilter || callingDaysFilter.length === 0) return query;
-  const today = new Date().toISOString().split("T")[0];
+  const today = getLocalTodayStr();
   const clauses = [];
   if (callingDaysFilter.includes("today")) clauses.push(`created_at.gte.${today}`);
   if (callingDaysFilter.includes("older")) clauses.push(`created_at.lt.${today}`);

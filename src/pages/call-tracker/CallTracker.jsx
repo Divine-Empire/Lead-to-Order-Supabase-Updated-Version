@@ -57,9 +57,6 @@ function CallTracker() {
   // CallTrackerFilter.jsx renders it via SearchableDropdown's isMulti mode
   // and calls setDateFilter with an array of selected values.
   const [dateFilter, setDateFilter] = useState([]);
-  const [companyFilter, setCompanyFilter] = useState([]);
-  const [personFilter, setPersonFilter] = useState([]);
-  const [phoneFilter, setPhoneFilter] = useState([]);
   const [scNameFilter,] = useState([]);
   const [startDate,] = useState("");
   const [endDate,] = useState("");
@@ -68,7 +65,7 @@ function CallTracker() {
     history: [],
   });
   const [, setFilterTypeCounts] = useState({ all: 0, first: 0, multi: 0 });
-  const [dateFilterCounts, setDateFilterCounts] = useState({ today: 0, overdue: 0, upcoming: 0 });
+  const [dateFilterCounts, setDateFilterCounts] = useState({ today: 0, overdue: 0, firstCallPending: 0, upcoming: 0 });
 
   const [editingRowId, setEditingRowId] = useState(null);
   const [editedData, setEditedData] = useState({});
@@ -134,7 +131,6 @@ function CallTracker() {
     assignedTo: true,
     nextAction: true,
     nextCallDate: true,
-    handlePerson: true,
     email: true,
     state: false,
     address: false,
@@ -170,12 +166,15 @@ function CallTracker() {
     { key: "location", label: "Location" },
     { key: "customerSay", label: "Customer Say" },
     { key: "enquiryStatus", label: "Enquiry Status" },
-    { key: "handlePerson", label: "Handle Person" },
     { key: "email", label: "Email Address" },
+    // Assigned To dropped "Handle Person" as a separate column -- both were
+    // always sourced from the same value (assigned_to), see mapPendingRow/
+    // mapHistoryRow -- and these 5 kept consecutive per request, so the
+    // follow-up history/next-step columns read together as one group.
+    { key: "assignedTo", label: "Assigned To" },
     { key: "lastFollowUpDate", label: "Last Follow Up Date" },
     { key: "noOfFollowUps", label: "No. of FollowUps" },
     { key: "lastFollowUpStatus", label: "Last FollowUp Status" },
-    { key: "assignedTo", label: "Assigned To" },
     { key: "nextAction", label: "Next Action" },
     { key: "nextCallDate", label: "Next Call Date" },
     { key: "state", label: "State" },
@@ -332,7 +331,7 @@ function CallTracker() {
           sales_type: editedData.enquiryType,
           location: editedData.location,
           additional_notes: editedData.customerSay || editedData.Additional_Notes,
-          sc_name: editedData.handlePerson || editedData.assignedTo,
+          sc_name: editedData.assignedTo,
           email_address: editedData.Email_Address,
           state: editedData.State,
           address: editedData.Address,
@@ -379,7 +378,7 @@ function CallTracker() {
         next_action: editedData.nextAction,
         next_call_date: convertDateToYYYYMMDD(editedData.nextCallDate),
         next_call_time: convertTimeTo24Hour(editedData.nextCallTime),
-        sc_name: editedData.handlePerson || editedData.assignedTo,
+        sc_name: editedData.assignedTo,
       };
 
       // Remove undefined/null values
@@ -437,8 +436,6 @@ function CallTracker() {
     itemsPerPage,
     searchTerm: debouncedSearchTerm,
     scNameFilter,
-    personFilter,
-    phoneFilter,
     dateFilter,
     isAdmin: isAdmin(),
     usernamesToFilter,
@@ -450,7 +447,6 @@ function CallTracker() {
     itemsPerPage,
     searchTerm: debouncedSearchTerm,
     scNameFilter,
-    companyFilter,
     filterType,
     dateFilter,
     startDate,
@@ -478,7 +474,6 @@ function CallTracker() {
     nextAction: row.next_action || "",
     priority: determinePriority(row.lead_source || ""),
     assignedTo: row.assigned_to || "",
-    handlePerson: row.assigned_to || "",
     Email_Address: row.email_address || "",
     State: row.state || "",
     Address: row.address || "",
@@ -505,7 +500,6 @@ function CallTracker() {
     companyName: row.company_name || "",
     personName: row.person_name || "",
     phoneNumber: row.phone_number || "",
-    handlePerson: row.handle_person || "",
     customerSay: row.customer_say || "",
     status: row.status || "",
     enquiryStatus: row.status || "",
@@ -566,12 +560,11 @@ function CallTracker() {
     fetchCallTrackerFilterTypeCounts({
       activeTab,
       scNameFilter,
-      companyFilter,
       isAdmin: isAdmin(),
       usernamesToFilter,
     }).then(setFilterTypeCounts);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, scNameFilter, companyFilter, currentUser]);
+  }, [activeTab, scNameFilter, currentUser]);
 
   useEffect(() => {
     if (activeTab !== "history") return;
@@ -594,7 +587,7 @@ function CallTracker() {
   // term, once it settles) changes.
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, dateFilter, companyFilter, personFilter, phoneFilter, scNameFilter, filterType, currentUser, debouncedSearchTerm]);
+  }, [activeTab, dateFilter, scNameFilter, filterType, currentUser, debouncedSearchTerm]);
 
   const handleColumnToggle = (columnKey) => {
     setVisibleColumns((prev) => ({
@@ -808,21 +801,6 @@ function CallTracker() {
               />
             ) : (
               <div className="max-w-[150px] whitespace-normal break-words">{followUp.personName}</div>
-            )}
-          </td>
-        );
-      case "handlePerson":
-        return (
-          <td key="handlePerson" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.handlePerson || ""}
-                onChange={(e) => handleFieldChange("handlePerson", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.handlePerson || <span className="text-gray-300">—</span>
             )}
           </td>
         );
@@ -1301,21 +1279,6 @@ function CallTracker() {
         return (
           <td key="personName" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500">
             <div className="max-w-[150px] whitespace-normal break-words">{followUp.personName || <span className="text-gray-300">—</span>}</div>
-          </td>
-        );
-      case "handlePerson":
-        return (
-          <td key="handlePerson" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.handlePerson || ""}
-                onChange={(e) => handleFieldChange("handlePerson", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.handlePerson || <span className="text-gray-300">—</span>
-            )}
           </td>
         );
       case "phoneNumber":
@@ -1984,12 +1947,6 @@ function CallTracker() {
         setActiveTab={setActiveTab}
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
-        companyFilter={companyFilter}
-        setCompanyFilter={setCompanyFilter}
-        personFilter={personFilter}
-        setPersonFilter={setPersonFilter}
-        phoneFilter={phoneFilter}
-        setPhoneFilter={setPhoneFilter}
         dateFilter={dateFilter}
         setDateFilter={setDateFilter}
         // CallTrackerFilter reads `.today`/`.overdue`/`.upcoming` for the
@@ -2104,10 +2061,6 @@ function CallTracker() {
                 <div>
                   <span className="text-gray-400 block font-medium">Assigned To</span>
                   <span className="text-gray-700">{selectedDetailsRow.assignedTo || "—"}</span>
-                </div>
-                <div>
-                  <span className="text-gray-400 block font-medium">Handle Person</span>
-                  <span className="text-gray-700">{selectedDetailsRow.handlePerson || "—"}</span>
                 </div>
                 <div>
                   <span className="text-gray-400 block font-medium">Next Action</span>
