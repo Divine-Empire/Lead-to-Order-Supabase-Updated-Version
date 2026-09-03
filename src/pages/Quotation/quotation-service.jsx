@@ -140,35 +140,45 @@ export const getNextQuotationNumber = async (prefix = "NBD") => {
   }
 };
 
-// Function to get company prefix from leads or enquiries tables
+// The only prefix codes a quotation number is allowed to be built from.
+// Anything else (a stray value like "Lead", a free-typed note, etc.) must
+// never reach getNextQuotationNumber() as-is -- see isValidSalesTypePrefix.
+export const VALID_SALES_TYPE_PREFIXES = ["CRR", "NBD", "NBD_CRR"];
+
+export const isValidSalesTypePrefix = (value) =>
+  VALID_SALES_TYPE_PREFIXES.includes((value || "").trim().toUpperCase());
+
+// Function to get company prefix, sourced from lto_client_master --
+// client_master is the record that actually gets kept current (e.g. the
+// NBD -> NBD_CRR upgrade on order conversion, see
+// syncClientOnOrderConversion in orderConversionClientSync.js), whereas a
+// lead/enquiry's own sales_type is frozen at whatever it was when that
+// lead/enquiry was created.
+//
+// Returns null (NOT a default) when client_master has no matching row, or
+// its sales_type is blank/invalid -- callers decide the next fallback step
+// (e.g. the lead/enquiry's own sales_type) themselves; baking "NBD" in here
+// would make that next step unreachable.
 export const getCompanyPrefix = async (companyName) => {
+  const trimmedName = (companyName || "").trim();
+  if (!trimmedName) return null;
+
   try {
-    // First try leads table
-    const { data: leadsData, error: leadsError } = await supabase
-      .from("lto_leads")
-      .select("company_name")
-      .eq("company_name", companyName)
-      .limit(1);
+    const { data, error } = await supabase
+      .from("lto_client_master")
+      .select("sales_type")
+      .ilike("company_name", trimmedName)
+      .limit(1)
+      .maybeSingle();
 
-    if (!leadsError && leadsData && leadsData.length > 0) {
-      return "NBD";
+    if (!error && data && isValidSalesTypePrefix(data.sales_type)) {
+      return data.sales_type.trim().toUpperCase();
     }
 
-    // If not found, try enquiries table
-    const { data: enquiryData, error: enquiryError } = await supabase
-      .from("lto_enquiries")
-      .select("company_name")
-      .eq("company_name", companyName)
-      .limit(1);
-
-    if (!enquiryError && enquiryData && enquiryData.length > 0) {
-      return "NBD";
-    }
-
-    return "NBD"; // Default fallback
+    return null;
   } catch (error) {
     console.error("Error getting company prefix:", error);
-    return "NBD"; // Default fallback
+    return null;
   }
 };
 

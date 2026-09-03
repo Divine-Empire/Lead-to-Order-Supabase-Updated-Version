@@ -9,7 +9,7 @@ import TermsAndConditions from "./terms and conditions";
 import BankDetails from "./bank-details";
 import NotesSection from "./notes-section";
 import SpecialOfferSection from "./special-offer-section";
-import { getCompanyPrefix, getNextQuotationNumber } from "./quotation-service";
+import { getCompanyPrefix, getNextQuotationNumber, isValidSalesTypePrefix } from "./quotation-service";
 import { getStateCodeFromName } from "../../utils/gstStateCodes";
 import supabase from "../../utils/supabase";
 
@@ -529,19 +529,28 @@ const QuotationForm = ({
     }
 
 
-    // Get prefix from Enquiry_Type column and update quotation number
+    // Resolve the quotation-number prefix and regenerate the number.
+    //
+    // client_master is checked FIRST because it's the record that actually
+    // gets kept current -- e.g. syncClientOnOrderConversion upgrades
+    // NBD -> NBD_CRR there on order conversion (and now writes that back to
+    // the source lead/enquiry too, but older/other leads for the same
+    // company predating that fix can still be stale). The lead/enquiry's
+    // own sales_type/Enquiry_Type is only used when client_master has
+    // nothing usable, and either way the value is validated against the
+    // known prefix codes (CRR/NBD/NBD_CRR) before use -- a stray value like
+    // "Lead" must never flow into the quotation number as-is (that's what
+    // produced e.g. "Lead-26-27-001").
     try {
-      let companyPrefix = leadData.rowData.sales_type || leadData.rowData.Enquiry_Type || leadData.rowData.enquiry_type || "";
+      let companyPrefix = await getCompanyPrefix(companyName);
 
-      // If Enquiry_Type/sales_type is found, use it; otherwise fallback to company-based prefix
-      if (companyPrefix) {
-        const newQuotationNumber = await getNextQuotationNumber(companyPrefix);
-        handleInputChange("quotationNo", newQuotationNumber);
-      } else {
-        const fallbackPrefix = await getCompanyPrefix(companyName);
-        const newQuotationNumber = await getNextQuotationNumber(fallbackPrefix);
-        handleInputChange("quotationNo", newQuotationNumber);
+      if (!companyPrefix) {
+        const ownSalesType = leadData.rowData.sales_type || leadData.rowData.Enquiry_Type || leadData.rowData.enquiry_type || "";
+        companyPrefix = isValidSalesTypePrefix(ownSalesType) ? ownSalesType.trim().toUpperCase() : "NBD";
       }
+
+      const newQuotationNumber = await getNextQuotationNumber(companyPrefix);
+      handleInputChange("quotationNo", newQuotationNumber);
     } catch (error) {
       console.error(
         "Error updating quotation number from lead selection:",

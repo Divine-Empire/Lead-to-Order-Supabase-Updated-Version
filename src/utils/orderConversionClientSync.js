@@ -287,12 +287,23 @@ export const syncClientOnOrderConversion = async (enquiryNo, creditTerms = {}) =
       console.error("syncClientOnOrderConversion: error syncing client_master", cmError);
     }
 
-    // Sync assigned crm_name back to the parent lead or enquiry record
-    if (assignedCrmName) {
+    // Sync assigned crm_name, and any sales_type upgrade (NBD -> NBD_CRR),
+    // back to the parent lead or enquiry record. Without this, only
+    // lto_client_master ever saw the upgrade -- the lead/enquiry's own
+    // sales_type stayed frozen at whatever it was when that record was
+    // created, going stale (and, since Make Quotation used to read the
+    // prefix straight off the lead/enquiry, producing quotation numbers
+    // with an outdated prefix for that same company on later leads).
+    const salesTypeChanged = targetSalesType && targetSalesType !== currentSalesType;
+    if (assignedCrmName || salesTypeChanged) {
+      const updatePayload = {};
+      if (assignedCrmName) updatePayload.crm_name = assignedCrmName;
+      if (salesTypeChanged) updatePayload.sales_type = targetSalesType;
+
       if (enquiryNo && enquiryNo.toUpperCase().startsWith("LD-")) {
-        await supabase.from("lto_leads").update({ crm_name: assignedCrmName }).eq("lead_no", enquiryNo);
+        await supabase.from("lto_leads").update(updatePayload).eq("lead_no", enquiryNo);
       } else if (enquiryNo) {
-        await supabase.from("lto_enquiries").update({ crm_name: assignedCrmName }).eq("enquiry_no", enquiryNo);
+        await supabase.from("lto_enquiries").update(updatePayload).eq("enquiry_no", enquiryNo);
       }
     }
 
