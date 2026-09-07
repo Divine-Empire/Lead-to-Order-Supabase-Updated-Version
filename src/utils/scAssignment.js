@@ -18,6 +18,71 @@ const OTHER_CLIENTS_GROUP = "OTHER CLIENTS";
 export const isOtherClientsGroup = (groupName) =>
   (groupName || "").trim().toUpperCase() === OTHER_CLIENTS_GROUP;
 
+// Shared sc_distribution round-robin matcher, used both for a brand-new
+// company (resolveScAndCreForNewCompany below) and for the SC re-resolution
+// that runs on order conversion (orderConversionClientSync.js) -- same
+// matching + round-robin-advance logic, so a fix here covers both callers.
+//
+// A rule naming a SPECIFIC lead_source is preferred over a broader
+// "ALL SOURCES" rule whenever both match the same sales_type/nob. Without
+// this, a specific-source rule sitting at a later sequence_order than a
+// generic ALL SOURCES rule that already holds is_next_in_line would never
+// actually get selected -- round-robin only advances is_next_in_line among
+// whichever pool actually gets used, so the generic rule's pointer never
+// reaches the specific rule's position, and the specific rule sits dead
+// forever (this is exactly what was happening to a MANIQUIP STORE-specific
+// rule: GANGA/PRIYA's ALL SOURCES rules kept winning every time).
+export const resolveScByRules = async (activeRules, { salesType, leadSource, nob }) => {
+  const currentNob = (nob || "").trim().toUpperCase();
+  const currentSource = (leadSource || "").trim().toUpperCase();
+  const currentType = (salesType || "").trim().toUpperCase();
+
+  const matchesTypeAndNob = (rule) => {
+    const types = (rule.sales_types || []).map((t) => t.toUpperCase());
+    const nobs = (rule.nobs || []).map((n) => n.toUpperCase());
+    const typeMatch = types.length === 0 || types.includes(currentType);
+    const nobMatch = nobs.length === 0 || nobs.some((n) => {
+      if (n === "ALL NOBS") return true;
+      if (n === "ALL NOBS (EXCEPT RESELLER)") return currentNob !== "RESELLER";
+      return n === currentNob;
+    });
+    return typeMatch && nobMatch;
+  };
+
+  const candidatesMatchingTypeNob = (activeRules || []).filter(matchesTypeAndNob);
+
+  const isSpecificSourceMatch = (rule) => {
+    const sources = (rule.lead_sources || []).map((s) => s.toUpperCase());
+    return sources.includes(currentSource) && !sources.includes("ALL SOURCES");
+  };
+  const isGenericSourceMatch = (rule) => {
+    const sources = (rule.lead_sources || []).map((s) => s.toUpperCase());
+    return sources.length === 0 || sources.includes("ALL SOURCES") || sources.includes(currentSource);
+  };
+
+  const specificPool = candidatesMatchingTypeNob.filter(isSpecificSourceMatch);
+  const pool = specificPool.length > 0
+    ? specificPool
+    : candidatesMatchingTypeNob.filter(isGenericSourceMatch);
+
+  if (pool.length === 0) return { scName: null };
+
+  const candidate = pool.find((r) => r.is_next_in_line) || pool[0];
+
+  if (pool.length > 1 && candidate?.id) {
+    const currentIndex = pool.findIndex((item) => item.id === candidate.id);
+    const nextIndex = (currentIndex + 1) % pool.length;
+    const nextItem = pool[nextIndex];
+
+    if (candidate.id !== nextItem.id) {
+      await supabase.from("lto_sc_distribution").update({ is_next_in_line: false }).eq("id", candidate.id);
+    }
+    await supabase.from("lto_sc_distribution").update({ is_next_in_line: true, updated_at: new Date().toISOString() }).eq("id", nextItem.id);
+  }
+
+  return { scName: candidate?.sc_name || null };
+};
+
 /**
  * Rule:
  *   - groupName is set and isn't the "OTHER CLIENTS" catch-all: copy
@@ -64,41 +129,9 @@ export const resolveScAndCreForNewCompany = async ({ groupName, salesType, leadS
       .order("created_at", { ascending: true });
 
     if (!error && activeRules && activeRules.length > 0) {
-      const currentNob = (nob || "").trim().toUpperCase();
-      const currentSource = (leadSource || "").trim().toUpperCase();
-      const currentType = (salesType || "").trim().toUpperCase();
-
-      const pool = activeRules.filter((rule) => {
-        const types = (rule.sales_types || []).map((t) => t.toUpperCase());
-        const sources = (rule.lead_sources || []).map((s) => s.toUpperCase());
-        const nobs = (rule.nobs || []).map((n) => n.toUpperCase());
-
-        const typeMatch = types.length === 0 || types.includes(currentType);
-        const sourceMatch = sources.length === 0 || sources.includes("ALL SOURCES") || sources.includes(currentSource);
-        const nobMatch = nobs.some((n) => {
-          if (n === "ALL NOBS") return true;
-          if (n === "ALL NOBS (EXCEPT RESELLER)") return currentNob !== "RESELLER";
-          return n === currentNob;
-        });
-
-        return typeMatch && sourceMatch && nobMatch;
-      });
-
-      if (pool.length > 0) {
-        const candidate = pool.find((r) => r.is_next_in_line) || pool[0];
-
-        if (pool.length > 1 && candidate?.id) {
-          const currentIndex = pool.findIndex((item) => item.id === candidate.id);
-          const nextIndex = (currentIndex + 1) % pool.length;
-          const nextItem = pool[nextIndex];
-
-          if (candidate.id !== nextItem.id) {
-            await supabase.from("lto_sc_distribution").update({ is_next_in_line: false }).eq("id", candidate.id);
-          }
-          await supabase.from("lto_sc_distribution").update({ is_next_in_line: true, updated_at: new Date().toISOString() }).eq("id", nextItem.id);
-        }
-
-        return { scName: candidate?.sc_name || null, crmName: null };
+      const { scName } = await resolveScByRules(activeRules, { salesType, leadSource, nob });
+      if (scName) {
+        return { scName, crmName: null };
       }
     }
   } catch (err) {

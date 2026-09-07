@@ -123,11 +123,21 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
         const tableName = isLead ? "lto_enquiry_tracker_for_leads" : "lto_enquiry_tracker";
         const foreignKeyCol = isLead ? "lead_id" : "enquiry_id";
 
+        // Scoped to current_stage='make-quotation' rows only -- an
+        // order-status submission also writes quotation_number (see
+        // EnquiryTrackerForm.jsx's handleSubmit), which used to get mixed
+        // into this same list and could out-rank the real latest Make
+        // Quotation entry. Ordered newest-first by created_at (not by
+        // parsing a "-NN" revision suffix out of the string) so the
+        // dropdown's default selection is genuinely the most recently
+        // logged Make Quotation submission, revision or not.
         const { data, error } = await supabase
           .from(tableName)
-          .select("quotation_number")
+          .select("quotation_number, created_at")
           .eq(foreignKeyCol, recordUuid)
-          .not("quotation_number", "is", null);
+          .eq("current_stage", "make-quotation")
+          .not("quotation_number", "is", null)
+          .order("created_at", { ascending: false });
 
         if (error) {
           console.error(`Supabase error fetching from ${tableName}:`, error);
@@ -135,22 +145,22 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
         }
 
         if (data && data.length > 0) {
-          const rawQuotations = [...new Set(data.map(item => item.quotation_number).filter(Boolean))];
+          // Dedupe while preserving the newest-first order above (first
+          // occurrence of a given quotation number is its most recent one).
+          const seen = new Set();
+          const orderedQuotations = [];
+          data.forEach((row) => {
+            if (row.quotation_number && !seen.has(row.quotation_number)) {
+              seen.add(row.quotation_number);
+              orderedQuotations.push(row.quotation_number);
+            }
+          });
 
-          // Sort so the latest revision (highest -XX suffix) appears first.
-          // Quotation format: PREFIX-YY-YY-NNN or PREFIX-YY-YY-NNN-RR (revision)
-          const getRevision = (q) => {
-            const parts = q.split("-");
-            if (parts.length === 5) return parseInt(parts[4], 10) || 0;
-            return -1; // base (no suffix) sorts below any revision
-          };
-          const uniqueQuotations = rawQuotations.sort((a, b) => getRevision(b) - getRevision(a));
-
-          setQuotationNumbers(uniqueQuotations);
+          setQuotationNumbers(orderedQuotations);
 
           // Auto-select only if we don't already have a value
-          if (uniqueQuotations.length > 0 && !formData.orderStatusQuotationNumber) {
-            onFieldChange('orderStatusQuotationNumber', uniqueQuotations[0]);
+          if (orderedQuotations.length > 0 && !formData.orderStatusQuotationNumber) {
+            onFieldChange('orderStatusQuotationNumber', orderedQuotations[0]);
           }
 
         } else {
@@ -224,6 +234,15 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
     if (name === "warranty" || name === "orderVideo") {
       onFieldChange("warranty", value)
       onFieldChange("orderVideo", value)
+    } else if (name === "orderStatusQuotationNumber") {
+      onFieldChange(name, value)
+      // Re-fetch items for whichever quotation number the user just picked
+      // -- previously items only ever got (re-)fetched once, when the
+      // "Is Order Received?" radio flipped to "yes", so manually changing
+      // the dropdown afterwards left the OLD quotation's items on screen.
+      if (orderStatus === "yes") {
+        fetchItemsFromQuotation(value)
+      }
     } else {
       onFieldChange(name, value)
     }

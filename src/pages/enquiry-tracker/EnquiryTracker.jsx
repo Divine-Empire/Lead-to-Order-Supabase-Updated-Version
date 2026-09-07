@@ -28,6 +28,7 @@ const columnsConfig = [
   { key: "phoneNumber", label: "Phone Number" },
   { key: "salespersonName", label: "Person Name" },
   { key: "nextCallDate", label: "Next Follow-Up Date" },
+  { key: "lastFollowUpDate", label: "Last Follow-Up Date" },
   { key: "currentStage", label: "Current Stage" },
   { key: "callingDate", label: "Calling Date" },
   { key: "itemQty", label: "Item-Details" },
@@ -86,6 +87,7 @@ const defaultVisibility = {
   salespersonName: false,
   customerFeedback: true,
   nextCallDate: true,
+  lastFollowUpDate: true,
   nextCallTime: false,
   currentStage: true,
   callingDate: false,
@@ -1485,6 +1487,10 @@ const handleSaveClick = async () => {
       customerFeedback: row.customer_feedback || "",
       customerSay: row.customer_feedback || "",
       nextCallDate: row.next_call_date ? formatDateToDDMMYYYY(row.next_call_date) : "",
+      // Created_at of this lead/enquiry's newest tracker row -- when the
+      // last follow-up/stage submission actually happened -- see
+      // attachMergedTrackerFields's last_follow_up_at overlay in queries.js.
+      lastFollowUpDate: row.last_follow_up_at ? formatDateToDDMMYYYY(row.last_follow_up_at) : "",
       nextCallTime: row.next_call_time || "",
       enquiryStatus: row.enquiry_status || "",
       assignedTo: row.assigned_to || "",

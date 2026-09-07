@@ -113,6 +113,36 @@ function CallTracker() {
   const [selectedDetailsRow, setSelectedDetailsRow] = useState(null);
   const [selectedCallNowRow, setSelectedCallNowRow] = useState(null);
 
+  // Details modal's full follow-up history -- call_tracker_pending_view
+  // (and `followUp` built from it) only ever carries the single
+  // latest/merged attempt per lead, so "Total Follow-ups: 3" had no way to
+  // show what happened on attempts 1 and 2. Fetched fresh per lead
+  // (lto_call_tracker_for_leads.lead_id = the lead's record_id) when the
+  // Details modal opens, oldest first.
+  const [detailsFollowUps, setDetailsFollowUps] = useState([]);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+
+  const handleViewDetails = async (followUp) => {
+    setSelectedDetailsRow(followUp);
+    setDetailsFollowUps([]);
+    setDetailsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("lto_call_tracker_for_leads")
+        .select("id, what_did_customer_say, enquiry_received_status, next_action, next_call_date, next_call_time, sc_name, created_at")
+        .eq("lead_id", followUp.id)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      setDetailsFollowUps(data || []);
+    } catch (error) {
+      console.error("Error fetching follow-up history:", error);
+      setDetailsFollowUps([]);
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
+
   // Pending column visibility (checked = visible by default)
   const [pendingVisibleColumns, setPendingVisibleColumns] = useState({
     actions: true,
@@ -678,7 +708,7 @@ function CallTracker() {
         return (
           <td key="details" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap text-center">
             <button
-              onClick={() => setSelectedDetailsRow(followUp)}
+              onClick={() => handleViewDetails(followUp)}
               title="View Details"
               className="p-1.5 text-primary hover:text-primary hover:bg-primary/5 rounded-full transition-colors inline-flex items-center justify-center"
             >
@@ -2015,61 +2045,41 @@ function CallTracker() {
             </div>
             
             <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto text-sm">
-              <div className="grid grid-cols-2 gap-4 pb-3 border-b border-gray-100">
-                <div>
-                  <span className="text-xs font-semibold text-gray-400 block uppercase">Company Name</span>
-                  <span className="font-semibold text-gray-900">{selectedDetailsRow.companyName || "—"}</span>
-                </div>
-                <div>
-                  <span className="text-xs font-semibold text-gray-400 block uppercase">Person Name</span>
-                  <span className="font-medium text-gray-800">{selectedDetailsRow.personName || "—"}</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 pb-3 border-b border-gray-100">
-                <div>
-                  <span className="text-xs font-semibold text-gray-400 block uppercase">Phone Number</span>
-                  <span className="font-medium text-gray-800">{selectedDetailsRow.phoneNumber || "—"}</span>
-                </div>
-                <div>
-                  <span className="text-xs font-semibold text-gray-400 block uppercase">Total Follow-ups</span>
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary">
-                    {selectedDetailsRow.noOfFollowUps || 0}
-                  </span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 pb-3 border-b border-gray-100">
-                <div>
-                  <span className="text-xs font-semibold text-gray-400 block uppercase">Last Call Date</span>
-                  <span className="font-medium text-gray-800">{formatDateToDDMMYYYY(selectedDetailsRow.lastFollowUpDate || selectedDetailsRow.timestamp) || "—"}</span>
-                </div>
-                <div>
-                  <span className="text-xs font-semibold text-gray-400 block uppercase">Last Follow-up Status</span>
-                  <span className="font-medium text-gray-800">{selectedDetailsRow.lastFollowUpStatus || selectedDetailsRow.enquiryStatus || "—"}</span>
-                </div>
-              </div>
-
-              <div className="pb-3 border-b border-gray-100">
-                <span className="text-xs font-semibold text-gray-400 block uppercase mb-1">What We Talked About (Customer Say)</span>
-                <p className="text-gray-700 bg-gray-50 p-3 rounded-lg text-xs leading-relaxed border border-gray-100">
-                  {selectedDetailsRow.customerSay || "No previous notes available."}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 text-xs">
-                <div>
-                  <span className="text-gray-400 block font-medium">Assigned To</span>
-                  <span className="text-gray-700">{selectedDetailsRow.assignedTo || "—"}</span>
-                </div>
-                <div>
-                  <span className="text-gray-400 block font-medium">Next Action</span>
-                  <span className="text-gray-700">{selectedDetailsRow.nextAction || "—"}</span>
-                </div>
-                <div>
-                  <span className="text-gray-400 block font-medium">Next Call Date</span>
-                  <span className="text-gray-700">{formatDateToDDMMYYYY(selectedDetailsRow.nextCallDate) || "—"}</span>
-                </div>
+              <div>
+                <span className="text-xs font-semibold text-gray-400 block uppercase mb-2">Follow-up History</span>
+                {detailsLoading ? (
+                  <p className="text-xs text-gray-400 italic">Loading follow-up history...</p>
+                ) : detailsFollowUps.length === 0 ? (
+                  <p className="text-xs text-gray-400 italic">No follow-up calls logged yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {/* Oldest first -- attempt numbers read top-to-bottom the
+                        same way "Total Follow-ups" counts them, and the most
+                        recent call (matching what the table's Last Follow-up
+                        columns show) ends up last, closest to the current plan. */}
+                    {detailsFollowUps.map((attempt, idx) => (
+                      <div key={attempt.id} className="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-xs font-semibold text-primary">Follow-up {idx + 1}</span>
+                          <span className="text-xs text-gray-500">
+                            {formatDateToDDMMYYYY(attempt.created_at)}
+                            {attempt.sc_name ? ` · ${attempt.sc_name}` : ""}
+                          </span>
+                        </div>
+                        <p className="text-gray-700 text-xs leading-relaxed">
+                          {attempt.what_did_customer_say || "No notes recorded."}
+                        </p>
+                        {(attempt.enquiry_received_status || attempt.next_action || attempt.next_call_date) && (
+                          <div className="mt-1.5 pt-1.5 border-t border-gray-200 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+                            {attempt.enquiry_received_status && <span>Status: {attempt.enquiry_received_status}</span>}
+                            {attempt.next_action && <span>Next Action: {attempt.next_action}</span>}
+                            {attempt.next_call_date && <span>Next Call: {formatDateToDDMMYYYY(attempt.next_call_date)}</span>}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

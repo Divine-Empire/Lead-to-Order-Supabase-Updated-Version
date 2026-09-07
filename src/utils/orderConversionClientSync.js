@@ -22,7 +22,7 @@
 
 import supabase from "./supabase";
 import { generateAndAssignClientCode } from "../pages/Master/ClientCodeGen";
-import { isOtherClientsGroup } from "./scAssignment";
+import { isOtherClientsGroup, resolveScByRules } from "./scAssignment";
 import { getStateCodeFromName } from "./gstStateCodes";
 
 /**
@@ -118,42 +118,16 @@ export const syncClientOnOrderConversion = async (enquiryNo, creditTerms = {}) =
           .order("created_at", { ascending: true });
 
         if (activeRules && activeRules.length > 0) {
-          const currentNob = (leadData?.nob || enqData?.nob || "").trim().toUpperCase();
-          const currentSource = (leadData?.lead_source || enqData?.lead_source || "").trim().toUpperCase();
-          const currentType = targetSalesType.toUpperCase();
+          const currentNob = leadData?.nob || enqData?.nob || "";
+          const currentSource = leadData?.lead_source || enqData?.lead_source || "";
 
-          const matchedRules = activeRules.filter((rule) => {
-            const types = (rule.sales_types || []).map((t) => t.toUpperCase());
-            const sources = (rule.lead_sources || []).map((s) => s.toUpperCase());
-            const nobs = (rule.nobs || []).map((n) => n.toUpperCase());
-
-            const typeMatch = types.length === 0 || types.includes(currentType);
-            const sourceMatch = sources.length === 0 || sources.includes("ALL SOURCES") || sources.includes(currentSource);
-            const nobMatch = nobs.length === 0 || nobs.some((n) => {
-              if (n === "ALL NOBS") return true;
-              if (n === "ALL NOBS (EXCEPT RESELLER)") return currentNob !== "RESELLER";
-              return n === currentNob;
-            });
-
-            return typeMatch && sourceMatch && nobMatch;
+          const { scName } = await resolveScByRules(activeRules, {
+            salesType: targetSalesType,
+            leadSource: currentSource,
+            nob: currentNob,
           });
-
-          if (matchedRules.length > 0) {
-            const candidate = matchedRules.find((r) => r.is_next_in_line) || matchedRules[0];
-            if (candidate && candidate.sc_name) {
-              resolvedHandlePerson = candidate.sc_name;
-            }
-
-            if (matchedRules.length > 1 && candidate?.id) {
-              const currentIndex = matchedRules.findIndex((item) => item.id === candidate.id);
-              const nextIndex = (currentIndex + 1) % matchedRules.length;
-              const nextItem = matchedRules[nextIndex];
-
-              if (candidate.id !== nextItem.id) {
-                await supabase.from("lto_sc_distribution").update({ is_next_in_line: false }).eq("id", candidate.id);
-              }
-              await supabase.from("lto_sc_distribution").update({ is_next_in_line: true, updated_at: new Date().toISOString() }).eq("id", nextItem.id);
-            }
+          if (scName) {
+            resolvedHandlePerson = scName;
           }
         }
       } catch (scErr) {

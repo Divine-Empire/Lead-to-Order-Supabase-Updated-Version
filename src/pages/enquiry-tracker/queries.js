@@ -89,9 +89,18 @@ async function attachMergedTrackerFields(rows) {
   });
 
   const mergedByRecordId = new Map();
+  // "Last Follow-Up Date" (Pending tab, next to Next Follow-Up Date) --
+  // the created_at of the newest tracker row itself, i.e. when the last
+  // follow-up/stage submission actually happened. Not the same as the
+  // view's own `created_at` (that's the lead/enquiry's own creation time,
+  // the "Timestamp" column), and not one of TRACKER_FIELDS below (those are
+  // per-field "later non-empty wins", this is unconditionally the latest
+  // row regardless of which fields it set).
+  const lastFollowUpAtByRecordId = new Map();
   rowsByRecordId.forEach((trackerRows, recordId) => {
     const sorted = [...trackerRows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     mergedByRecordId.set(recordId, mergeRowsChronologically(sorted));
+    lastFollowUpAtByRecordId.set(recordId, sorted[sorted.length - 1]?.created_at || null);
   });
 
   return rows.map((row) => {
@@ -101,6 +110,7 @@ async function attachMergedTrackerFields(rows) {
     TRACKER_FIELDS.forEach((field) => {
       if (merged[field] !== undefined) overlay[field] = merged[field];
     });
+    overlay.last_follow_up_at = lastFollowUpAtByRecordId.get(row.record_id) || null;
     return { ...row, ...overlay };
   });
 }
