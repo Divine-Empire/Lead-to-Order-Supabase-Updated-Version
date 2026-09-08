@@ -3,6 +3,85 @@ import { useState } from "react";
 import { PlusIcon, TrashIcon } from "../../components/Icons";
 import Select from "react-select";
 
+// "PACKAGING AND FORWARDING" has no persisted flag column of its own (unlike
+// Freight's is_freight on lto_make_quotation_items) -- name is the only
+// reliable way to identify it, both live and after loading a saved/revised
+// quotation (see quotationDataLoader.js, which never sets any packaging-only
+// flag either).
+const isPackagingItem = (item) =>
+  (item?.name || "").trim().toUpperCase() === "PACKAGING AND FORWARDING";
+const isFreightItem = (item) => item?.isFreight || item?.name === "Freight";
+
+// Shared totals recompute after removing any single item (normal item,
+// Freight, or Packaging & Forwarding) -- was duplicated near-verbatim
+// between the normal-item and Freight delete handlers; extracted once here
+// so Packaging's delete handler doesn't make it a third copy.
+const recalcTotalsAfterRemoval = (items, isIGST) => {
+  const subtotal = items.reduce((sum, current) => sum + Number(current.amount || 0), 0);
+  const totalFlatDiscount = items.reduce((sum, current) => sum + Number(current.flatDiscount || 0), 0);
+
+  let cgstAmount = 0;
+  let sgstAmount = 0;
+  let igstAmount = 0;
+
+  items.forEach((current) => {
+    const amount = Number(current.amount || 0);
+    let itemGST = Number(current.gst || 0);
+
+    if (amount <= 0 || itemGST <= 0) {
+      return;
+    }
+
+    if (String(current.gst).toUpperCase().includes("IGST")) {
+      itemGST = itemGST / 2;
+    }
+
+    if (isIGST) {
+      igstAmount += (amount * itemGST) / 100;
+    } else {
+      const halfGST = itemGST / 2;
+      const contribution = (amount * halfGST) / 100;
+      cgstAmount += contribution;
+      sgstAmount += contribution;
+    }
+  });
+
+  const roundedSubtotal = Number(subtotal.toFixed(2));
+  cgstAmount = Number(cgstAmount.toFixed(2));
+  sgstAmount = Number(sgstAmount.toFixed(2));
+  igstAmount = Number(igstAmount.toFixed(2));
+
+  const total = Math.max(
+    0,
+    Number((roundedSubtotal + cgstAmount + sgstAmount + igstAmount).toFixed(2))
+  );
+
+  const cgstRate =
+    !isIGST && roundedSubtotal > 0
+      ? Number(((cgstAmount / roundedSubtotal) * 100).toFixed(2))
+      : 0;
+  const sgstRate =
+    !isIGST && roundedSubtotal > 0
+      ? Number(((sgstAmount / roundedSubtotal) * 100).toFixed(2))
+      : 0;
+  const igstRate =
+    isIGST && roundedSubtotal > 0
+      ? Number(((igstAmount / roundedSubtotal) * 100).toFixed(2))
+      : 0;
+
+  return {
+    totalFlatDiscount,
+    subtotal: roundedSubtotal,
+    cgstAmount,
+    sgstAmount,
+    igstAmount,
+    total,
+    cgstRate: isIGST ? 0 : cgstRate,
+    sgstRate: isIGST ? 0 : sgstRate,
+    igstRate: isIGST ? igstRate : 0,
+  };
+};
+
 const ItemsTable = ({
   quotationData,
   handleItemChange,
@@ -245,7 +324,7 @@ const ItemsTable = ({
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {quotationData.items
-                .filter((item) => !item.isFreight && item.name !== "Freight")
+                .filter((item) => !isFreightItem(item) && !isPackagingItem(item))
                 .map((item, index) => (
                   <tr key={item.id}>
                     <td className="px-4 py-2">{index + 1}</td>
@@ -692,107 +771,16 @@ const ItemsTable = ({
                               return prev;
                             }
 
-                            const subtotal = newItems.reduce(
-                              (sum, current) => sum + Number(current.amount || 0),
-                              0
-                            );
-                            const totalFlatDiscount = newItems.reduce(
-                              (sum, current) =>
-                                sum + Number(current.flatDiscount || 0),
-                              0
-                            );
-
-                            let cgstAmount = 0;
-                            let sgstAmount = 0;
-                            let igstAmount = 0;
-
-                            newItems.forEach((current) => {
-                              const amount = Number(current.amount || 0);
-                              let itemGST = Number(current.gst || 0);
-
-                              if (amount <= 0 || itemGST <= 0) {
-                                return;
-                              }
-
-                              if (
-                                String(current.gst).toUpperCase().includes("IGST")
-                              ) {
-                                itemGST = itemGST / 2;
-                              }
-
-                              if (prev.isIGST) {
-                                igstAmount += (amount * itemGST) / 100;
-                              } else {
-                                const halfGST = itemGST / 2;
-                                const contribution = (amount * halfGST) / 100;
-                                cgstAmount += contribution;
-                                sgstAmount += contribution;
-                              }
-                            });
-
-                            const roundedSubtotal = Number(subtotal.toFixed(2));
-                            cgstAmount = Number(cgstAmount.toFixed(2));
-                            sgstAmount = Number(sgstAmount.toFixed(2));
-                            igstAmount = Number(igstAmount.toFixed(2));
-
-                            const total = Math.max(
-                              0,
-                              Number(
-                                (
-                                  roundedSubtotal +
-                                  cgstAmount +
-                                  sgstAmount +
-                                  igstAmount
-                                ).toFixed(2)
-                              )
-                            );
-
-                            const cgstRate =
-                              !prev.isIGST && roundedSubtotal > 0
-                                ? Number(
-                                  (
-                                    (cgstAmount / roundedSubtotal) *
-                                    100
-                                  ).toFixed(2)
-                                )
-                                : 0;
-                            const sgstRate =
-                              !prev.isIGST && roundedSubtotal > 0
-                                ? Number(
-                                  (
-                                    (sgstAmount / roundedSubtotal) *
-                                    100
-                                  ).toFixed(2)
-                                )
-                                : 0;
-                            const igstRate =
-                              prev.isIGST && roundedSubtotal > 0
-                                ? Number(
-                                  (
-                                    (igstAmount / roundedSubtotal) *
-                                    100
-                                  ).toFixed(2)
-                                )
-                                : 0;
-
                             return {
                               ...prev,
                               items: newItems,
-                              totalFlatDiscount,
-                              subtotal: roundedSubtotal,
-                              cgstAmount,
-                              sgstAmount,
-                              igstAmount,
-                              total,
-                              cgstRate: prev.isIGST ? 0 : cgstRate,
-                              sgstRate: prev.isIGST ? 0 : sgstRate,
-                              igstRate: prev.isIGST ? igstRate : 0,
+                              ...recalcTotalsAfterRemoval(newItems, prev.isIGST),
                             };
                           });
                         }}
                         disabled={
                           quotationData.items.filter(
-                            (i) => !i.isFreight && i.name !== "Freight"
+                            (i) => !isFreightItem(i) && !isPackagingItem(i)
                           ).length <= 1 || isLoading
                         }
                       >
@@ -802,17 +790,291 @@ const ItemsTable = ({
                   </tr>
                 ))}
 
-              {/* Freight Item Row */}
+              {/* Packaging & Forwarding Item Row -- always rendered as the
+                  second-to-last row (grey-highlighted), same treatment as
+                  Freight below, regardless of where it actually sits in
+                  quotationData.items (revision-loaded or freshly added). */}
               {(() => {
-                const freightItem = quotationData.items.find(
-                  (item) => item.isFreight || item.name === "Freight"
+                const packagingItem = quotationData.items.find(isPackagingItem);
+                if (!packagingItem) return null;
+
+                const normalItems = quotationData.items.filter(
+                  (item) => !isFreightItem(item) && !isPackagingItem(item)
                 );
+                const packagingSNo = normalItems.length + 1;
+
+                return (
+                  <tr key={packagingItem.id} className="bg-gray-300 text-gray-900 border-gray-500">
+                    <td className="px-4 py-2">{packagingSNo}</td>
+
+                    {!hideCode && (
+                      <td className="px-4 py-2">
+                        <input
+                          type="text"
+                          value={packagingItem.code || ""}
+                          className="p-1 w-24 rounded-md border border-gray-500 bg-gray-400 text-gray-800 cursor-not-allowed"
+                          disabled
+                        />
+                      </td>
+                    )}
+
+                    {!hideProductName && (
+                      <td className="px-4 py-2">
+                        <input
+                          type="text"
+                          value="PACKAGING AND FORWARDING"
+                          className="p-1 w-full min-w-[200px] rounded-md border border-gray-500 bg-gray-400 text-gray-900 cursor-not-allowed"
+                          disabled
+                        />
+                      </td>
+                    )}
+
+                    {!hideDescription && (
+                      <td className="px-4 py-2">
+                        <div
+                          className="relative min-w-[200px]"
+                          style={{
+                            width: `${Math.max(
+                              200,
+                              (packagingItem.description || "").length * 8
+                            )}px`,
+                            maxWidth: `${Math.max(
+                              200,
+                              (packagingItem.description || "").length * 8
+                            )}px`
+                          }}
+                        >
+                          <textarea
+                            value={packagingItem.description || ""}
+                            onChange={(e) =>
+                              handleItemChange(
+                                packagingItem.id,
+                                "description",
+                                e.target.value
+                              )
+                            }
+                            className="p-1 w-full rounded-md border border-gray-300 bg-white text-gray-700 resize-none"
+                            style={{
+                              height: "auto",
+                              minHeight: "32px",
+                              maxWidth: `${Math.max(
+                                200,
+                                (packagingItem.description || "").length * 8
+                              )}px`
+                            }}
+                            placeholder="Enter description"
+                            disabled={isLoading}
+                          />
+                        </div>
+                      </td>
+                    )}
+
+                    {!hideGST && (
+                      <td className="px-4 py-2">
+                        <select
+                          value={String(packagingItem.gst)}
+                          onChange={(e) =>
+                            handleItemChange(
+                              packagingItem.id,
+                              "gst",
+                              e.target.value
+                            )
+                          }
+                          className="p-1 w-20 rounded-md border border-gray-300 bg-white text-gray-700"
+                          disabled={isLoading}
+                        >
+                          <option value="0">0%</option>
+                          <option value="5">5%</option>
+                          <option value="18">18%</option>
+                        </select>
+                      </td>
+                    )}
+
+                    {!hideQty && (
+                      <td className="px-4 py-2">
+                        <input
+                          type="number"
+                          value={packagingItem.qty || ""}
+                          onChange={(e) =>
+                            handleItemChange(
+                              packagingItem.id,
+                              "qty",
+                              Number.parseFloat(e.target.value) || 0
+                            )
+                          }
+                          placeholder="0"
+                          className="p-1 w-16 rounded-md border border-gray-300 no-spinner bg-white text-gray-700"
+                          onWheel={(e) => e.target.blur()}
+                          onKeyDown={(e) => {
+                            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                              e.preventDefault();
+                            }
+                          }}
+                          min="0"
+                          disabled={isLoading}
+                        />
+                      </td>
+                    )}
+
+                    {!hideUnits && (
+                      <td className="px-4 py-2">
+                        <select
+                          value={packagingItem.units}
+                          onChange={(e) =>
+                            handleItemChange(
+                              packagingItem.id,
+                              "units",
+                              e.target.value
+                            )
+                          }
+                          className="p-1 w-20 rounded-md border border-gray-300 bg-white text-gray-700"
+                          disabled={isLoading}
+                        >
+                          <option value="Nos">Nos</option>
+                          <option value="Kg">Kg</option>
+                          <option value="Roll">Roll</option>
+                          <option value="Rmt">Rmt</option>
+                          <option value="Ltr">Ltr</option>
+                          <option value="Bag">Bag</option>
+                          <option value="Pair">Pair</option>
+                          <option value="Set">Set</option>
+                          <option value="Mtr">Mtr</option>
+                          <option value="sqmtr">sqmtr</option>
+                          <option value="Box">Box</option>
+                          <option value="Pc">Pc</option>
+                        </select>
+                      </td>
+                    )}
+
+                    {!hideRate && (
+                      <td className="px-4 py-2">
+                        <input
+                          type="number"
+                          value={packagingItem.rate || ""}
+                          onChange={(e) =>
+                            handleItemChange(
+                              packagingItem.id,
+                              "rate",
+                              Number.parseFloat(e.target.value) || 0
+                            )
+                          }
+                          placeholder="0.00"
+                          className="p-1 w-24 rounded-md border border-gray-300 no-spinner bg-white text-gray-700"
+                          onWheel={(e) => e.target.blur()}
+                          onKeyDown={(e) => {
+                            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                              e.preventDefault();
+                            }
+                          }}
+                          step="0.01"
+                          min="0"
+                          disabled={isLoading}
+                        />
+                      </td>
+                    )}
+
+                    {!hideDisc && (
+                      <td className="px-4 py-2">
+                        <input
+                          type="number"
+                          value={packagingItem.discount || ""}
+                          onChange={(e) =>
+                            handleItemChange(
+                              packagingItem.id,
+                              "discount",
+                              Number.parseFloat(e.target.value) || 0
+                            )
+                          }
+                          placeholder="0"
+                          className="p-1 w-20 rounded-md border border-gray-300 no-spinner bg-white text-gray-700"
+                          onWheel={(e) => e.target.blur()}
+                          onKeyDown={(e) => {
+                            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                              e.preventDefault();
+                            }
+                          }}
+                          step="0.01"
+                          min="0"
+                          max="100"
+                          disabled={isLoading}
+                        />
+                      </td>
+                    )}
+
+                    {!hideFlatDisc && (
+                      <td className="px-4 py-2">
+                        <input
+                          type="number"
+                          value={packagingItem.flatDiscount || ""}
+                          onChange={(e) =>
+                            handleItemChange(
+                              packagingItem.id,
+                              "flatDiscount",
+                              Number.parseFloat(e.target.value) || 0
+                            )
+                          }
+                          placeholder="0"
+                          className="p-1 w-16 rounded-md border border-gray-300 no-spinner bg-white text-gray-700"
+                          onWheel={(e) => e.target.blur()}
+                          onKeyDown={(e) => {
+                            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                              e.preventDefault();
+                            }
+                          }}
+                          step="0.01"
+                          min="0"
+                          disabled={isLoading}
+                        />
+                      </td>
+                    )}
+
+                    {!hideAmount && (
+                      <td className="px-4 py-2">
+                        <input
+                          type="text"
+                          value={packagingItem.amount || "0.00"}
+                          className="p-1 w-24 bg-gray-400 rounded-md border border-gray-500 text-gray-800 cursor-not-allowed"
+                          readOnly
+                        />
+                      </td>
+                    )}
+
+                    <td className="px-4 py-2">
+                      <button
+                        className="p-1 text-destructive rounded-md hover:text-destructive"
+                        onClick={() => {
+                          setQuotationData((prev) => {
+                            const newItems = prev.items.filter(
+                              (i) => i.id !== packagingItem.id
+                            );
+
+                            return {
+                              ...prev,
+                              items: newItems,
+                              ...recalcTotalsAfterRemoval(newItems, prev.isIGST),
+                            };
+                          });
+                        }}
+                        disabled={isLoading}
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })()}
+
+              {/* Freight Item Row -- always the last row, grey-highlighted,
+                  after Packaging & Forwarding above (if present). */}
+              {(() => {
+                const freightItem = quotationData.items.find(isFreightItem);
                 if (!freightItem) return null;
 
                 const normalItems = quotationData.items.filter(
-                  (item) => !item.isFreight && item.name !== "Freight"
+                  (item) => !isFreightItem(item) && !isPackagingItem(item)
                 );
-                const freightSNo = normalItems.length + 1;
+                const hasPackaging = quotationData.items.some(isPackagingItem);
+                const freightSNo = normalItems.length + (hasPackaging ? 2 : 1);
 
                 return (
                   <tr key={freightItem.id} className="bg-gray-300 text-gray-900 border-gray-500">
@@ -842,7 +1104,7 @@ const ItemsTable = ({
 
                     {!hideDescription && (
                       <td className="px-4 py-2">
-                        <div 
+                        <div
                           className="relative min-w-[200px]"
                           style={{
                             width: `${Math.max(
@@ -1059,101 +1321,10 @@ const ItemsTable = ({
                               (i) => i.id !== freightItem.id
                             );
 
-                            const subtotal = newItems.reduce(
-                              (sum, current) => sum + Number(current.amount || 0),
-                              0
-                            );
-                            const totalFlatDiscount = newItems.reduce(
-                              (sum, current) =>
-                                sum + Number(current.flatDiscount || 0),
-                              0
-                            );
-
-                            let cgstAmount = 0;
-                            let sgstAmount = 0;
-                            let igstAmount = 0;
-
-                            newItems.forEach((current) => {
-                              const amount = Number(current.amount || 0);
-                              let itemGST = Number(current.gst || 0);
-
-                              if (amount <= 0 || itemGST <= 0) {
-                                return;
-                              }
-
-                              if (
-                                String(current.gst).toUpperCase().includes("IGST")
-                              ) {
-                                itemGST = itemGST / 2;
-                              }
-
-                              if (prev.isIGST) {
-                                igstAmount += (amount * itemGST) / 100;
-                              } else {
-                                const halfGST = itemGST / 2;
-                                const contribution = (amount * halfGST) / 100;
-                                cgstAmount += contribution;
-                                sgstAmount += contribution;
-                              }
-                            });
-
-                            const roundedSubtotal = Number(subtotal.toFixed(2));
-                            cgstAmount = Number(cgstAmount.toFixed(2));
-                            sgstAmount = Number(sgstAmount.toFixed(2));
-                            igstAmount = Number(igstAmount.toFixed(2));
-
-                            const total = Math.max(
-                              0,
-                              Number(
-                                (
-                                  roundedSubtotal +
-                                  cgstAmount +
-                                  sgstAmount +
-                                  igstAmount
-                                ).toFixed(2)
-                              )
-                            );
-
-                            const cgstRate =
-                              !prev.isIGST && roundedSubtotal > 0
-                                ? Number(
-                                  (
-                                    (cgstAmount / roundedSubtotal) *
-                                    100
-                                  ).toFixed(2)
-                                )
-                                : 0;
-                            const sgstRate =
-                              !prev.isIGST && roundedSubtotal > 0
-                                ? Number(
-                                  (
-                                    (sgstAmount / roundedSubtotal) *
-                                    100
-                                  ).toFixed(2)
-                                )
-                                : 0;
-                            const igstRate =
-                              prev.isIGST && roundedSubtotal > 0
-                                ? Number(
-                                  (
-                                    (igstAmount / roundedSubtotal) *
-                                    100
-                                  ).toFixed(2)
-                                )
-                                : 0;
-
                             return {
                               ...prev,
                               items: newItems,
-                              totalFlatDiscount,
-                              subtotal: roundedSubtotal,
-                              cgstAmount,
-                              sgstAmount,
-                              igstAmount,
-                              total,
-                              cgstRate: prev.isIGST ? 0 : cgstRate,
-                              sgstRate: prev.isIGST ? 0 : sgstRate,
-                              igstRate: prev.isIGST ? igstRate : 0,
+                              ...recalcTotalsAfterRemoval(newItems, prev.isIGST),
                             };
                           });
                         }}

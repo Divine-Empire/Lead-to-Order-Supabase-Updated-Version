@@ -122,31 +122,37 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
     if (name === "quotationNumber") {
       onFieldChange(name, value);
 
-      // Fill "With Tax" from the cached grand_total
       const matchedQuotation = generatedQuotations.find((q) => q.quotation_no === value);
-      if (matchedQuotation) {
-        if (matchedQuotation.grand_total !== undefined && matchedQuotation.grand_total !== null) {
-          onFieldChange("valueWithTax", String(matchedQuotation.grand_total));
-        }
-        if (matchedQuotation.pdf_url) {
-          onFieldChange("quotationFileUrl", matchedQuotation.pdf_url);
-        }
+      if (matchedQuotation?.pdf_url) {
+        onFieldChange("quotationFileUrl", matchedQuotation.pdf_url);
       }
 
-      // Fill "Without Tax" by summing line-item amounts from lto_make_quotation_items
+      // Both "Without Tax" and "With Tax" are computed live from
+      // lto_make_quotation_items. "With Tax" used to come straight from
+      // lto_make_quotations.grand_total -- a snapshot cached at save/revision
+      // time -- which drifts out of sync whenever the items change afterwards
+      // without that snapshot being recalculated (seen on CRR-26-27-1816-03:
+      // grand_total stayed at 297537 while its actual items only sum to
+      // 284597). Deriving both from the same live item data keeps them
+      // always consistent with each other and with what's actually saved.
       if (value) {
         supabase
           .from("lto_make_quotation_items")
-          .select("amount, is_freight")
+          .select("amount, gst_percent, is_freight")
           .eq("quotation_no", value)
           .then(({ data: items, error }) => {
             if (!error && items && items.length > 0) {
-              // Sum all non-freight amounts (pre-tax subtotal)
-              const subtotal = items.reduce((sum, it) => {
-                if (it.is_freight) return sum;
-                return sum + (Number(it.amount) || 0);
-              }, 0);
+              // Sum all non-freight amounts (pre-tax subtotal), same as before.
+              let subtotal = 0;
+              let taxTotal = 0;
+              items.forEach((it) => {
+                if (it.is_freight) return;
+                const amount = Number(it.amount) || 0;
+                subtotal += amount;
+                taxTotal += (amount * (Number(it.gst_percent) || 0)) / 100;
+              });
               onFieldChange("valueWithoutTax", String(Math.round(subtotal * 100) / 100));
+              onFieldChange("valueWithTax", String(Math.round((subtotal + taxTotal) * 100) / 100));
             }
           });
       }

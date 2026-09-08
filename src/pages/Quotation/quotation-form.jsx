@@ -674,6 +674,8 @@ const QuotationForm = ({
     if (autoItems.length > 0) {
       const newItems = autoItems.map((item, index) => mapItemToQuotationRow(item, index, nob));
 
+      const isPackagingName = (name) => (name || "").trim().toUpperCase() === "PACKAGING AND FORWARDING";
+
       const alreadyHasFreight = newItems.some((item) => item.isFreight || item.name === "Freight");
       if (!alreadyHasFreight) {
         const existingFreightItem = quotationData.items.find(
@@ -696,6 +698,39 @@ const QuotationForm = ({
               isFreight: true,
             };
         newItems.push(freightItem);
+      }
+
+      // Same preservation as Freight above -- autoItems (from lto_lead_items/
+      // lto_enquiry_items) essentially never contains a "PACKAGING AND
+      // FORWARDING" line either, so without this an unconditional replace
+      // would silently drop whatever packaging row was already there.
+      const alreadyHasPackaging = newItems.some((item) => isPackagingName(item.name));
+      if (!alreadyHasPackaging) {
+        const existingPackagingItem = quotationData.items.find((item) => isPackagingName(item.name));
+        const packagingItem = existingPackagingItem
+          ? { ...existingPackagingItem, id: newItems.length + 1 }
+          : {
+              id: newItems.length + 1,
+              code: "FRT10516",
+              name: "PACKAGING AND FORWARDING",
+              description: "",
+              gst: 18,
+              qty: 1,
+              units: "Nos",
+              rate: 0,
+              discount: 0,
+              flatDiscount: 0,
+              amount: 0,
+            };
+        // Insert before Freight (which, if just pushed above, sits last) so
+        // the underlying array order matches items-table.jsx's rendered
+        // order: normal items, then Packaging & Forwarding, then Freight.
+        const freightIdx = newItems.findIndex((item) => item.isFreight || item.name === "Freight");
+        if (freightIdx !== -1) {
+          newItems.splice(freightIdx, 0, packagingItem);
+        } else {
+          newItems.push(packagingItem);
+        }
       }
 
       handleInputChange("items", newItems);

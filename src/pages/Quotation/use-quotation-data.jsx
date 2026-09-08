@@ -147,6 +147,19 @@ export const INITIAL_QUOTATION_DATA = {
     },
     {
       id: 2,
+      code: "FRT10516",
+      name: "PACKAGING AND FORWARDING",
+      description: "",
+      gst: 18,
+      qty: 1,
+      units: "Nos",
+      rate: 0,
+      discount: 0,
+      flatDiscount: 0,
+      amount: 0,
+    },
+    {
+      id: 3,
       code: "",
       name: "Freight",
       description: "",
@@ -387,9 +400,15 @@ export const useQuotationData = (initialSpecialDiscount = 0) => {
   const handleAddItem = useCallback(() => {
     setQuotationData((prev) => {
       const newId = Math.max(0, ...prev.items.map((item) => item.id)) + 1;
-      // Find where the Freight item is, so we can insert new items before it
-      const freightIndex = prev.items.findIndex(
-        (item) => item.isFreight || item.name === "Freight"
+      // Find where Freight/Packaging & Forwarding sit, so new items always
+      // insert before both -- keeps them last in the underlying array too,
+      // matching how items-table.jsx always renders them as the last two
+      // (grey-highlighted) rows regardless of array order.
+      const specialIndex = prev.items.findIndex(
+        (item) =>
+          item.isFreight ||
+          item.name === "Freight" ||
+          (item.name || "").trim().toUpperCase() === "PACKAGING AND FORWARDING"
       );
       const newItems = [...prev.items];
       const newItem = {
@@ -405,8 +424,8 @@ export const useQuotationData = (initialSpecialDiscount = 0) => {
         flatDiscount: 0,
         amount: 0,
       };
-      if (freightIndex !== -1) {
-        newItems.splice(freightIndex, 0, newItem);
+      if (specialIndex !== -1) {
+        newItems.splice(specialIndex, 0, newItem);
       } else {
         newItems.push(newItem);
       }

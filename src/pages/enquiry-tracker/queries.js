@@ -178,6 +178,40 @@ async function attachLatestQuotations(rows) {
   });
 }
 
+// "Address" column (Pending tab) -- the Billing Address collected when the
+// lead/enquiry was created (prefilled from lto_client_master.billing_address
+// at that time, see CallTrackerForm.jsx/DirectEnquiryForm.jsx), stored as
+// lto_leads.location / lto_enquiries.location. enquiry_pending_view doesn't
+// expose either column at all, so it's fetched and overlaid here the same
+// way attachMergedTrackerFields/attachLatestQuotations do above.
+async function attachBillingAddress(rows) {
+  const enquiryIds = Array.from(new Set(
+    rows.filter((r) => r.source_type === "enquiry").map((r) => r.record_id).filter(Boolean)
+  ));
+  const leadIds = Array.from(new Set(
+    rows.filter((r) => r.source_type !== "enquiry").map((r) => r.record_id).filter(Boolean)
+  ));
+  if (enquiryIds.length === 0 && leadIds.length === 0) return rows;
+
+  const [{ data: enqRows }, { data: leadRows }] = await Promise.all([
+    enquiryIds.length > 0
+      ? supabase.from("lto_enquiries").select("id, location").in("id", enquiryIds)
+      : Promise.resolve({ data: [] }),
+    leadIds.length > 0
+      ? supabase.from("lto_leads").select("id, location").in("id", leadIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const billingById = new Map();
+  (enqRows || []).forEach((r) => billingById.set(r.id, r.location || ""));
+  (leadRows || []).forEach((r) => billingById.set(r.id, r.location || ""));
+
+  return rows.map((row) => ({
+    ...row,
+    billing_address: billingById.get(row.record_id) || "",
+  }));
+}
+
 // Applies the filters shared by both the pending and history views. Every
 // filter is a real WHERE clause against the view, not a client-side re-scan
 // of whatever rows happen to already be loaded -- this is what lets a
@@ -289,7 +323,8 @@ export function usePendingEnquiries({
       const { data, error, count } = await query;
       if (error) throw error;
       const mergedRows = await attachMergedTrackerFields(data || []);
-      const rows = await attachLatestQuotations(mergedRows);
+      const rowsWithQuotations = await attachLatestQuotations(mergedRows);
+      const rows = await attachBillingAddress(rowsWithQuotations);
       return { rows, totalCount: count || 0 };
     },
     enabled,

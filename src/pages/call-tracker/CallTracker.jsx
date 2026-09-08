@@ -67,6 +67,10 @@ function CallTracker() {
   const [, setFilterTypeCounts] = useState({ all: 0, first: 0, multi: 0 });
   const [dateFilterCounts, setDateFilterCounts] = useState({ today: 0, overdue: 0, firstCallPending: 0, upcoming: 0 });
 
+  // Edit was removed from the Pending tab (see the "edit" column/case
+  // removal there) but History still has its own Edit -- these stay shared
+  // since handleEditClick/handleSaveClick/handleCancelClick below still
+  // serve History's edit flow.
   const [editingRowId, setEditingRowId] = useState(null);
   const [editedData, setEditedData] = useState({});
 
@@ -146,7 +150,6 @@ function CallTracker() {
   // Pending column visibility (checked = visible by default)
   const [pendingVisibleColumns, setPendingVisibleColumns] = useState({
     actions: true,
-    edit: true,
     leadId: true,
     companyName: true,
     personName: true,
@@ -187,7 +190,6 @@ function CallTracker() {
 
   const pendingColumnOptions = [
     { key: "actions", label: "Actions" },
-    { key: "edit", label: "Edit" },
     { key: "leadId", label: "Lead No." },
     { key: "companyName", label: "Company Name" },
     { key: "personName", label: "Person Name" },
@@ -714,34 +716,6 @@ function CallTracker() {
             >
               <EyeIcon className="h-4 w-4" />
             </button>
-          </td>
-        );
-      case "edit":
-        return (
-          <td key="edit" className="px-3 sm:px-4 py-3 sm:py-4 text-sm font-medium border-r border-gray-200">
-            {editingRowId === index ? (
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => handleSaveClick(index)}
-                  className="px-2 py-1 text-xs bg-success text-white rounded hover:bg-success"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={handleCancelClick}
-                  className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => handleEditClick(followUp, index)}
-                className="px-3 py-1 text-xs border border-info/30 text-info hover:bg-info/10 rounded"
-              >
-                Edit
-              </button>
-            )}
           </td>
         );
       case "timestamp":

@@ -15,7 +15,6 @@ import DirectEnquiryForm from "./DirectEnquiryForm";
 import supabase from "../../utils/supabase";
 import { isUrlReachable, regenerateQuotationPdf } from "../../utils/regenerateQuotationPdf";
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync";
-import { generateNextOrderNumber as generateNextOrderNumberShared } from "../../utils/orderNumberGenerator";
 import DataTable from "../../components/DataTable";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import { usePendingEnquiries, useHistoryEnquiries, CURRENT_STAGE_OPTIONS } from "./queries";
@@ -29,6 +28,10 @@ const columnsConfig = [
   { key: "salespersonName", label: "Person Name" },
   { key: "nextCallDate", label: "Next Follow-Up Date" },
   { key: "lastFollowUpDate", label: "Last Follow-Up Date" },
+  // Billing Address, collected when the lead/enquiry was created (prefilled
+  // from lto_client_master.billing_address at that time) -- see
+  // attachBillingAddress in queries.js.
+  { key: "billingAddress", label: "Address" },
   { key: "currentStage", label: "Current Stage" },
   { key: "callingDate", label: "Calling Date" },
   { key: "itemQty", label: "Item-Details" },
@@ -88,6 +91,7 @@ const defaultVisibility = {
   customerFeedback: true,
   nextCallDate: true,
   lastFollowUpDate: true,
+  billingAddress: true,
   nextCallTime: false,
   currentStage: true,
   callingDate: false,
@@ -275,26 +279,35 @@ function EnquiryTracker() {
   // Valid-value option lists for the inline Pending-row edit -- same
   // lto_dropdown categories CallTrackerForm.jsx/MakeQuotationForm.jsx use,
   // so a value typed here matches what those forms would have offered.
-  const [customerFeedbackOptions, setCustomerFeedbackOptions] = useState([]);
-  const [quotationSharedByOptions, setQuotationSharedByOptions] = useState([]);
+  // Company Name renders as a dropdown (existing companies only) rather
+  // than free text, while editing -- see companyOptions below.
+  const [companyOptions, setCompanyOptions] = useState([]);
   useEffect(() => {
-    const fetchEditOptions = async () => {
+    const fetchCompanyOptions = async () => {
       try {
-        const [{ data: feedbackData }, { data: sharedByData }] = await Promise.all([
-          supabase.from("lto_dropdown").select("value").eq("category", "what_did_customer_say"),
-          supabase.from("lto_dropdown").select("value").eq("category", "quotation_shared_by"),
-        ]);
-        setCustomerFeedbackOptions(
-          Array.from(new Set((feedbackData || []).map((r) => r.value).filter(Boolean))).sort()
-        );
-        setQuotationSharedByOptions(
-          Array.from(new Set((sharedByData || []).map((r) => r.value).filter(Boolean))).sort()
+        const rows = [];
+        let from = 0;
+        const step = 1000;
+        let fetchMore = true;
+        while (fetchMore) {
+          const { data, error } = await supabase
+            .from("lto_client_master")
+            .select("company_name")
+            .not("company_name", "is", null)
+            .range(from, from + step - 1);
+          if (error) throw error;
+          rows.push(...(data || []));
+          if (!data || data.length < step) fetchMore = false;
+          else from += step;
+        }
+        setCompanyOptions(
+          Array.from(new Set(rows.map((r) => r.company_name).filter(Boolean))).sort()
         );
       } catch (err) {
-        console.error("Error fetching inline-edit dropdown options:", err);
+        console.error("Error fetching company options:", err);
       }
     };
-    fetchEditOptions();
+    fetchCompanyOptions();
   }, []);
 
   // Tracks which quotation's "View File" link is mid-regeneration (keyed by
@@ -493,19 +506,22 @@ function EnquiryTracker() {
     }
   };
 
-  // See src/utils/orderNumberGenerator.js -- this used to have its own
-  // locally-duplicated fallback (a non-atomic MAX(order_no)+1 over a
-  // stale, limited snapshot) that produced out-of-sequence/colliding
-  // order numbers whenever the RPC call failed for any transient reason.
-  // Removed in favor of retrying the real atomic sequence and throwing if
-  // that keeps failing, same as EnquiryTrackerForm.jsx.
-  const generateNextOrderNumber = () => generateNextOrderNumberShared(supabase);
-
 const handleSaveClick = async () => {
   try {
-    // Handle Pending tab - update leads_to_order table
+    // Handle Pending tab -- admin-only (see renderPendingRow's Edit button),
+    // and restricted to exactly 7 master lead/enquiry fields: Company Name,
+    // Phone Number, Person Name, Shipping Address, GST Number, Enquiry for
+    // State, and Address (Billing Address). All master-table fields, so
+    // this never needs a tracker-log insert like the old, much broader
+    // version of this branch used to (which also touched current_stage,
+    // next call date/time, quotation shared-by/remarks, order status,
+    // items, etc. -- none of those are edit-able from here anymore).
     if (activeTab === "pending") {
-      // Validate that we have a valid ID
+      if (!isAdmin()) {
+        showNotification("Only admins can edit records here.", "error");
+        return;
+      }
+
       if (!editedData.id && !editedData.dbId) {
         alert("Error: No valid ID found for this record. Please refresh the page and try again.");
         console.error("Missing ID in editedData:", editedData);
@@ -513,236 +529,52 @@ const handleSaveClick = async () => {
       }
 
       const updateId = editedData.id || editedData.dbId;
-      console.log("Updating record with ID:", updateId);
+      const isEnquiryRecord = editedData.sourceType === "enquiry" || editedData.tableSource === "enquiries" || (editedData.leadNo && editedData.leadNo.toUpperCase().startsWith("EN-"));
 
-      const isEnquiryRecord = editedData.tableSource === "enquiry_to_order" || (editedData.leadNo && editedData.leadNo.toUpperCase().startsWith("EN-"));
-
-      if (isEnquiryRecord) {
-        // Parse items if available -- these belong in the normalized
-        // lto_enquiry_items table, not on lto_enquiries/lto_enquiry_tracker.
-        const items = editedData.quotationItems || [];
-
-        // Fields that live on the lto_enquiries master row.
-        const directEnquiryUpdateData = {
-          enquiry_no: editedData.lead_no || editedData.leadNo,
-          lead_source: editedData.Lead_Source || editedData.leadSource,
-          company_name: editedData.Company_Name || editedData.companyName,
-          phone_number: editedData.Phone_Number || editedData.phoneNo,
-          sales_person_name: editedData.salesperson_Name || editedData.salespersonName,
-          enquiry_receiver_name: editedData.Lead_Receiver_Name || editedData.leadReceiverName,
-          sales_coordinator_name: editedData.sc_name || editedData.assignedTo,
-          enquiry_for_state: editedData.Enquiry_for_State || editedData.enquiryForState,
-          sales_type: editedData.Enquiry_Type || editedData.enquiryType,
-          enquiry_approach: editedData.Enquiry_Approach || editedData.enquiryApproach,
-        };
-
-        Object.keys(directEnquiryUpdateData).forEach((key) => {
-          if (directEnquiryUpdateData[key] === undefined || directEnquiryUpdateData[key] === null) {
-            delete directEnquiryUpdateData[key];
+      // Column names differ slightly between the two master tables (see
+      // CallTrackerForm.jsx/DirectEnquiryForm.jsx for where each is
+      // originally collected): leads use person_name/address(shipping)/state,
+      // enquiries use sales_person_name/shipping_address/enquiry_for_state.
+      // `location` (Billing Address) is named the same on both.
+      const updatePayload = isEnquiryRecord
+        ? {
+            company_name: editedData.companyName,
+            phone_number: editedData.phoneNumber,
+            sales_person_name: editedData.salespersonName,
+            shipping_address: editedData.shippingAddress,
+            gst_number: editedData.gstNumber,
+            enquiry_for_state: editedData.enquiryState,
+            location: editedData.billingAddress,
           }
-        });
+        : {
+            company_name: editedData.companyName,
+            phone_number: editedData.phoneNumber,
+            person_name: editedData.salespersonName,
+            address: editedData.shippingAddress,
+            gst_number: editedData.gstNumber,
+            state: editedData.enquiryState,
+            location: editedData.billingAddress,
+          };
 
-        const { error } = await supabase
-          .from("lto_enquiries")
-          .update(directEnquiryUpdateData)
-          .eq("id", updateId)
-          .select();
-
-        if (error) {
-          console.error("Pending direct enquiry update error:", error);
-          alert(`Error updating record: ${error.message}`);
-          throw error;
-        }
-
-        // Fields that represent a stage/history change belong on
-        // lto_enquiry_tracker as a new log row, not on lto_enquiries.
-        const trackerInsertData = {
-          enquiry_id: updateId,
-          current_stage: editedData.Current_Stage || editedData.currentStage,
-          what_did_customer_say: editedData.What_Did_The_Customer_Say || editedData.customerSay,
-          calling_days: editedData.Calling_Days || editedData.callingDate,
-          next_call_date: convertDateToYYYYMMDD(editedData.Next_Call_Date_Field || editedData.nextCallDate),
-          next_call_time: convertTimeTo24Hour(editedData.Next_Call_Time || editedData.nextCallTime),
-        };
-
-        if (editedData.orderStatus?.toLowerCase() === "yes") {
-          Object.assign(trackerInsertData, {
-            is_order_received_status: editedData.orderStatus,
-            order_no: editedData.Order_No || editedData.order_no || await generateNextOrderNumber(),
-            acceptance_via: editedData.acceptanceVia,
-            payment_mode: editedData.paymentMode,
-            destination: editedData.destination,
-            po_number: editedData.poNumber,
-            payment_terms_days: editedData.paymentTerms,
-            transport_mode: editedData.transportMode,
-            conveyed_for_registration_form: editedData.conveyedForRegistration === "yes",
-            acceptance_file_upload: editedData.acceptanceFile,
-            remark: editedData.orderRemark,
-          });
-        }
-
-        Object.keys(trackerInsertData).forEach((key) => {
-          if (trackerInsertData[key] === undefined || trackerInsertData[key] === null || trackerInsertData[key] === "") {
-            delete trackerInsertData[key];
-          }
-        });
-
-        // Only worth logging a tracker row if there's more than just the enquiry_id.
-        if (Object.keys(trackerInsertData).length > 1) {
-          const { error: trackerError } = await supabase
-            .from("lto_enquiry_tracker")
-            .insert([trackerInsertData]);
-
-          if (trackerError) {
-            console.error("Pending direct enquiry tracker insert error:", trackerError);
-            alert(`Enquiry updated, but stage/history details could not be saved: ${trackerError.message}`);
-          }
-        }
-
-        if (items.length > 0) {
-          const { error: deleteItemsError } = await supabase
-            .from("lto_enquiry_items")
-            .delete()
-            .eq("enquiry_id", updateId);
-
-          if (deleteItemsError) {
-            console.error("Error clearing existing enquiry items:", deleteItemsError);
-          }
-
-          const itemRows = items
-            .filter((item) => item.name)
-            .map((item) => ({
-              enquiry_id: updateId,
-              item_name: item.name,
-              quantity: Number(item.qty) || 0,
-            }));
-
-          if (itemRows.length > 0) {
-            const { error: itemsError } = await supabase.from("lto_enquiry_items").insert(itemRows);
-            if (itemsError) {
-              console.error("Error saving enquiry items:", itemsError);
-              alert(`Enquiry updated, but items could not be saved: ${itemsError.message}`);
-            }
-          }
-        }
-
-        // SC/CRE client_master sync -- this inline-edit path used to flip
-        // is_order_received_status to "yes" without ever running this,
-        // unlike the main Order Status form. Awaited (not fire-and-forget
-        // like the sheet sync below) since it's core assignment data, not
-        // an external nice-to-have.
-        if (editedData.orderStatus?.toLowerCase() === "yes") {
-          await syncClientOnOrderConversion(editedData.enquiry_no || directEnquiryUpdateData.enquiry_no);
-        }
-
-        // Non-blocking -- the previous `alert("Updated successfully!")`
-        // here was a synchronous, thread-freezing native dialog that sat
-        // right in between the (already slow, several sequential DB calls)
-        // syncClientOnOrderConversion above and the refetch below, which is
-        // what actually made this path feel laggy/janky, not the refetch
-        // itself.
-        showNotification("Updated successfully!", "success");
-
-        fetchPendingData();
-        // The converted row just left enquiry_pending_view for
-        // enquiry_history_view (is_order_received_status flipped) -- without
-        // this, the History tab kept showing stale data until some other
-        // action happened to invalidate it.
-        if (editedData.orderStatus?.toLowerCase() === "yes") {
-          fetchHistoryData();
-        }
-        setEditingRowId(null);
-        setEditedData({});
-        return;
-      }
-
-      // Parse items if available for leads
-      const leadItems = editedData.quotationItems || [];
-
-      const leadItemUpdates = {};
-      if (leadItems.length > 0) {
-        for (let i = 0; i < 5; i++) {
-          const itemNum = i + 1;
-          if (i < leadItems.length) {
-            leadItemUpdates[`Item_Name${itemNum}`] = leadItems[i].name || "";
-            leadItemUpdates[`Quantity${itemNum}`] = String(leadItems[i].qty || 0);
-          } else {
-            leadItemUpdates[`Item_Name${itemNum}`] = null;
-            leadItemUpdates[`Quantity${itemNum}`] = null;
-          }
-        }
-      }
-      
-      const pendingUpdateData = {
-        lead_no: editedData.lead_no || editedData.leadNo,
-        lead_receiver_name: editedData.Lead_Receiver_Name || editedData.leadReceiverName,
-        lead_source: editedData.Lead_Source || editedData.leadSource,
-        phone_number: editedData.Phone_Number || editedData.phoneNo,
-        person_name: editedData.salesperson_Name || editedData.salespersonName || editedData.sc_name,
-        company_name: editedData.Company_Name || editedData.companyName,
-        state: editedData.Enquiry_for_State || editedData.enquiryForState,
-        sales_type: editedData.Enquiry_Type || editedData.enquiryType
-      };
-
-      // Remove undefined/null values
-      Object.keys(pendingUpdateData).forEach((key) => {
-        if (pendingUpdateData[key] === undefined || pendingUpdateData[key] === null) {
-          delete pendingUpdateData[key];
+      Object.keys(updatePayload).forEach((key) => {
+        if (updatePayload[key] === undefined) {
+          delete updatePayload[key];
         }
       });
 
-      console.log("Pending Update Data:", pendingUpdateData);
-      console.log("Updating record with ID:", updateId);
-
-      const { data: updatedData, error } = await supabase
-        .from("lto_leads")
-        .update(pendingUpdateData)
-        .eq("id", updateId)
-        .select();
+      const { error } = await supabase
+        .from(isEnquiryRecord ? "lto_enquiries" : "lto_leads")
+        .update(updatePayload)
+        .eq("id", updateId);
 
       if (error) {
         console.error("Pending update error:", error);
-        alert(`Error updating record: ${error.message}`);
-        throw error;
+        showNotification(`Error updating record: ${error.message}`, "error");
+        return;
       }
 
-      // Fields that represent a stage/history change belong on
-      // lto_enquiry_tracker_for_leads as a new log row, not on lto_leads --
-      // this insert used to be missing entirely, which is why editing e.g.
-      // Current Stage, Next Follow-Up Date, Customer Feedback, Quotation
-      // Shared By or Quotation Remarks on a lead-sourced Pending row never
-      // actually saved anything beyond the lead's own master fields above.
-      const leadTrackerInsertData = {
-        lead_id: updateId,
-        current_stage: editedData.Current_Stage || editedData.currentStage,
-        what_did_customer_say: editedData.What_Did_The_Customer_Say || editedData.customerSay || editedData.customerFeedback,
-        next_call_date: convertDateToYYYYMMDD(editedData.Next_Call_Date_Field || editedData.nextCallDate),
-        next_call_time: convertTimeTo24Hour(editedData.Next_Call_Time || editedData.nextCallTime),
-        quotation_shared_by: editedData.quotationSharedBy,
-        quotation_remarks: editedData.quotationRemarks,
-      };
-
-      Object.keys(leadTrackerInsertData).forEach((key) => {
-        if (leadTrackerInsertData[key] === undefined || leadTrackerInsertData[key] === null || leadTrackerInsertData[key] === "") {
-          delete leadTrackerInsertData[key];
-        }
-      });
-
-      // Only worth logging a tracker row if there's more than just the lead_id.
-      if (Object.keys(leadTrackerInsertData).length > 1) {
-        const { error: trackerError } = await supabase
-          .from("lto_enquiry_tracker_for_leads")
-          .insert([leadTrackerInsertData]);
-
-        if (trackerError) {
-          console.error("Pending lead tracker insert error:", trackerError);
-          alert(`Lead updated, but stage/history details could not be saved: ${trackerError.message}`);
-        }
-      }
-
-      console.log("Successfully updated record:", updatedData);
-      alert("Updated successfully!");
-      fetchPendingData(currentPage, searchTerm, getDateFiltersFromCallingDays());
+      showNotification("Updated successfully!", "success");
+      fetchPendingData();
       setEditingRowId(null);
       setEditedData({});
       return;
@@ -1491,6 +1323,10 @@ const handleSaveClick = async () => {
       // last follow-up/stage submission actually happened -- see
       // attachMergedTrackerFields's last_follow_up_at overlay in queries.js.
       lastFollowUpDate: row.last_follow_up_at ? formatDateToDDMMYYYY(row.last_follow_up_at) : "",
+      // Billing Address, collected at creation time (see
+      // attachBillingAddress's billing_address overlay in queries.js) --
+      // lto_leads.location / lto_enquiries.location.
+      billingAddress: row.billing_address || "",
       nextCallTime: row.next_call_time || "",
       enquiryStatus: row.enquiry_status || "",
       assignedTo: row.assigned_to || "",
@@ -2536,93 +2372,75 @@ const handleSaveClick = async () => {
 
       let cellContent = val !== undefined && val !== null ? String(val) : "—";
 
-      if (isEditing && opt.key === "currentStage") {
-        const currentVal = editedData.Current_Stage || editedData.currentStage || val || "";
+      // Inline editing (admin-only, see renderPendingRow's Edit button) is
+      // restricted to exactly these 7 fields -- all master lead/enquiry
+      // fields, not tracker/stage fields, so saving them never needs a
+      // tracker-log insert (see handleSaveClick's pending branch).
+      if (isEditing && opt.key === "companyName") {
+        const currentVal = editedData.companyName ?? val ?? "";
         cellContent = (
           <select
-            value={currentVal}
-            onChange={(e) => {
-              handleFieldChange("Current_Stage", e.target.value);
-              handleFieldChange("currentStage", e.target.value);
-            }}
-            className="p-1 border border-slate-300 rounded text-xs font-medium bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
+            value={companyOptions.includes(currentVal) ? currentVal : ""}
+            onChange={(e) => handleFieldChange("companyName", e.target.value)}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary min-w-[160px]"
           >
-            <option value="">Select Stage</option>
-            <option value="make-quotation">make-quotation</option>
-            <option value="quotation-validation">quotation-validation</option>
-            <option value="order-expected">order-expected</option>
-            <option value="order-status">order-status</option>
-          </select>
-        );
-      } else if (isEditing && opt.key === "nextCallDate") {
-        const currentVal = editedData.Next_Call_Date_Field || editedData.nextCallDate || val || "";
-        const dateVal = convertDateToYYYYMMDD(currentVal) || "";
-        cellContent = (
-          <input
-            type="date"
-            value={/^\d{4}-\d{2}-\d{2}$/.test(dateVal) ? dateVal : ""}
-            onChange={(e) => {
-              handleFieldChange("Next_Call_Date_Field", e.target.value);
-              handleFieldChange("nextCallDate", e.target.value);
-            }}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        );
-      } else if (isEditing && opt.key === "nextCallTime") {
-        const currentVal = editedData.Next_Call_Time || editedData.nextCallTime || val || "";
-        const timeVal = convertTimeTo24Hour(currentVal) || "";
-        const hhmm = /^\d{2}:\d{2}/.test(timeVal) ? timeVal.slice(0, 5) : "";
-        cellContent = (
-          <input
-            type="time"
-            value={hhmm}
-            onChange={(e) => {
-              handleFieldChange("Next_Call_Time", e.target.value);
-              handleFieldChange("nextCallTime", e.target.value);
-            }}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        );
-      } else if (isEditing && opt.key === "customerFeedback") {
-        const currentVal = editedData.What_Did_The_Customer_Say || editedData.customerSay || editedData.customerFeedback || val || "";
-        cellContent = (
-          <select
-            value={customerFeedbackOptions.includes(currentVal) ? currentVal : ""}
-            onChange={(e) => {
-              handleFieldChange("What_Did_The_Customer_Say", e.target.value);
-              handleFieldChange("customerSay", e.target.value);
-              handleFieldChange("customerFeedback", e.target.value);
-            }}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="">Select feedback</option>
-            {customerFeedbackOptions.map((option) => (
+            <option value="">Select company</option>
+            {companyOptions.map((option) => (
               <option key={option} value={option}>{option}</option>
             ))}
           </select>
         );
-      } else if (isEditing && opt.key === "quotationSharedBy") {
-        const currentVal = editedData.quotationSharedBy || editedData.quotation_shared_by || val || "";
-        cellContent = (
-          <select
-            value={quotationSharedByOptions.includes(currentVal) ? currentVal : ""}
-            onChange={(e) => handleFieldChange("quotationSharedBy", e.target.value)}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <option value="">Select person</option>
-            {quotationSharedByOptions.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        );
-      } else if (isEditing && opt.key === "quotationRemarks") {
-        const currentVal = editedData.quotationRemarks || (val !== "—" ? val : "") || "";
+      } else if (isEditing && opt.key === "phoneNumber") {
         cellContent = (
           <input
             type="text"
-            value={currentVal}
-            onChange={(e) => handleFieldChange("quotationRemarks", e.target.value)}
-            placeholder="Remarks"
+            value={editedData.phoneNumber ?? val ?? ""}
+            onChange={(e) => handleFieldChange("phoneNumber", e.target.value)}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        );
+      } else if (isEditing && opt.key === "salespersonName") {
+        cellContent = (
+          <input
+            type="text"
+            value={editedData.salespersonName ?? val ?? ""}
+            onChange={(e) => handleFieldChange("salespersonName", e.target.value)}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        );
+      } else if (isEditing && opt.key === "shippingAddress") {
+        cellContent = (
+          <input
+            type="text"
+            value={editedData.shippingAddress ?? val ?? ""}
+            onChange={(e) => handleFieldChange("shippingAddress", e.target.value)}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-40 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        );
+      } else if (isEditing && opt.key === "gstNumber") {
+        cellContent = (
+          <input
+            type="text"
+            value={editedData.gstNumber ?? val ?? ""}
+            onChange={(e) => handleFieldChange("gstNumber", e.target.value)}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        );
+      } else if (isEditing && opt.key === "enquiryState") {
+        cellContent = (
+          <input
+            type="text"
+            value={editedData.enquiryState ?? val ?? ""}
+            onChange={(e) => handleFieldChange("enquiryState", e.target.value)}
+            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-28 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        );
+      } else if (isEditing && opt.key === "billingAddress") {
+        cellContent = (
+          <input
+            type="text"
+            value={editedData.billingAddress ?? val ?? ""}
+            onChange={(e) => handleFieldChange("billingAddress", e.target.value)}
             className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-40 focus:outline-none focus:ring-1 focus:ring-primary"
           />
         );
@@ -2707,13 +2525,18 @@ const handleSaveClick = async () => {
               Process <ArrowRightIcon className="ml-1 h-3 w-3 inline" />
             </button>
           </Link>
-          {editingRowId === index ? (
-            <div className="flex gap-1">
-              <button onClick={() => handleSaveClick(index)} className="px-2 py-1 text-xs bg-success text-white rounded hover:bg-success">Save</button>
-              <button onClick={() => setEditingRowId(null)} className="px-2 py-1 text-xs bg-gray-400 text-white rounded hover:bg-gray-500">Cancel</button>
-            </div>
-          ) : (
-            <button onClick={() => handleEditClick(tracker, index)} className="px-2 py-1 text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-md">Edit</button>
+          {/* Edit is admin-only, and restricted to 7 master fields -- see
+              handleSaveClick's pending branch and renderRowCells' isEditing
+              cases. */}
+          {isAdmin() && (
+            editingRowId === index ? (
+              <div className="flex gap-1">
+                <button onClick={() => handleSaveClick(index)} className="px-2 py-1 text-xs bg-success text-white rounded hover:bg-success">Save</button>
+                <button onClick={() => setEditingRowId(null)} className="px-2 py-1 text-xs bg-gray-400 text-white rounded hover:bg-gray-500">Cancel</button>
+              </div>
+            ) : (
+              <button onClick={() => handleEditClick(tracker, index)} className="px-2 py-1 text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-md">Edit</button>
+            )
           )}
         </div>
       </td>

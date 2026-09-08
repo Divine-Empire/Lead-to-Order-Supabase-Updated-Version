@@ -687,7 +687,7 @@ const QuotationPDFDocument = ({
                 Mobile: {quotationData.consignorMobile || " "}
               </Text>
               <Text style={styles.detailsText}>
-                Phone: 0772-400515
+                Phone: 0771-4900515
               </Text>
               <Text style={styles.detailsText}>
                 GSTIN: {quotationData.consignorGSTIN || " "}
