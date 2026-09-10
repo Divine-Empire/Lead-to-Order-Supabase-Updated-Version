@@ -12,7 +12,7 @@ import { getNextQuotationNumber } from "./quotation-service";
 import { useQuotationData } from "./use-quotation-data";
 import supabase from "../../utils/supabase";
 import { loadQuotationDataByNumber } from "../../utils/quotationDataLoader";
-import { putFreightLast } from "../../utils/quotationItemsOrder";
+import { putPackagingAndFreightLast } from "../../utils/quotationItemsOrder";
 
 function Quotation() {
   const [activeTab, setActiveTab] = useState("edit");
@@ -542,11 +542,18 @@ function Quotation() {
         throw new Error("Error saving quotation: " + (lastError?.message || "unique constraint conflict"));
       }
 
-      // Insert line items into make_quotation_items
+      // Insert line items into make_quotation_items. item_order persists the
+      // exact save-time position (lto_make_quotation_items has no ordering
+      // guarantee of its own -- a bulk insert all lands under the same
+      // transaction `now()`, so created_at ties and the DB hands rows back
+      // in arbitrary order) -- quotationDataLoader.js sorts by this column
+      // on every load/revision so items always come back in the order they
+      // were saved, with Packaging & Forwarding then Freight always pinned
+      // last (see putPackagingAndFreightLast).
       if (authoritativeQuotationId) {
-        const itemsPayload = putFreightLast(quotationData.items || [])
+        const itemsPayload = putPackagingAndFreightLast(quotationData.items || [])
           .filter((it) => it && (it.name || it.code || Number(it.amount) > 0))
-          .map((it) => ({
+          .map((it, index) => ({
             quotation_id: authoritativeQuotationId,
             quotation_no: authoritativeQuotationNo,
             item_code: it.code || null,
@@ -560,6 +567,7 @@ function Quotation() {
             flat_discount: Number(it.flatDiscount) || 0,
             amount: Number(it.amount) || 0,
             is_freight: Boolean(it.isFreight),
+            item_order: index,
           }));
 
         if (itemsPayload.length > 0) {

@@ -10,7 +10,7 @@
 
 import supabase from "./supabase";
 import { getStateCodeFromName } from "./gstStateCodes";
-import { putFreightLast } from "./quotationItemsOrder";
+import { putPackagingAndFreightLast } from "./quotationItemsOrder";
 
 // Re-resolves the quotation's linked lead/enquiry (if any), keyed by the
 // quotation's own enquiry_reference_no ("LD-..."/"EN-..."), so consignee
@@ -69,6 +69,12 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
         make_quotation_items:lto_make_quotation_items (*)
       `)
       .eq("quotation_no", quotationNo)
+      // Sorts the embedded items by their persisted save-time position
+      // (see item_order in Quotation.jsx's save handler) instead of
+      // whatever arbitrary order Postgres happens to hand back -- nulls
+      // (rows saved before item_order existed) sort last, same as
+      // putPackagingAndFreightLast's defensive re-pin below handles them.
+      .order("item_order", { foreignTable: "make_quotation_items", ascending: true, nullsFirst: false })
       .single();
 
     if (error || !loadedData) {
@@ -145,13 +151,16 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
       ];
     }
 
-    // Freight was saved wherever it happened to sit in quotationData.items
-    // at save time (see Quotation.jsx's insert) -- PostgREST/the DB gives
-    // no ordering guarantee back, so re-derive "Freight last" here rather
-    // than trusting the fetched order. Ids are reassigned sequentially
-    // afterward so they stay 1..N in the new order (handleAddItem's
-    // `Math.max(...ids) + 1` and React's `key` both rely on that).
-    items = putFreightLast(items).map((item, index) => ({ ...item, id: index + 1 }));
+    // Items just came back sorted by item_order (the query's .order() call
+    // above), so normal items are already in their saved order. This is a
+    // defensive re-pin on top of that, not the primary ordering mechanism:
+    // it guarantees Packaging & Forwarding then Freight are always the
+    // final one/two rows even for legacy rows saved before item_order
+    // existed (where the .order() above can't help, since it's null for
+    // all of them). Ids are reassigned sequentially afterward so they stay
+    // 1..N in the new order (handleAddItem's `Math.max(...ids) + 1` and
+    // React's `key` both rely on that).
+    items = putPackagingAndFreightLast(items).map((item, index) => ({ ...item, id: index + 1 }));
 
     const subtotal = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
     // flat_discount is a fixed currency amount (not a %), already baked
