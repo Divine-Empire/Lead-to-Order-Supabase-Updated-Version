@@ -8,6 +8,7 @@ import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
 import SearchableDropdown from "../../components/SearchableDropdown";
 import DataTable from "../../components/DataTable";
+import ModalForm from "../../components/ModalForm";
 import CallTrackerFilter from "../../components/call-tracker/CallTrackerFilter";
 import NewCallTracker from "./CallTrackerForm";
 import { formatDateToDDMMYYYY } from "../../utils/formatDate";
@@ -67,19 +68,25 @@ function CallTracker() {
   const [, setFilterTypeCounts] = useState({ all: 0, first: 0, multi: 0 });
   const [dateFilterCounts, setDateFilterCounts] = useState({ today: 0, overdue: 0, firstCallPending: 0, upcoming: 0 });
 
-  // Edit was removed from the Pending tab (see the "edit" column/case
-  // removal there) but History still has its own Edit -- these stay shared
-  // since handleEditClick/handleSaveClick/handleCancelClick below still
-  // serve History's edit flow.
-  const [editingRowId, setEditingRowId] = useState(null);
+  // History no longer has an Edit column/modal -- editingRowId/editedData
+  // are read by a handful of still-dormant inline-edit cells left over in
+  // renderPendingCell (nothing sets editingRowId to a non-null value
+  // anymore, so those branches never actually render; the setter is
+  // intentionally not destructured since nothing calls it any more).
+  const [editingRowId] = useState(null);
   const [editedData, setEditedData] = useState({});
+
+  // Pending tab's Edit (admin-only, restricted to Enquiry Type + Enquiry
+  // Receiver Name -- see handlePendingEditSave) is a separate modal/state
+  // from History's above, so the two edit flows never interfere with each
+  // other if somehow both were triggered in the same session.
+  const [isPendingEditModalOpen, setIsPendingEditModalOpen] = useState(false);
+  const [pendingEditedData, setPendingEditedData] = useState({});
 
   const [historyCounts, setHistoryCounts] = useState({ today: 0, older: 0 });
   const [, setFilteredCount] = useState(0);
 
   const [visibleColumns, setVisibleColumns] = useState({
-    actions: false, // Hidden by default for history as per request
-    edit: true,
     timestamp: true,
     callingCount: true,
     enquiryCallingCount: true, // New column
@@ -293,12 +300,6 @@ function CallTracker() {
     }
   };
 
-  const handleEditClick = (followUp, index) => {
-    setEditingRowId(index);
-    setEditedData({ ...followUp, id: followUp.id });
-  };
-
-
   const convertDateToYYYYMMDD = (dateStr) => {
     if (!dateStr) return null;
 
@@ -321,131 +322,53 @@ function CallTracker() {
     }
   };
 
-  const convertTimeTo24Hour = (timeStr) => {
-    if (!timeStr) return null;
-
-    try {
-      // If already in HH:MM:SS format, return as is
-      if (/^\d{2}:\d{2}:\d{2}$/.test(timeStr)) {
-        return timeStr;
-      }
-
-      // Convert "2:30 PM" to "14:30:00"
-      const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
-      if (match) {
-        let hours = parseInt(match[1]);
-        const minutes = match[2];
-        const period = match[3].toUpperCase();
-
-        if (period === "PM" && hours !== 12) hours += 12;
-        if (period === "AM" && hours === 12) hours = 0;
-
-        return `${hours.toString().padStart(2, "0")}:${minutes}:00`;
-      }
-
-      return timeStr;
-    } catch (error) {
-      console.error("Error converting time:", error);
-      return timeStr;
-    }
+  const handleFieldChange = (field, value) => {
+    setEditedData((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleSaveClick = async () => {
+  // Pending tab's admin-only Edit -- restricted to exactly Enquiry Type
+  // (lto_leads.sales_type) and Enquiry Receiver Name
+  // (lto_leads.lead_receiver_name), both master-lead fields that always
+  // exist regardless of whether any call has happened yet. Enquiry
+  // Approach/Enquiry Assign to Person are edited from the History tab
+  // instead (see handleSaveClick above) since those live on
+  // lto_call_tracker_for_leads, which a brand-new pending lead may not
+  // have a row in yet.
+  const handlePendingEditClick = (followUp) => {
+    setPendingEditedData({
+      id: followUp.id,
+      enquiryType: followUp.enquiryType || "",
+      receiverName: followUp.receiverName || "",
+    });
+    setIsPendingEditModalOpen(true);
+  };
+
+  const handlePendingEditCancel = () => {
+    setIsPendingEditModalOpen(false);
+    setPendingEditedData({});
+  };
+
+  const handlePendingEditSave = async (e) => {
+    e.preventDefault();
     try {
-      if (activeTab === "pending") {
-        const pendingUpdateData = {
-          planned_at: editedData.timestamp ? new Date(convertDateToYYYYMMDD(editedData.timestamp)).toISOString() : undefined,
-          company_name: editedData.companyName,
-          person_name: editedData.personName,
-          phone_number: editedData.phoneNumber,
-          lead_source: editedData.leadSource,
-          lead_receiver_name: editedData.receiverName,
-          sales_type: editedData.enquiryType,
-          location: editedData.location,
-          additional_notes: editedData.customerSay || editedData.Additional_Notes,
-          sc_name: editedData.assignedTo,
-          email_address: editedData.Email_Address,
-          state: editedData.State,
-          address: editedData.Address,
-          nob: editedData.NOB,
-          gst_number: editedData.GST_Number,
-          customer_registration_form: editedData.Customer_Registration_Form,
-          credit_access: editedData.Credit_Access,
-          credit_days: editedData.Credit_Days ? Number(editedData.Credit_Days) : undefined,
-          credit_limit: editedData.Credit_Limit ? Number(editedData.Credit_Limit) : undefined,
-        };
+      const { error } = await supabase
+        .from("lto_leads")
+        .update({
+          sales_type: pendingEditedData.enquiryType || null,
+          lead_receiver_name: pendingEditedData.receiverName || null,
+        })
+        .eq("id", pendingEditedData.id);
 
-        // Remove undefined/null values
-        Object.keys(pendingUpdateData).forEach((key) => {
-          if (pendingUpdateData[key] === undefined || pendingUpdateData[key] === null) {
-            delete pendingUpdateData[key];
-          }
-        });
-
-        const { error } = await supabase
-          .from("lto_leads")
-          .update(pendingUpdateData)
-          .eq("id", editedData.id);
-
-        if (error) throw error;
-
-        alert("Updated successfully!");
-        fetchFollowUpData(currentPage, false, searchTerm);
-        setEditingRowId(null);
-        setEditedData({});
-        return;
-      }
-
-      // Logic for History tab (update call_tracker_for_leads)
-      // Note: company_name is NOT a column on lto_call_tracker_for_leads --
-      // it lives on lto_leads and is edited via the Pending tab branch above.
-      const updateData = {
-        what_did_customer_say: editedData.customerSay,
-        enquiry_received_status: editedData.enquiryStatus || editedData.status,
-        enquiry_received_date: convertDateToYYYYMMDD(editedData.enquiryReceivedDate),
-        enquiry_for_state: editedData.enquiryState,
-        project_name: editedData.projectName,
-        enquiry_type: editedData.salesType,
-        project_approximate_value: editedData.projectApproxValue ? Number(editedData.projectApproxValue) : null,
-        next_action: editedData.nextAction,
-        next_call_date: convertDateToYYYYMMDD(editedData.nextCallDate),
-        next_call_time: convertTimeTo24Hour(editedData.nextCallTime),
-        sc_name: editedData.assignedTo,
-      };
-
-      // Remove undefined/null values
-      Object.keys(updateData).forEach((key) => {
-        if (updateData[key] === undefined || updateData[key] === null) {
-          delete updateData[key];
-        }
-      });
-
-      const { error: trackerError } = await supabase
-        .from("lto_call_tracker_for_leads")
-        .update(updateData)
-        .eq("id", editedData.id);
-
-      if (trackerError) {
-        throw new Error(`call_tracker_for_leads update failed: ${trackerError.message}`);
-      }
+      if (error) throw error;
 
       alert("Updated successfully!");
       fetchFollowUpData(currentPage, false, searchTerm);
-      setEditingRowId(null);
-      setEditedData({});
+      setIsPendingEditModalOpen(false);
+      setPendingEditedData({});
     } catch (error) {
-      console.error("Error updating:", error);
+      console.error("Error updating lead:", error);
       alert(`Error updating: ${error.message}`);
     }
-  };
-
-  const handleCancelClick = () => {
-    setEditingRowId(null);
-    setEditedData({});
-  };
-
-  const handleFieldChange = (field, value) => {
-    setEditedData((prev) => ({ ...prev, [field]: value }));
   };
 
   // ─── Server-side paginated + filtered data ─────────────────────────────
@@ -637,8 +560,6 @@ function CallTracker() {
   };
 
   const columnOptions = [
-    { key: "actions", label: "Actions" },
-    { key: "edit", label: "Edit" },
     { key: "timestamp", label: "Timestamp" },
     { key: "callingCount", label: "Calling Count" },
     { key: "enquiryCallingCount", label: "Enquiry Calling Count" }, // New column
@@ -703,6 +624,14 @@ function CallTracker() {
               >
                 Call Now <ArrowRightIcon className="ml-1 h-3 w-3 inline" />
               </button>
+              {isAdmin() && (
+                <button
+                  onClick={() => handlePendingEditClick(followUp)}
+                  className="w-full sm:w-auto px-2 sm:px-3 py-1 text-xs border border-info/30 text-info hover:bg-info/10 rounded-md transition-colors whitespace-nowrap"
+                >
+                  Edit
+                </button>
+              )}
             </div>
           </td>
         );
@@ -1240,43 +1169,25 @@ function CallTracker() {
   };
 
   // Cell rendering helpers for History tab
-  const renderHistoryCell = (followUp, columnKey, index) => {
+  const renderHistoryCell = (followUp, columnKey) => {
     switch (columnKey) {
       case "leadNo":
         return (
           <td key="leadNo" className="px-3 sm:px-4 py-3 sm:py-4 text-sm font-semibold text-gray-900 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.leadNo || ""}
-                onChange={(e) => handleFieldChange("leadNo", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.leadNo
-            )}
+            {followUp.leadNo}
           </td>
         );
       case "companyName":
         return (
           <td key="companyName" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-900 font-semibold">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.companyName || ""}
-                onChange={(e) => handleFieldChange("companyName", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              <div className="max-w-[200px] whitespace-normal break-words">
-                {followUp.companyName}
-                {followUp.companyCount > 1 && (
-                  <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/5 text-primary border border-primary/30">
-                    {followUp.companyCount}
-                  </span>
-                )}
-              </div>
-            )}
+            <div className="max-w-[200px] whitespace-normal break-words">
+              {followUp.companyName}
+              {followUp.companyCount > 1 && (
+                <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/5 text-primary border border-primary/30">
+                  {followUp.companyCount}
+                </span>
+              )}
+            </div>
           </td>
         );
       case "personName":
@@ -1294,31 +1205,13 @@ function CallTracker() {
       case "nextCallDate":
         return (
           <td key="nextCallDate" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="date"
-                value={convertDateToYYYYMMDD(editedData.nextCallDate) || ""}
-                onChange={(e) => handleFieldChange("nextCallDate", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.nextCallDate || <span className="text-gray-300">—</span>
-            )}
+            {followUp.nextCallDate || <span className="text-gray-300">—</span>}
           </td>
         );
       case "customerSay":
         return (
           <td key="customerSay" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500">
-            {editingRowId === index ? (
-              <textarea
-                value={editedData.customerSay || ""}
-                onChange={(e) => handleFieldChange("customerSay", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-                rows="2"
-              />
-            ) : (
-              <div className="max-w-[200px] whitespace-normal break-words">{followUp.customerSay}</div>
-            )}
+            <div className="max-w-[200px] whitespace-normal break-words">{followUp.customerSay}</div>
           </td>
         );
       case "noOfFollowUps":
@@ -1336,16 +1229,7 @@ function CallTracker() {
       case "nextAction":
         return (
           <td key="nextAction" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.nextAction || ""}
-                onChange={(e) => handleFieldChange("nextAction", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              <div className="max-w-[150px] sm:max-w-[200px] whitespace-normal break-words">{followUp.nextAction}</div>
-            )}
+            <div className="max-w-[150px] sm:max-w-[200px] whitespace-normal break-words">{followUp.nextAction}</div>
           </td>
         );
       case "timestamp":
@@ -1375,76 +1259,31 @@ function CallTracker() {
       case "enquiryStatus":
         return (
           <td key="enquiryStatus" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.enquiryStatus || ""}
-                onChange={(e) => handleFieldChange("enquiryStatus", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.enquiryStatus || <span className="text-gray-300">—</span>
-            )}
+            {followUp.enquiryStatus || <span className="text-gray-300">—</span>}
           </td>
         );
       case "receivedDate":
         return (
           <td key="receivedDate" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="date"
-                value={convertDateToYYYYMMDD(editedData.enquiryReceivedDate) || ""}
-                onChange={(e) => handleFieldChange("enquiryReceivedDate", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.enquiryReceivedDate || <span className="text-gray-300">—</span>
-            )}
+            {followUp.enquiryReceivedDate || <span className="text-gray-300">—</span>}
           </td>
         );
       case "state":
         return (
           <td key="state" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.enquiryState || ""}
-                onChange={(e) => handleFieldChange("enquiryState", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.enquiryState || <span className="text-gray-300">—</span>
-            )}
+            {followUp.enquiryState || <span className="text-gray-300">—</span>}
           </td>
         );
       case "projectName":
         return (
           <td key="projectName" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.projectName || ""}
-                onChange={(e) => handleFieldChange("projectName", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              <div className="max-w-[150px] whitespace-normal break-words">{followUp.projectName}</div>
-            )}
+            <div className="max-w-[150px] whitespace-normal break-words">{followUp.projectName}</div>
           </td>
         );
       case "salesType":
         return (
           <td key="salesType" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.salesType || ""}
-                onChange={(e) => handleFieldChange("salesType", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.salesType || <span className="text-gray-300">—</span>
-            )}
+            {followUp.salesType || <span className="text-gray-300">—</span>}
           </td>
         );
       case "productDate":
@@ -1456,179 +1295,85 @@ function CallTracker() {
       case "projectValue":
         return (
           <td key="projectValue" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input
-                type="text"
-                value={editedData.projectApproxValue || ""}
-                onChange={(e) => handleFieldChange("projectApproxValue", e.target.value)}
-                className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-              />
-            ) : (
-              followUp.projectApproxValue || <span className="text-gray-300">—</span>
-            )}
+            {followUp.projectApproxValue || <span className="text-gray-300">—</span>}
           </td>
         );
       case "item1":
         return (
           <td key="item1" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.itemName1 || ""} onChange={(e) => handleFieldChange("itemName1", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.itemName1 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.itemName1 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "qty1":
         return (
           <td key="qty1" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.quantity1 || ""} onChange={(e) => handleFieldChange("quantity1", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.quantity1 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.quantity1 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "item2":
         return (
           <td key="item2" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.itemName2 || ""} onChange={(e) => handleFieldChange("itemName2", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.itemName2 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.itemName2 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "qty2":
         return (
           <td key="qty2" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.quantity2 || ""} onChange={(e) => handleFieldChange("quantity2", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.quantity2 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.quantity2 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "item3":
         return (
           <td key="item3" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.itemName3 || ""} onChange={(e) => handleFieldChange("itemName3", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.itemName3 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.itemName3 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "qty3":
         return (
           <td key="qty3" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.quantity3 || ""} onChange={(e) => handleFieldChange("quantity3", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.quantity3 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.quantity3 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "item4":
         return (
           <td key="item4" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.itemName4 || ""} onChange={(e) => handleFieldChange("itemName4", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.itemName4 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.itemName4 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "qty4":
         return (
           <td key="qty4" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.quantity4 || ""} onChange={(e) => handleFieldChange("quantity4", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.quantity4 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.quantity4 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "item5":
         return (
           <td key="item5" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.itemName5 || ""} onChange={(e) => handleFieldChange("itemName5", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.itemName5 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.itemName5 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "qty5":
         return (
           <td key="qty5" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.quantity5 || ""} onChange={(e) => handleFieldChange("quantity5", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.quantity5 || <span className="text-gray-300">—</span>
-            )}
+            {followUp.quantity5 || <span className="text-gray-300">—</span>}
           </td>
         );
       case "callDate":
         return (
           <td key="callDate" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="date" value={convertDateToYYYYMMDD(editedData.nextCallDate) || ""} onChange={(e) => handleFieldChange("nextCallDate", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.nextCallDate || <span className="text-gray-300">—</span>
-            )}
+            {followUp.nextCallDate || <span className="text-gray-300">—</span>}
           </td>
         );
       case "callTime":
         return (
           <td key="callTime" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.nextCallTime || ""} onChange={(e) => handleFieldChange("nextCallTime", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              followUp.nextCallTime || <span className="text-gray-300">—</span>
-            )}
+            {followUp.nextCallTime || <span className="text-gray-300">—</span>}
           </td>
         );
       case "itemQty":
         return (
           <td key="itemQty" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-            {editingRowId === index ? (
-              <input type="text" value={editedData.itemQty || ""} onChange={(e) => handleFieldChange("itemQty", e.target.value)} className="px-2 py-1 border border-gray-300 rounded text-sm w-full bg-white" />
-            ) : (
-              formatItemQty(followUp.itemQty) || <span className="text-gray-300">—</span>
-            )}
-          </td>
-        );
-      case "actions":
-        return (
-          <td key="actions" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
-          </td>
-        );
-      case "edit":
-        return (
-          <td key="edit" className="px-3 sm:px-4 py-3 sm:py-4 text-sm font-medium border-l border-gray-200">
-            {editingRowId === index ? (
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => handleSaveClick(index)}
-                  className="px-2 py-1 text-xs bg-success text-white rounded hover:bg-success"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={handleCancelClick}
-                  className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => handleEditClick(followUp, index)}
-                className="px-3 py-1 text-xs border border-info/30 text-info hover:bg-info/10 rounded"
-              >
-                Edit
-              </button>
-            )}
+            {formatItemQty(followUp.itemQty) || <span className="text-gray-300">—</span>}
           </td>
         );
       default:
@@ -2094,6 +1839,38 @@ function CallTracker() {
           </div>
         </div>
       )}
+
+
+      {/* Pending tab Edit modal -- admin-only, restricted to exactly
+          Enquiry Type + Enquiry Receiver Name (see handlePendingEditSave). */}
+      <ModalForm
+        isOpen={isPendingEditModalOpen}
+        onClose={handlePendingEditCancel}
+        title="Edit Lead"
+        onSubmit={handlePendingEditSave}
+        submitText="Save"
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Enquiry Type</label>
+            <input
+              type="text"
+              value={pendingEditedData.enquiryType || ""}
+              onChange={(e) => setPendingEditedData((prev) => ({ ...prev, enquiryType: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Enquiry Receiver Name</label>
+            <input
+              type="text"
+              value={pendingEditedData.receiverName || ""}
+              onChange={(e) => setPendingEditedData((prev) => ({ ...prev, receiverName: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+        </div>
+      </ModalForm>
     </div>
   );
 }

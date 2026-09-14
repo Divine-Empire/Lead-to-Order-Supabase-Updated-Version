@@ -16,6 +16,7 @@ import supabase from "../../utils/supabase";
 import { isUrlReachable, regenerateQuotationPdf } from "../../utils/regenerateQuotationPdf";
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync";
 import DataTable from "../../components/DataTable";
+import ModalForm from "../../components/ModalForm";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import { usePendingEnquiries, useHistoryEnquiries, CURRENT_STAGE_OPTIONS } from "./queries";
 
@@ -273,8 +274,17 @@ function EnquiryTracker() {
   const [, setShowCurrentStageDropdown] =
     useState(false);
 
-  const [editingRowId, setEditingRowId] = useState(null);
+  // Kept as setEditingRowId(null) resets alongside editedData in a few
+  // places below for minimal-diff parity with before -- the value itself
+  // is no longer read anywhere now that editing opens a modal (isOpen is
+  // tracked by isPendingEditModalOpen, and editedData.id identifies the
+  // row), so it's intentionally unused (prefixed to satisfy lint).
+  const [_editingRowId, setEditingRowId] = useState(null);
   const [editedData, setEditedData] = useState({});
+  // Pending tab's Edit now opens a modal instead of editing inline in the
+  // row -- editedData tracks the row's field values, the modal is just
+  // where the inputs live now.
+  const [isPendingEditModalOpen, setIsPendingEditModalOpen] = useState(false);
 
   // Valid-value option lists for the inline Pending-row edit -- same
   // lto_dropdown categories CallTrackerForm.jsx/MakeQuotationForm.jsx use,
@@ -308,6 +318,50 @@ function EnquiryTracker() {
       }
     };
     fetchCompanyOptions();
+  }, []);
+
+  // Same lto_dropdown categories DirectEnquiryForm.jsx (enquiries) and
+  // CallTrackerForm.jsx (leads) use for these exact fields -- both source
+  // types share the same category names, so one fetch here covers editing
+  // either kind of Pending row. Rendered as <select>s in the edit modal
+  // instead of free-text inputs so an edit can't introduce a value neither
+  // form would ever have offered.
+  const [enquiryStateOptions, setEnquiryStateOptions] = useState([]);
+  const [salesTypeOptions, setSalesTypeOptions] = useState([]);
+  const [enquiryApproachOptions, setEnquiryApproachOptions] = useState(["INCOMING", "OUTGOING"]);
+  const [receiverNameOptions, setReceiverNameOptions] = useState([]);
+  const [assignToPersonOptions, setAssignToPersonOptions] = useState([]);
+  useEffect(() => {
+    const fetchCategory = (category) =>
+      supabase.from("lto_dropdown").select("value").eq("category", category);
+    const toValues = (rows) => Array.from(new Set((rows || []).map((r) => r.value).filter(Boolean))).sort();
+
+    const fetchEditDropdowns = async () => {
+      try {
+        const [
+          { data: stateData },
+          { data: salesTypeData },
+          { data: approachData },
+          { data: receiverData },
+          { data: assignData },
+        ] = await Promise.all([
+          fetchCategory("state"),
+          fetchCategory("sales_type"),
+          fetchCategory("enquiry_approach"),
+          fetchCategory("lead_receiver_name"),
+          fetchCategory("lead_assign_to"),
+        ]);
+        setEnquiryStateOptions(toValues(stateData));
+        setSalesTypeOptions(toValues(salesTypeData));
+        const approachValues = toValues(approachData);
+        if (approachValues.length > 0) setEnquiryApproachOptions(approachValues);
+        setReceiverNameOptions(toValues(receiverData));
+        setAssignToPersonOptions(toValues(assignData));
+      } catch (err) {
+        console.error("Error fetching edit-modal dropdown options:", err);
+      }
+    };
+    fetchEditDropdowns();
   }, []);
 
   // Tracks which quotation's "View File" link is mid-regeneration (keyed by
@@ -453,6 +507,13 @@ function EnquiryTracker() {
       ...tracker,
       id: tracker.id,
     });
+    setIsPendingEditModalOpen(true);
+  };
+
+  const handlePendingEditCancel = () => {
+    setEditingRowId(null);
+    setEditedData({});
+    setIsPendingEditModalOpen(false);
   };
 
   const convertDateToYYYYMMDD = (dateStr) => {
@@ -509,13 +570,10 @@ function EnquiryTracker() {
 const handleSaveClick = async () => {
   try {
     // Handle Pending tab -- admin-only (see renderPendingRow's Edit button),
-    // and restricted to exactly 7 master lead/enquiry fields: Company Name,
+    // restricted to exactly 11 master lead/enquiry fields: Company Name,
     // Phone Number, Person Name, Shipping Address, GST Number, Enquiry for
-    // State, and Address (Billing Address). All master-table fields, so
-    // this never needs a tracker-log insert like the old, much broader
-    // version of this branch used to (which also touched current_stage,
-    // next call date/time, quotation shared-by/remarks, order status,
-    // items, etc. -- none of those are edit-able from here anymore).
+    // State, Address (Billing Address), Enquiry Type, Enquiry Receiver
+    // Name, Enquiry Approach, and Enquiry Assign to Person.
     if (activeTab === "pending") {
       if (!isAdmin()) {
         showNotification("Only admins can edit records here.", "error");
@@ -533,9 +591,14 @@ const handleSaveClick = async () => {
 
       // Column names differ slightly between the two master tables (see
       // CallTrackerForm.jsx/DirectEnquiryForm.jsx for where each is
-      // originally collected): leads use person_name/address(shipping)/state,
-      // enquiries use sales_person_name/shipping_address/enquiry_for_state.
-      // `location` (Billing Address) is named the same on both.
+      // originally collected): leads use person_name/address(shipping)/state
+      // /lead_receiver_name, enquiries use sales_person_name/
+      // shipping_address/enquiry_for_state/enquiry_receiver_name.
+      // `location` (Billing Address) and `sales_type` (Enquiry Type) are
+      // named the same on both. Enquiry Approach/Enquiry Assign to Person
+      // ONLY exist as columns on lto_enquiries -- for a lead, those two
+      // instead go on its latest lto_call_tracker_for_leads row (upserted
+      // separately below), since lto_leads has no column for either.
       const updatePayload = isEnquiryRecord
         ? {
             company_name: editedData.companyName,
@@ -545,6 +608,10 @@ const handleSaveClick = async () => {
             gst_number: editedData.gstNumber,
             enquiry_for_state: editedData.enquiryState,
             location: editedData.billingAddress,
+            sales_type: editedData.salesType,
+            enquiry_receiver_name: editedData.enquiryReceiverName,
+            enquiry_approach: editedData.enquiryApproach,
+            enquiry_assign_to_person: editedData.enquiryAssignToProject,
           }
         : {
             company_name: editedData.companyName,
@@ -554,6 +621,8 @@ const handleSaveClick = async () => {
             gst_number: editedData.gstNumber,
             state: editedData.enquiryState,
             location: editedData.billingAddress,
+            sales_type: editedData.salesType,
+            lead_receiver_name: editedData.enquiryReceiverName,
           };
 
       Object.keys(updatePayload).forEach((key) => {
@@ -573,10 +642,50 @@ const handleSaveClick = async () => {
         return;
       }
 
+      // Enquiry Approach/Enquiry Assign to Person for a LEAD live on its
+      // latest lto_call_tracker_for_leads row instead of on lto_leads
+      // itself -- update that row if one exists, else create a new one
+      // (a brand-new pending lead may not have any call-tracker row yet).
+      if (!isEnquiryRecord && (editedData.enquiryApproach !== undefined || editedData.enquiryAssignToProject !== undefined)) {
+        const trackerPayload = {};
+        if (editedData.enquiryApproach !== undefined) trackerPayload.enquiry_approach = editedData.enquiryApproach;
+        if (editedData.enquiryAssignToProject !== undefined) trackerPayload.enquiry_assign_to_person = editedData.enquiryAssignToProject;
+
+        const { data: latestTrackerRows, error: latestTrackerError } = await supabase
+          .from("lto_call_tracker_for_leads")
+          .select("id")
+          .eq("lead_id", updateId)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (latestTrackerError) {
+          console.error("Error finding latest call-tracker row:", latestTrackerError);
+          showNotification(`Lead updated, but Enquiry Approach/Assign to Person could not be saved: ${latestTrackerError.message}`, "error");
+        } else if (latestTrackerRows && latestTrackerRows.length > 0) {
+          const { error: trackerUpdateError } = await supabase
+            .from("lto_call_tracker_for_leads")
+            .update(trackerPayload)
+            .eq("id", latestTrackerRows[0].id);
+          if (trackerUpdateError) {
+            console.error("Error updating call-tracker row:", trackerUpdateError);
+            showNotification(`Lead updated, but Enquiry Approach/Assign to Person could not be saved: ${trackerUpdateError.message}`, "error");
+          }
+        } else {
+          const { error: trackerInsertError } = await supabase
+            .from("lto_call_tracker_for_leads")
+            .insert([{ lead_id: updateId, ...trackerPayload }]);
+          if (trackerInsertError) {
+            console.error("Error creating call-tracker row:", trackerInsertError);
+            showNotification(`Lead updated, but Enquiry Approach/Assign to Person could not be saved: ${trackerInsertError.message}`, "error");
+          }
+        }
+      }
+
       showNotification("Updated successfully!", "success");
       fetchPendingData();
       setEditingRowId(null);
       setEditedData({});
+      setIsPendingEditModalOpen(false);
       return;
     }
 
@@ -2351,7 +2460,7 @@ const handleSaveClick = async () => {
   };
 
   // ─── Row render helpers ───────────────────────────────────────────────────
-  const renderRowCells = (tracker, visibleState, isEditing = false, config = columnsConfig) => {
+  const renderRowCells = (tracker, visibleState, config = columnsConfig) => {
     return config.map(opt => {
       if (!visibleState[opt.key]) return null;
       if (opt.key === "salespersonName" && !isAdmin()) return null;
@@ -2372,79 +2481,10 @@ const handleSaveClick = async () => {
 
       let cellContent = val !== undefined && val !== null ? String(val) : "—";
 
-      // Inline editing (admin-only, see renderPendingRow's Edit button) is
-      // restricted to exactly these 7 fields -- all master lead/enquiry
-      // fields, not tracker/stage fields, so saving them never needs a
-      // tracker-log insert (see handleSaveClick's pending branch).
-      if (isEditing && opt.key === "companyName") {
-        const currentVal = editedData.companyName ?? val ?? "";
-        cellContent = (
-          <select
-            value={companyOptions.includes(currentVal) ? currentVal : ""}
-            onChange={(e) => handleFieldChange("companyName", e.target.value)}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-primary min-w-[160px]"
-          >
-            <option value="">Select company</option>
-            {companyOptions.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        );
-      } else if (isEditing && opt.key === "phoneNumber") {
-        cellContent = (
-          <input
-            type="text"
-            value={editedData.phoneNumber ?? val ?? ""}
-            onChange={(e) => handleFieldChange("phoneNumber", e.target.value)}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        );
-      } else if (isEditing && opt.key === "salespersonName") {
-        cellContent = (
-          <input
-            type="text"
-            value={editedData.salespersonName ?? val ?? ""}
-            onChange={(e) => handleFieldChange("salespersonName", e.target.value)}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        );
-      } else if (isEditing && opt.key === "shippingAddress") {
-        cellContent = (
-          <input
-            type="text"
-            value={editedData.shippingAddress ?? val ?? ""}
-            onChange={(e) => handleFieldChange("shippingAddress", e.target.value)}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-40 focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        );
-      } else if (isEditing && opt.key === "gstNumber") {
-        cellContent = (
-          <input
-            type="text"
-            value={editedData.gstNumber ?? val ?? ""}
-            onChange={(e) => handleFieldChange("gstNumber", e.target.value)}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        );
-      } else if (isEditing && opt.key === "enquiryState") {
-        cellContent = (
-          <input
-            type="text"
-            value={editedData.enquiryState ?? val ?? ""}
-            onChange={(e) => handleFieldChange("enquiryState", e.target.value)}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-28 focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        );
-      } else if (isEditing && opt.key === "billingAddress") {
-        cellContent = (
-          <input
-            type="text"
-            value={editedData.billingAddress ?? val ?? ""}
-            onChange={(e) => handleFieldChange("billingAddress", e.target.value)}
-            className="p-1 border border-slate-300 rounded text-xs bg-white text-slate-800 w-40 focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        );
-      } else if (opt.key === "companyName") {
+      // Editing now happens exclusively in the Pending-tab Edit modal (see
+      // renderPendingRow's Edit button / the ModalForm near the bottom of
+      // this component) -- these cells are always display-only.
+      if (opt.key === "companyName") {
         cellContent = (
           <div className="flex items-center">
             <BuildingIcon className="h-4 w-4 mr-2 text-slate-400 shrink-0" />
@@ -2525,22 +2565,15 @@ const handleSaveClick = async () => {
               Process <ArrowRightIcon className="ml-1 h-3 w-3 inline" />
             </button>
           </Link>
-          {/* Edit is admin-only, and restricted to 7 master fields -- see
-              handleSaveClick's pending branch and renderRowCells' isEditing
-              cases. */}
+          {/* Edit is admin-only, and opens a modal restricted to 11 master
+              fields -- see handleSaveClick's pending branch and the
+              ModalForm near the bottom of this component. */}
           {isAdmin() && (
-            editingRowId === index ? (
-              <div className="flex gap-1">
-                <button onClick={() => handleSaveClick(index)} className="px-2 py-1 text-xs bg-success text-white rounded hover:bg-success">Save</button>
-                <button onClick={() => setEditingRowId(null)} className="px-2 py-1 text-xs bg-gray-400 text-white rounded hover:bg-gray-500">Cancel</button>
-              </div>
-            ) : (
-              <button onClick={() => handleEditClick(tracker, index)} className="px-2 py-1 text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-md">Edit</button>
-            )
+            <button onClick={() => handleEditClick(tracker, index)} className="px-2 py-1 text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-md">Edit</button>
           )}
         </div>
       </td>
-      {renderRowCells(tracker, visiblePendingColumns, editingRowId === index)}
+      {renderRowCells(tracker, visiblePendingColumns)}
     </tr>
   );
 
@@ -2551,7 +2584,7 @@ const handleSaveClick = async () => {
           View
         </button>
       </td>
-      {renderRowCells(tracker, visibleColumns, false, historyColumnsConfig)}
+      {renderRowCells(tracker, visibleColumns, historyColumnsConfig)}
     </tr>
   );
 
@@ -2790,6 +2823,144 @@ const handleSaveClick = async () => {
           </div>
         </div>
       )}
+
+      {/* Pending tab Edit modal -- admin-only, replaces the old inline
+          Save/Cancel-in-row editing. Restricted to exactly 11 master
+          lead/enquiry fields (see handleSaveClick's pending branch for the
+          per-field/per-table-source mapping). */}
+      <ModalForm
+        isOpen={isPendingEditModalOpen}
+        onClose={handlePendingEditCancel}
+        title="Edit Record"
+        onSubmit={(e) => { e.preventDefault(); handleSaveClick(); }}
+        submitText="Save"
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Company Name</label>
+            <select
+              value={companyOptions.includes(editedData.companyName) ? editedData.companyName : ""}
+              onChange={(e) => handleFieldChange("companyName", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            >
+              <option value="">Select company</option>
+              {companyOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Phone Number</label>
+            <input
+              type="text"
+              value={editedData.phoneNumber || ""}
+              onChange={(e) => handleFieldChange("phoneNumber", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Person Name</label>
+            <input
+              type="text"
+              value={editedData.salespersonName || ""}
+              onChange={(e) => handleFieldChange("salespersonName", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Shipping Address</label>
+            <input
+              type="text"
+              value={editedData.shippingAddress || ""}
+              onChange={(e) => handleFieldChange("shippingAddress", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">GST Number</label>
+            <input
+              type="text"
+              value={editedData.gstNumber || ""}
+              onChange={(e) => handleFieldChange("gstNumber", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Enquiry for State</label>
+            <select
+              value={enquiryStateOptions.includes(editedData.enquiryState) ? editedData.enquiryState : ""}
+              onChange={(e) => handleFieldChange("enquiryState", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            >
+              <option value="">Select state</option>
+              {enquiryStateOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Address (Billing Address)</label>
+            <input
+              type="text"
+              value={editedData.billingAddress || ""}
+              onChange={(e) => handleFieldChange("billingAddress", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Enquiry Type</label>
+            <select
+              value={salesTypeOptions.includes(editedData.salesType) ? editedData.salesType : ""}
+              onChange={(e) => handleFieldChange("salesType", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            >
+              <option value="">Select type</option>
+              {salesTypeOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Enquiry Receiver Name</label>
+            <select
+              value={receiverNameOptions.includes(editedData.enquiryReceiverName) ? editedData.enquiryReceiverName : ""}
+              onChange={(e) => handleFieldChange("enquiryReceiverName", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            >
+              <option value="">Select receiver</option>
+              {receiverNameOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Enquiry Approach</label>
+            <select
+              value={enquiryApproachOptions.includes(editedData.enquiryApproach) ? editedData.enquiryApproach : ""}
+              onChange={(e) => handleFieldChange("enquiryApproach", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            >
+              <option value="">Select approach</option>
+              {enquiryApproachOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Enquiry Assign to Person</label>
+            <select
+              value={assignToPersonOptions.includes(editedData.enquiryAssignToProject) ? editedData.enquiryAssignToProject : ""}
+              onChange={(e) => handleFieldChange("enquiryAssignToProject", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            >
+              <option value="">Select person</option>
+              {assignToPersonOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </ModalForm>
     </div>
   );
 }
