@@ -32,7 +32,10 @@ function CallTracker() {
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(20);
+  // Fixed at 100 -- Pending/History each lazy-load a single capped page of
+  // 100 rows (see usePendingCallTracker/useHistoryCallTracker's `enabled`
+  // gating in queries.js), no page-N navigation.
+  const [itemsPerPage] = useState(100);
   // Lightweight source for CallTrackerFilter's Company/Person/Phone dropdown
   // options -- separate from the true paginated pendingFollowUps below, since
   // those options need to span every pending row, not just the current page.
@@ -1738,10 +1741,8 @@ function CallTracker() {
             currentPage={currentPage}
             totalPages={totalPages}
             itemsPerPage={itemsPerPage}
-            itemsPerPageOptions={[10, 20, 50]}
-            onPageChange={setCurrentPage}
-            onItemsPerPageChange={(val) => { setItemsPerPage(val); setCurrentPage(1); }}
             totalResults={totalResults}
+            simpleFooter
           />
         )}
       </div>

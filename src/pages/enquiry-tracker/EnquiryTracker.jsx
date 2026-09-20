@@ -255,7 +255,10 @@ function EnquiryTracker() {
 
   const [, setHasMorePending] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(200);
+  // Fixed at 100 -- Pending/History each lazy-load a single capped page of
+  // 100 rows (see usePendingEnquiries/useHistoryEnquiries's `enabled`
+  // gating in queries.js), no page-N navigation.
+  const [itemsPerPage] = useState(100);
   const [, setHasMoreHistory] = useState(true);
   const [, setHasMoreDirectEnquiry] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
@@ -2713,11 +2716,9 @@ const handleSaveClick = async () => {
             currentPage={currentPage}
             totalPages={totalPages}
             itemsPerPage={itemsPerPage}
-            itemsPerPageOptions={[100, 200, 500]}
-            onPageChange={setCurrentPage}
-            onItemsPerPageChange={(val) => { setItemsPerPage(val); setCurrentPage(1); }}
             totalResults={totalResults}
             minWidth="min-w-[1200px]"
+            simpleFooter
           />
         )}
       </div>
