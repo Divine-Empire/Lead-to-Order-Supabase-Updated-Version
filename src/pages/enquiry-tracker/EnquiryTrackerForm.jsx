@@ -567,6 +567,45 @@ function NewEnquiryTracker() {
           console.warn("Could not find UUID in enquiries table for:", formData.enquiryNo);
         }
 
+        // Sync the FULL, final quotation item list into lto_enquiry_items
+        // at the moment of order conversion. The webhook (Supabase Database
+        // Webhook -> Apps Script, see comment below) fires off writes to
+        // lto_enquiry_items, but that table is otherwise only ever written
+        // once, at initial enquiry creation (DirectEnquiryForm.jsx) -- items
+        // added later while building the quotation only land in
+        // lto_make_quotation_items and never get synced back. Without this,
+        // the webhook forwards the stale, original item list (often just 1
+        // item) instead of the real quotation item count.
+        if (
+          enqData?.id &&
+          isOrderStatusStage &&
+          orderStatusData.orderStatus === "yes" &&
+          orderStatusData.quotationItems?.length
+        ) {
+          const { error: deleteItemsErr } = await supabase
+            .from("lto_enquiry_items")
+            .delete()
+            .eq("enquiry_id", enqData.id);
+
+          if (deleteItemsErr) {
+            console.error("Error clearing old enquiry items:", deleteItemsErr.message);
+          }
+
+          const { error: insertItemsErr } = await supabase
+            .from("lto_enquiry_items")
+            .insert(
+              orderStatusData.quotationItems.map((item) => ({
+                enquiry_id: enqData.id,
+                item_name: item.name,
+                quantity: parseInt(item.qty, 10) || 1,
+              }))
+            );
+
+          if (insertItemsErr) {
+            console.error("Error syncing quotation items to enquiry_items:", insertItemsErr.message);
+          }
+        }
+
         const updateSuccess = await updateEnquiryToOrderTable(
           formData.enquiryNo,
           {
@@ -612,6 +651,38 @@ function NewEnquiryTracker() {
           }
         } else {
           console.warn("Could not find UUID in leads table for:", formData.enquiryNo);
+        }
+
+        // Same item-sync gap as the enquiry path above, but for
+        // lto_lead_items -- keep in step with the fix there.
+        if (
+          leadData?.id &&
+          isOrderStatusStage &&
+          orderStatusData.orderStatus === "yes" &&
+          orderStatusData.quotationItems?.length
+        ) {
+          const { error: deleteItemsErr } = await supabase
+            .from("lto_lead_items")
+            .delete()
+            .eq("lead_id", leadData.id);
+
+          if (deleteItemsErr) {
+            console.error("Error clearing old lead items:", deleteItemsErr.message);
+          }
+
+          const { error: insertItemsErr } = await supabase
+            .from("lto_lead_items")
+            .insert(
+              orderStatusData.quotationItems.map((item) => ({
+                lead_id: leadData.id,
+                item_name: item.name,
+                quantity: parseInt(item.qty, 10) || 1,
+              }))
+            );
+
+          if (insertItemsErr) {
+            console.error("Error syncing quotation items to lead_items:", insertItemsErr.message);
+          }
         }
 
         const updateSuccess = await updateLeadToOrderTable(
