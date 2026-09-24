@@ -18,6 +18,8 @@ import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSy
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
+import MakeQuotationForm from "../../components/enquiry-tracker/MakeQuotationFrom";
+import { compressImageFile, validateFileSize } from "../../utils/imageCompression";
 import { usePendingEnquiries, useHistoryEnquiries, CURRENT_STAGE_OPTIONS } from "./queries";
 
 const columnsConfig = [
@@ -218,7 +220,6 @@ function EnquiryTracker() {
     getUsernamesToFilter = () => [],
     getLeadSourcesToFilter = () => [],
     showNotification = () => {},
-    dismissNotification = () => {}
   } = authContext;
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTabState] = useState(() => {
@@ -246,11 +247,6 @@ function EnquiryTracker() {
   const [valueFilter, setValueFilter] = useState("");
   const [currentStageFilter, setCurrentStageFilter] = useState([]);
   const [scNameFilter] = useState("all");
-  const [, setUniqueScNames] = useState({
-    pending: [],
-    directEnquiry: [],
-    history: []
-  });
 
 
   const [, setHasMorePending] = useState(true);
@@ -366,6 +362,183 @@ function EnquiryTracker() {
     };
     fetchEditDropdowns();
   }, []);
+
+  // SC Name options for the Pending-tab edit modal -- there's no
+  // lto_dropdown category for this, so the distinct sc_name values already
+  // configured in lto_sc_distribution (the same round-robin rule table
+  // scAssignment.js uses to auto-assign SC Name on creation) serve as the
+  // canonical list of valid SC names.
+  const [scNameOptions, setScNameOptions] = useState([]);
+  useEffect(() => {
+    const fetchScNameOptions = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("lto_sc_distribution")
+          .select("sc_name");
+        if (error) throw error;
+        setScNameOptions(
+          Array.from(new Set((data || []).map((r) => r.sc_name).filter(Boolean))).sort()
+        );
+      } catch (err) {
+        console.error("Error fetching SC Name options:", err);
+      }
+    };
+    fetchScNameOptions();
+  }, []);
+
+  // History tab edit modal -- Payment Mode / Payment Terms options, same
+  // lto_dropdown categories + fallback lists as OrderStatusFrom.jsx, so the
+  // values offered here match what the original Order Status form offers.
+  const [historyPaymentModeOptions, setHistoryPaymentModeOptions] = useState(["cash", "check", "bank-transfer", "credit-card"]);
+  const [historyPaymentTermsOptions, setHistoryPaymentTermsOptions] = useState(["30", "45", "60", "90"]);
+  useEffect(() => {
+    const fetchCategory = (category) =>
+      supabase.from("lto_dropdown").select("value").eq("category", category);
+    const toValues = (rows) => Array.from(new Set((rows || []).map((r) => r.value).filter(Boolean))).sort();
+
+    const fetchHistoryEditDropdowns = async () => {
+      try {
+        const [{ data: pmData }, { data: ptData }] = await Promise.all([
+          fetchCategory("payment_mode"),
+          fetchCategory("payment_terms"),
+        ]);
+        const pmValues = toValues(pmData);
+        if (pmValues.length > 0) setHistoryPaymentModeOptions(pmValues);
+        const ptValues = toValues(ptData);
+        if (ptValues.length > 0) setHistoryPaymentTermsOptions(ptValues);
+      } catch (err) {
+        console.error("Error fetching history edit payment dropdowns:", err);
+      }
+    };
+    fetchHistoryEditDropdowns();
+  }, []);
+
+  const [isHistoryEditModalOpen, setIsHistoryEditModalOpen] = useState(false);
+  const [isHistoryEditSaving, setIsHistoryEditSaving] = useState(false);
+  const [historyEditError, setHistoryEditError] = useState("");
+  const [historyAcceptanceFileError, setHistoryAcceptanceFileError] = useState("");
+
+  const handleHistoryEditClick = (tracker) => {
+    setEditedData({
+      id: tracker.id,
+      enquiryNo: tracker.enquiryNo,
+      orderStatus: tracker.orderStatus || "",
+      paymentMode: tracker.paymentMode || "",
+      paymentTerms: tracker.paymentTerms !== "" && tracker.paymentTerms != null ? String(tracker.paymentTerms) : "",
+      acceptanceFile: tracker.acceptanceFile || "",
+      quotationSharedBy: tracker.quotationSharedBy || "",
+      quotationNumber: tracker.quotationNumber || "",
+      valueWithoutTax: tracker.valueWithoutTax !== "" && tracker.valueWithoutTax != null ? String(tracker.valueWithoutTax) : "",
+      valueWithTax: tracker.valueWithTax !== "" && tracker.valueWithTax != null ? String(tracker.valueWithTax) : "",
+      quotationFileUrl: tracker.quotationUpload || "",
+      quotationFile: null,
+      remarks: tracker.quotationRemarks || "",
+      sendQuotationNo: "",
+    });
+    setHistoryEditError("");
+    setHistoryAcceptanceFileError("");
+    setIsHistoryEditModalOpen(true);
+  };
+
+  const handleHistoryEditCancel = () => {
+    setIsHistoryEditModalOpen(false);
+    setEditedData({});
+    setHistoryEditError("");
+    setHistoryAcceptanceFileError("");
+  };
+
+  const handleHistoryAcceptanceFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const processedFile = await compressImageFile(file);
+    const sizeError = validateFileSize(processedFile, 10);
+    if (sizeError) {
+      setHistoryAcceptanceFileError(sizeError);
+      return;
+    }
+    setHistoryAcceptanceFileError("");
+    handleFieldChange("acceptanceFile", processedFile);
+  };
+
+  // Uploads a File to Supabase Storage the same way EnquiryTrackerForm.jsx's
+  // uploadFileToSupabase does, returning its public URL.
+  const uploadHistoryEditFile = async (file, bucketName) => {
+    const fileExt = file.name.split(".").pop();
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
+    const { error: uploadError } = await supabase.storage.from(bucketName).upload(fileName, file);
+    if (uploadError) throw uploadError;
+    const { data: { publicUrl } } = supabase.storage.from(bucketName).getPublicUrl(fileName);
+    return publicUrl;
+  };
+
+  // History tab Edit -- reuses the exact write logic handleSaveClick's
+  // (dead) History branch already had, scoped to just the fields this modal
+  // exposes: Payment Mode, Payment Terms, Acceptance Copy, and the
+  // MakeQuotationForm fields (Quotation Shared By, Quotation Number, Value
+  // With/Without Tax, Quotation Copy, Remarks). A dedicated function rather
+  // than routing through handleSaveClick, since a File needs uploading to a
+  // URL string first, and handleSaveClick has no notion of that.
+  const handleHistoryEditSave = async () => {
+    setIsHistoryEditSaving(true);
+    setHistoryEditError("");
+    try {
+      const parseNumericField = (val) => {
+        if (val === "" || val === undefined || val === null) return null;
+        const num = parseFloat(val);
+        return isNaN(num) ? null : num;
+      };
+
+      let quotationUploadUrl = editedData.quotationFileUrl || null;
+      if (editedData.quotationFile instanceof File) {
+        quotationUploadUrl = await uploadHistoryEditFile(editedData.quotationFile, "make_quotation");
+      }
+
+      let acceptanceFileUrl = typeof editedData.acceptanceFile === "string" ? editedData.acceptanceFile : null;
+      if (editedData.acceptanceFile instanceof File) {
+        acceptanceFileUrl = await uploadHistoryEditFile(editedData.acceptanceFile, "acceptance_file_upload");
+      }
+
+      const updateData = {
+        payment_mode: editedData.paymentMode,
+        payment_terms_days: parseNumericField(editedData.paymentTerms),
+        acceptance_file_upload: acceptanceFileUrl,
+        quotation_shared_by: editedData.quotationSharedBy,
+        quotation_number: editedData.quotationNumber,
+        quotation_value_without_tax: parseNumericField(editedData.valueWithoutTax),
+        quotation_value_with_tax: parseNumericField(editedData.valueWithTax),
+        quotation_upload: quotationUploadUrl,
+        quotation_remarks: editedData.remarks,
+      };
+
+      Object.keys(updateData).forEach((key) => {
+        if (updateData[key] === undefined || updateData[key] === null) {
+          delete updateData[key];
+        }
+      });
+
+      const identifier = editedData.enquiryNo;
+      if (!identifier) throw new Error("Record identifier is required");
+      const isLeadNumber = identifier.toUpperCase().startsWith("LD-");
+      const tableName = isLeadNumber ? "lto_enquiry_tracker_for_leads" : "lto_enquiry_tracker";
+
+      const { error } = await supabase.from(tableName).update(updateData).eq("id", editedData.id);
+      if (error) throw error;
+
+      if (editedData.orderStatus?.toLowerCase() === "yes") {
+        await syncClientOnOrderConversion(identifier);
+      }
+
+      alert("Updated successfully!");
+      fetchHistoryData(1, searchTerm, false, getDateFiltersFromCallingDays());
+      setIsHistoryEditModalOpen(false);
+      setEditedData({});
+    } catch (err) {
+      console.error("Error updating history record:", err);
+      setHistoryEditError(err.message || "Failed to update record");
+    } finally {
+      setIsHistoryEditSaving(false);
+    }
+  };
 
   // Tracks which quotation's "View File" link is mid-regeneration (keyed by
   // quotation number) so only that one link shows a loading state -- see
@@ -615,6 +788,7 @@ const handleSaveClick = async () => {
             enquiry_receiver_name: editedData.enquiryReceiverName,
             enquiry_approach: editedData.enquiryApproach,
             enquiry_assign_to_person: editedData.enquiryAssignToProject,
+            sales_coordinator_name: editedData.sc_name,
           }
         : {
             company_name: editedData.companyName,
@@ -626,6 +800,7 @@ const handleSaveClick = async () => {
             location: editedData.billingAddress,
             sales_type: editedData.salesType,
             lead_receiver_name: editedData.enquiryReceiverName,
+            sc_name: editedData.sc_name,
           };
 
       Object.keys(updatePayload).forEach((key) => {
@@ -643,6 +818,31 @@ const handleSaveClick = async () => {
         console.error("Pending update error:", error);
         showNotification(`Error updating record: ${error.message}`, "error");
         return;
+      }
+
+      // Keep lto_client_master's sc_name in sync with whatever was just
+      // saved on the lead/enquiry -- same match-by-company_name convention
+      // syncClientOnOrderConversion.js uses, so SC Name stays consistent
+      // across the whole pipeline (lead/enquiry record, client master, and
+      // any later order conversion) instead of only on the one record.
+      if (editedData.sc_name !== undefined && editedData.companyName) {
+        const { data: clientMatches, error: clientLookupError } = await supabase
+          .from("lto_client_master")
+          .select("uuid")
+          .ilike("company_name", editedData.companyName)
+          .limit(1);
+        if (clientLookupError) {
+          console.error("Error looking up Client Master for SC Name sync:", clientLookupError);
+        } else if (clientMatches && clientMatches.length > 0) {
+          const { error: clientUpdateError } = await supabase
+            .from("lto_client_master")
+            .update({ sc_name: editedData.sc_name })
+            .eq("uuid", clientMatches[0].uuid);
+          if (clientUpdateError) {
+            console.error("Error syncing SC Name to Client Master:", clientUpdateError);
+            showNotification("Record updated, but syncing SC Name to Client Master failed.", "warning");
+          }
+        }
       }
 
       // Enquiry Approach/Enquiry Assign to Person for a LEAD live on its
@@ -1525,6 +1725,7 @@ const handleSaveClick = async () => {
     valueWithoutTax: row.quotation_value_without_tax ?? "",
     quotationUpload: row.quotation_upload || "",
     quotationRemarks: row.quotation_remarks || "",
+    paymentTerms: row.payment_terms_days ?? "",
     validatorName: row.quotation_validator_name || "",
     sendStatus: row.quotation_send_status || "",
     validationRemark: row.quotation_validation_remark || "",
@@ -1590,8 +1791,10 @@ const handleSaveClick = async () => {
     queryClient.invalidateQueries({ queryKey: ["enquiryTracker", "history"] });
   };
 
+  // _page kept for call-site positional compatibility (fetchAllRows
+  // paginates internally instead).
   const fetchDirectEnquiryData = async (
-    _page = 1,
+    _page = 1, // eslint-disable-line no-unused-vars
     searchTerm = "",
     dateFilters = {}
   ) => {
@@ -2583,9 +2786,16 @@ const handleSaveClick = async () => {
   const renderHistoryRow = (tracker, index) => (
     <tr key={tracker.id || index} className="hover:bg-slate-50 transition-colors">
       <td className="px-3 py-3 whitespace-nowrap text-sm font-medium">
-        <button onClick={() => { setSelectedTracker(tracker); setShowPopup(true); }} className="px-3 py-1 text-xs border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-md">
-          View
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => { setSelectedTracker(tracker); setShowPopup(true); }} className="px-3 py-1 text-xs border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-md">
+            View
+          </button>
+          {isAdmin() && (
+            <button onClick={() => handleHistoryEditClick(tracker)} className="px-3 py-1 text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-md">
+              Edit
+            </button>
+          )}
+        </div>
       </td>
       {renderRowCells(tracker, visibleColumns, historyColumnsConfig)}
     </tr>
@@ -2960,7 +3170,110 @@ const handleSaveClick = async () => {
               ))}
             </select>
           </div>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">SC Name</label>
+            <select
+              value={scNameOptions.includes(editedData.sc_name) ? editedData.sc_name : ""}
+              onChange={(e) => handleFieldChange("sc_name", e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+            >
+              <option value="">Select SC name</option>
+              {scNameOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
         </div>
+      </ModalForm>
+
+      {/* History tab Edit modal -- admin-only. Lets Payment Mode, Payment
+          Terms and Acceptance Copy be corrected (exact same dropdown/file
+          logic as the original Order Status form), and lets a revised
+          quotation be attached via the same MakeQuotationForm fields/logic
+          used when a quotation is first made -- selecting a different
+          quotation_number (or uploading a fresh Quotation.jsx revision's
+          file) here updates otp_orders via the existing DB trigger, and the
+          Google Sheet via the existing webhook, same as any other update to
+          this tracker row. See handleHistoryEditSave for the write logic. */}
+      <ModalForm
+        isOpen={isHistoryEditModalOpen}
+        onClose={handleHistoryEditCancel}
+        title="Edit History Record"
+        onSubmit={(e) => { e.preventDefault(); handleHistoryEditSave(); }}
+        submitText={isHistoryEditSaving ? "Saving..." : "Save"}
+      >
+        {historyEditError && (
+          <div className="p-2 text-sm text-destructive bg-destructive/5 border border-destructive/20 rounded-md">
+            {historyEditError}
+          </div>
+        )}
+
+        <div className="space-y-4 border p-4 rounded-md">
+          <h4 className="font-medium text-sm text-gray-700">Order Status</h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label htmlFor="historyPaymentMode" className="block text-sm font-medium text-gray-700">
+                Payment Mode
+              </label>
+              <select
+                id="historyPaymentMode"
+                value={editedData.paymentMode || ""}
+                onChange={(e) => handleFieldChange("paymentMode", e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              >
+                <option value="">Select mode</option>
+                {historyPaymentModeOptions.map((option, index) => (
+                  <option key={index} value={option.toLowerCase()}>{option}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="historyPaymentTerms" className="block text-sm font-medium text-gray-700">
+                Payment Terms
+              </label>
+              <select
+                id="historyPaymentTerms"
+                value={editedData.paymentTerms || ""}
+                onChange={(e) => handleFieldChange("paymentTerms", e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              >
+                <option value="">Select payment terms</option>
+                {historyPaymentTermsOptions.map((option, index) => (
+                  <option key={index} value={option}>{option} days</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="historyAcceptanceFile" className="block text-sm font-medium text-gray-700">
+              Acceptance Copy
+            </label>
+            <input
+              id="historyAcceptanceFile"
+              type="file"
+              onChange={handleHistoryAcceptanceFileChange}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            {historyAcceptanceFileError && (
+              <p className="text-sm text-destructive">{historyAcceptanceFileError}</p>
+            )}
+            {editedData.acceptanceFile instanceof File ? (
+              <p className="text-xs text-gray-500">{editedData.acceptanceFile.name}</p>
+            ) : editedData.acceptanceFile ? (
+              <a href={editedData.acceptanceFile} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">
+                View current file
+              </a>
+            ) : null}
+          </div>
+        </div>
+
+        <MakeQuotationForm
+          enquiryNo={editedData.enquiryNo || ""}
+          formData={editedData}
+          onFieldChange={handleFieldChange}
+        />
       </ModalForm>
     </div>
   );
