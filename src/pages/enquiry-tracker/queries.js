@@ -178,6 +178,38 @@ async function attachLatestQuotations(rows) {
   });
 }
 
+// History rows are past point-in-time snapshots -- each one already carries
+// its OWN quotation_number (e.g. a row for "-01" and a separate row for
+// "-02" on the same enquiry). Unlike attachLatestQuotations above (which is
+// correct for Pending, where there's one "current" row per enquiry),
+// blindly overlaying "the latest quotation for this enquiry" here would
+// overwrite an OLDER history row's PDF with a completely different, newer
+// quotation's file just because they share an enquiry_reference_no. This
+// only refreshes quotation_upload, matched by the row's own quotation_number
+// against lto_make_quotations.quotation_no, so a revision's PDF getting
+// regenerated (same quotation_no, new pdf_url -- e.g. via
+// regenerateQuotationPdf) is reflected without touching any other row.
+async function attachQuotationPdfsByExactNumber(rows) {
+  const numbers = Array.from(new Set(
+    rows.map((r) => String(r.quotation_number || "").trim()).filter(Boolean)
+  ));
+  if (numbers.length === 0) return rows;
+
+  const { data: quotations, error: qErr } = await supabase
+    .from("lto_make_quotations")
+    .select("quotation_no, pdf_url")
+    .in("quotation_no", numbers);
+  if (qErr || !quotations || quotations.length === 0) return rows;
+
+  const pdfByNumber = new Map(quotations.map((q) => [q.quotation_no, q.pdf_url]));
+
+  return rows.map((row) => {
+    const pdfUrl = pdfByNumber.get(String(row.quotation_number || "").trim());
+    if (!pdfUrl) return row;
+    return { ...row, quotation_upload: pdfUrl };
+  });
+}
+
 // "Address" column (Pending tab) -- the Billing Address collected when the
 // lead/enquiry was created (prefilled from lto_client_master.billing_address
 // at that time, see CallTrackerForm.jsx/DirectEnquiryForm.jsx), stored as
@@ -375,7 +407,18 @@ export function useHistoryEnquiries({
 
       const { data, error, count } = await query;
       if (error) throw error;
-      return { rows: data || [], totalCount: count || 0 };
+
+      // enquiry_history_view's quotation_upload comes from lto_enquiry_tracker,
+      // written once at initial quotation submission and never updated when
+      // that exact quotation's PDF is later regenerated (e.g. via
+      // regenerateQuotationPdf after a description/data fix). This refreshes
+      // it from lto_make_quotations, matched by each row's OWN
+      // quotation_number -- NOT attachLatestQuotations (that overlays
+      // "latest quotation for this enquiry" onto every row, which would wipe
+      // an older history row's PDF with an unrelated newer quotation's file).
+      const rowsWithQuotations = await attachQuotationPdfsByExactNumber(data || []);
+
+      return { rows: rowsWithQuotations, totalCount: count || 0 };
     },
     enabled,
     placeholderData: (prev) => prev,

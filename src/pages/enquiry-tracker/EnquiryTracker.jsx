@@ -2759,6 +2759,19 @@ const handleSaveClick = async () => {
     });
   };
 
+  // History rows are past point-in-time snapshots -- multiple rows for the
+  // SAME enquiry/lead legitimately share tracker.id (enquiry_history_view
+  // exposes no per-tracker-row PK, only the parent record_id, which
+  // mapHistoryRow copies into tracker.id). Keying the list purely by
+  // tracker.id therefore collides across a quotation's revisions (e.g. "-01"
+  // and "-02" for the same enquiry), which let React reconcile the wrong
+  // row's DOM/click-handler onto a sibling on re-render -- e.g. clicking
+  // "View File" opening a different quotation's PDF than the one shown.
+  // Combining in quotationNumber/created_at/index makes each row's key
+  // actually unique.
+  const historyRowKey = (tracker, index) =>
+    `${tracker.id || "row"}-${tracker.quotationNumber || tracker.created_at || ""}-${index}`;
+
   const renderPendingRow = (tracker, index) => (
     <tr key={tracker.id || index} className="hover:bg-slate-50 transition-colors group">
       <td className="px-3 py-3 whitespace-nowrap text-sm font-medium sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[1px_0_0_0_#e5e7eb] border-r border-gray-200">
@@ -2784,7 +2797,7 @@ const handleSaveClick = async () => {
   );
 
   const renderHistoryRow = (tracker, index) => (
-    <tr key={tracker.id || index} className="hover:bg-slate-50 transition-colors">
+    <tr key={historyRowKey(tracker, index)} className="hover:bg-slate-50 transition-colors">
       <td className="px-3 py-3 whitespace-nowrap text-sm font-medium">
         <div className="flex gap-2">
           <button onClick={() => { setSelectedTracker(tracker); setShowPopup(true); }} className="px-3 py-1 text-xs border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-md">
@@ -2833,7 +2846,7 @@ const handleSaveClick = async () => {
   );
 
   const renderHistoryCard = (tracker, index) => (
-    <div key={tracker.id || index} className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 space-y-3">
+    <div key={historyRowKey(tracker, index)} className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 space-y-3">
       <div className="flex justify-between items-start">
         <div>
           <span className="text-xs font-semibold text-gray-500">{tracker.timestamp}</span>

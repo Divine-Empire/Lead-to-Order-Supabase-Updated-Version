@@ -35,12 +35,13 @@ function Quotation() {
   const lastFetchedTerm = useRef(null);
 
   // Add hidden columns state
-  const [hiddenColumns, setHiddenColumns] = useState({
+  const DEFAULT_HIDDEN_COLUMNS = {
     hideDisc: false,
     hideFlatDisc: false,
     hideTotalFlatDisc: false,
     hideSpecialDiscount: false,
-  });
+  };
+  const [hiddenColumns, setHiddenColumns] = useState(DEFAULT_HIDDEN_COLUMNS);
 
   // Helper function to convert date format
   const convertDateToISO = (dateString) => {
@@ -278,6 +279,14 @@ function Quotation() {
       }
 
       const { quotationData: loadedQuotationData, selectedReferences, specialDiscount: loadedSpecialDiscount, items } = result;
+
+      // Column-visibility toggles (e.g. "Hide Description") are page-level
+      // UI state, not per-quotation data -- without this reset, a toggle left
+      // on from a PREVIOUS quotation silently carries over and gets baked
+      // into this one's generated/saved PDF (e.g. a hidden Description
+      // column disappearing from the uploaded file even though the item's
+      // description is saved correctly in the DB).
+      setHiddenColumns(DEFAULT_HIDDEN_COLUMNS);
 
       setSelectedReferences(selectedReferences);
       setQuotationData(loadedQuotationData);
