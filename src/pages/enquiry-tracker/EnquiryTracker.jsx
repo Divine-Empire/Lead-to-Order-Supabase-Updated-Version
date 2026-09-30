@@ -32,7 +32,7 @@ const columnsConfig = [
   { key: "nextCallDate", label: "Next Follow-Up Date" },
   { key: "lastFollowUpDate", label: "Last Follow-Up Date" },
   // Billing Address, collected when the lead/enquiry was created (prefilled
-  // from lto_client_master.billing_address at that time) -- see
+  // from lto_client_master.billing_address at that time) --- see
   // attachBillingAddress in queries.js.
   { key: "billingAddress", label: "Address" },
   { key: "currentStage", label: "Current Stage" },
