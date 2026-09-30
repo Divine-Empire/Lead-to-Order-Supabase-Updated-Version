@@ -440,6 +440,58 @@ function EnquiryTracker() {
     setIsHistoryEditModalOpen(true);
   };
 
+  // Deletes a single History row (this specific tracker submission only --
+  // NOT the whole enquiry/lead's history). Admin-only, gated the same way
+  // Edit already is at the call site. A "yes" (already converted) order can
+  // never be deleted from here -- that would silently orphan a real order
+  // without a trace of how it was placed. A "no" (lost) order-status row
+  // CAN be deleted deliberately: since is_order_received_status lives only
+  // on this row, removing it makes the enquiry/lead fall back to an earlier
+  // stage in Pending, letting staff convert it again.
+  const handleHistoryDeleteClick = async (tracker) => {
+    if (!isAdmin()) {
+      showNotification("Only admins can delete records here.", "error");
+      return;
+    }
+    if (!tracker?.id) {
+      showNotification("Could not determine this record's ID. Please refresh and try again.", "error");
+      return;
+    }
+
+    const isOrderStatusStage = (tracker.currentStage || "").toLowerCase() === "order-status";
+    const orderReceived = (tracker.orderStatus || "").toLowerCase();
+
+    if (orderReceived === "yes") {
+      showNotification(
+        "This record is an already-converted order (Order Received = Yes) and can't be deleted from here.",
+        "error"
+      );
+      return;
+    }
+
+    const confirmMessage = isOrderStatusStage
+      ? `You are trying to delete an Enquiry Tracker record whose stage is "Order-Status" and Order Received = ${tracker.orderStatus || "No"}.\n\n` +
+        "Deleting it will move this enquiry/lead back to Pending, so it can be converted again (e.g. to re-process a lost order).\n\n" +
+        "This cannot be undone. Continue?"
+      : "Are you sure you want to delete this record? This cannot be undone.";
+
+    if (!window.confirm(confirmMessage)) return;
+
+    try {
+      const isLeadRecord = tracker.sourceType === "lead" || (tracker.enquiryNo || "").toUpperCase().startsWith("LD-");
+      const tableName = isLeadRecord ? "lto_enquiry_tracker_for_leads" : "lto_enquiry_tracker";
+
+      const { error } = await supabase.from(tableName).delete().eq("id", tracker.id);
+      if (error) throw error;
+
+      showNotification("Record deleted successfully.", "success");
+      fetchHistoryData(1, searchTerm, false, getDateFiltersFromCallingDays());
+    } catch (err) {
+      console.error("Error deleting history record:", err);
+      showNotification(`Error deleting record: ${err.message}`, "error");
+    }
+  };
+
   const handleHistoryEditCancel = () => {
     setIsHistoryEditModalOpen(false);
     setEditedData({});
@@ -1734,10 +1786,13 @@ const handleSaveClick = async () => {
     offerVideo: row.send_offer_video ?? "",
     productCatalog: row.send_product_catalog ?? "",
     productImage: row.send_product_image ?? "",
-    // "Order Received Status" is written as `is_order_received_status`
-    // (see handleSaveClick's updateData) -- `order_status` isn't a real
-    // column, so this was always blank.
-    orderStatus: row.is_order_received_status || "",
+    // The underlying table column is `is_order_received_status` (see
+    // handleSaveClick's updateData), but enquiry_history_view exposes it
+    // under the alias `order_status` -- reading `is_order_received_status`
+    // here (as enquiry_pending_view's mapPendingRow correctly does, since
+    // THAT view really does use that name) silently made this always blank
+    // for every History row, regardless of the real value.
+    orderStatus: row.order_status || "",
     reasonStatus: row.if_no_reason_status || "",
     reasonRemark: row.if_no_reason_remark || "",
     order_no: row.order_no || "",
@@ -2806,6 +2861,11 @@ const handleSaveClick = async () => {
           {isAdmin() && (
             <button onClick={() => handleHistoryEditClick(tracker)} className="px-3 py-1 text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-md">
               Edit
+            </button>
+          )}
+          {isAdmin() && (
+            <button onClick={() => handleHistoryDeleteClick(tracker)} className="px-3 py-1 text-xs border border-red-200 text-red-600 hover:bg-red-50 rounded-md">
+              Delete
             </button>
           )}
         </div>
