@@ -88,50 +88,63 @@ export const syncClientOnOrderConversion = async (enquiryNo, creditTerms = {}) =
     let targetSalesType = currentSalesType.toUpperCase() === "NBD" ? "NBD_CRR" : currentSalesType;
     const targetGroup = (existingClient?.company_group_name || leadData?.company_group_name || enqData?.company_group_name || "").trim();
 
+    // Only reassign SC on a genuine, first-time NBD -> NBD_CRR upgrade (i.e.
+    // the company is converting from NBD right now). Without this gate, this
+    // whole block re-ran on EVERY order conversion for a company -- even
+    // ones already at NBD_CRR from a previous order -- and the round-robin
+    // fallback below would silently reassign (and overwrite
+    // lto_client_master.sc_name for) a client that already had a
+    // perfectly good, established SC, just because it didn't belong to a
+    // tracked group. A repeat customer's SC relationship shouldn't be
+    // re-rolled every time they place another order.
+    const isUpgradingNow = currentSalesType.toUpperCase() === "NBD";
     let assignedScFromGroup = false;
-    if (targetGroup && !isOtherClientsGroup(targetGroup)) {
-      try {
-        const { data: groupClients } = await supabase
-          .from("lto_client_master")
-          .select("sc_name")
-          .ilike("company_group_name", targetGroup)
-          .not("sc_name", "is", null)
-          .not("sc_name", "eq", "")
-          .order("updated_at", { ascending: false })
-          .limit(1);
 
-        if (groupClients && groupClients.length > 0 && groupClients[0].sc_name) {
-          resolvedHandlePerson = groupClients[0].sc_name;
-          assignedScFromGroup = true;
-        }
-      } catch (groupErr) {
-        console.error("syncClientOnOrderConversion: error fetching group SC during order conversion", groupErr);
-      }
-    }
+    if (isUpgradingNow) {
+      if (targetGroup && !isOtherClientsGroup(targetGroup)) {
+        try {
+          const { data: groupClients } = await supabase
+            .from("lto_client_master")
+            .select("sc_name")
+            .ilike("company_group_name", targetGroup)
+            .not("sc_name", "is", null)
+            .not("sc_name", "eq", "")
+            .order("updated_at", { ascending: false })
+            .limit(1);
 
-    if (!assignedScFromGroup) {
-      try {
-        const { data: activeRules } = await supabase
-          .from("lto_sc_distribution")
-          .select("*")
-          .order("sequence_order", { ascending: true })
-          .order("created_at", { ascending: true });
-
-        if (activeRules && activeRules.length > 0) {
-          const currentNob = leadData?.nob || enqData?.nob || "";
-          const currentSource = leadData?.lead_source || enqData?.lead_source || "";
-
-          const { scName } = await resolveScByRules(activeRules, {
-            salesType: targetSalesType,
-            leadSource: currentSource,
-            nob: currentNob,
-          });
-          if (scName) {
-            resolvedHandlePerson = scName;
+          if (groupClients && groupClients.length > 0 && groupClients[0].sc_name) {
+            resolvedHandlePerson = groupClients[0].sc_name;
+            assignedScFromGroup = true;
           }
+        } catch (groupErr) {
+          console.error("syncClientOnOrderConversion: error fetching group SC during order conversion", groupErr);
         }
-      } catch (scErr) {
-        console.error("syncClientOnOrderConversion: error evaluating SC conversion reassignment", scErr);
+      }
+
+      if (!assignedScFromGroup) {
+        try {
+          const { data: activeRules } = await supabase
+            .from("lto_sc_distribution")
+            .select("*")
+            .order("sequence_order", { ascending: true })
+            .order("created_at", { ascending: true });
+
+          if (activeRules && activeRules.length > 0) {
+            const currentNob = leadData?.nob || enqData?.nob || "";
+            const currentSource = leadData?.lead_source || enqData?.lead_source || "";
+
+            const { scName } = await resolveScByRules(activeRules, {
+              salesType: targetSalesType,
+              leadSource: currentSource,
+              nob: currentNob,
+            });
+            if (scName) {
+              resolvedHandlePerson = scName;
+            }
+          }
+        } catch (scErr) {
+          console.error("syncClientOnOrderConversion: error evaluating SC conversion reassignment", scErr);
+        }
       }
     }
 
