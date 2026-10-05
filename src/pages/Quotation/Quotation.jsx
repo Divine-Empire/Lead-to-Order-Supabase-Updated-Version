@@ -258,6 +258,11 @@ function Quotation() {
         setSelectedReferences([]);
         setPdfUrl("");
         setQuotationLink("");
+        // Same leak as handleQuotationSelect's reset below, but for the
+        // "start a fresh new quotation" path: a "Hide Description" (or any
+        // other column) toggle left on from the previous quotation must not
+        // silently carry over into this one.
+        setHiddenColumns(DEFAULT_HIDDEN_COLUMNS);
       } catch (error) {
         console.error("Error resetting form on cancel revise:", error);
       }
@@ -654,6 +659,11 @@ function Quotation() {
       resetQuotationData(nextQuotationNumber);
       setSpecialDiscount(0);
       setSelectedReferences([]);
+      // Same leak as handleQuotationSelect's reset: a column-visibility
+      // toggle (e.g. "Hide Description") left on from the just-saved
+      // quotation must not silently carry into the next one typed in the
+      // same sitting.
+      setHiddenColumns(DEFAULT_HIDDEN_COLUMNS);
     } catch (error) {
       console.error("Error in handleSaveQuotation:", error);
       alert("Error: " + error.message);
