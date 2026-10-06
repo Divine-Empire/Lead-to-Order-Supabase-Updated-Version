@@ -29,6 +29,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
     enquiryNo: "",
     leadSource: "",
     scName: initialData?.scName || "",
+    crmName: initialData?.crmName || "",
     companyName: initialData?.companyName || "",
     groupName: initialData?.groupName || "",
     stateCode: "",
@@ -252,6 +253,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
               enquiryState: company.state || "",
               stateCode: company.state_code || "",
               scName: company.sc_name || "",
+              crmName: company.crm_name || "",
               salesType: company.sales_type || "",
               groupName: company.company_group_name || ""
             };
@@ -287,7 +289,14 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
       location: companyDetails.location || prev.location,
       gstNumber: companyDetails.gstNumber || prev.gstNumber,
       stateCode: companyDetails.stateCode || prev.stateCode,
-      scName: companyDetails.scName || prev.scName,
+      // SC/CRM are never user-typed in this form (no input for either) --
+      // they only ever come from whichever company is currently selected.
+      // Falling back to `prev.scName`/`prev.crmName` here would leak the
+      // PREVIOUSLY selected company's SC/CRM onto this one when the newly
+      // picked company has none of its own yet, instead of leaving it blank
+      // for handleSubmit's round-robin fallback to fill in correctly.
+      scName: companyDetails.scName || "",
+      crmName: companyDetails.crmName || "",
       groupName: companyDetails.groupName || prev.groupName,
       isCompanyAutoFilled: true
     }));
@@ -403,7 +412,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
       // or falls back to the sc_distribution round-robin for SC only (CRE
       // stays null -- only assigned later, at order conversion).
       let assignedScName = existingClient?.sc_name || newCallTrackerData.scName || null;
-      let assignedCrmName = existingClient?.crm_name || null;
+      let assignedCrmName = existingClient?.crm_name || newCallTrackerData.crmName || null;
 
       if (!assignedScName) {
         const resolved = await resolveScAndCreForNewCompany({

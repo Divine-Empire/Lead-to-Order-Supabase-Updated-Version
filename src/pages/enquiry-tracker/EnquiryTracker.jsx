@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useState, useEffect, useContext, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   PlusIcon,
   SearchIcon,
@@ -213,6 +213,7 @@ async function fetchAllRows(baseQueryFn) {
 
 
 function EnquiryTracker() {
+  const location = useLocation();
   const authContext = useContext(AuthContext) || {};
   const {
     currentUser = null,
@@ -701,12 +702,18 @@ function EnquiryTracker() {
   };
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(location.search);
     if (params.get("action") === "new-enquiry") {
       // Prefill data forwarded from Client Master's "Enquiry" action button
       // (see ClientMaster.jsx's `urlParams`) -- only set fields that are
       // actually present so DirectEnquiryForm's own defaults still apply
       // to anything not passed.
+      //
+      // Depends on `location.search` (not `[]`) -- this page stays mounted
+      // across same-route navigations, so clicking "Enquiry" for a second
+      // client without a full reload used to silently no-op: the prefill
+      // stayed stuck on whichever client's data was parsed on first mount,
+      // while the form opened as if for the newly-clicked client.
       const prefill = {};
       const paramToField = {
         companyName: "companyName",
@@ -716,6 +723,7 @@ function EnquiryTracker() {
         gstNumber: "gstNumber",
         billingAddress: "location",
         scName: "scName",
+        crmName: "crmName",
         state: "enquiryState",
       };
       Object.entries(paramToField).forEach(([param, field]) => {
@@ -725,7 +733,7 @@ function EnquiryTracker() {
       setNewEnquiryPrefill(prefill);
       setShowNewCallTrackerForm(true);
     }
-  }, []);
+  }, [location.search]);
 
 
 
