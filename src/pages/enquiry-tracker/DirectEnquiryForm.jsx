@@ -370,6 +370,41 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
     setIsSubmitting(true);
 
     try {
+      // Same customer request logged twice by different receivers (e.g.
+      // En-9454 / En-9463) leaves one copy with no quotation. Warn, don't
+      // block -- a client can legitimately send a new requirement.
+      // ponytail: matches on company name + last 7 days only; doesn't check
+      // whether the earlier enquiry is still open in the tracker.
+      const companyName = (newCallTrackerData.companyName || "").trim();
+      if (companyName) {
+        const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: recent, error: recentErr } = await supabase
+          .from("lto_enquiries")
+          .select("enquiry_no, created_at, enquiry_receiver_name, lto_enquiry_items(item_name, quantity)")
+          .ilike("company_name", companyName)
+          .gte("created_at", since)
+          .order("created_at", { ascending: false });
+
+        if (recentErr) {
+          console.warn("Duplicate-enquiry check failed, continuing:", recentErr);
+        } else if (recent && recent.length > 0) {
+          const lines = recent.map((e) => {
+            const items = (e.lto_enquiry_items || [])
+              .map((i) => `${i.item_name} x${i.quantity}`)
+              .join(", ");
+            const when = new Date(e.created_at).toLocaleString("en-IN");
+            return `• ${e.enquiry_no} (${when}, by ${e.enquiry_receiver_name || "-"}): ${items || "no items"}`;
+          });
+          const proceed = window.confirm(
+            `"${companyName}" already has ${recent.length} enquir${recent.length === 1 ? "y" : "ies"} in the last 7 days:\n\n` +
+            `${lines.join("\n")}\n\n` +
+            `If this is the same requirement, cancel and continue on the existing enquiry instead.\n\n` +
+            `Create a new enquiry anyway?`
+          );
+          if (!proceed) return;
+        }
+      }
+
       // Fetch TAT config for stage_name = "Enquiry Tracker for Enquiries"
       let tatDurationMinutes = 60;
 
