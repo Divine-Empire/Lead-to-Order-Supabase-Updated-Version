@@ -25,22 +25,27 @@ const ConsigneeDetails = ({
   const [isSearchingLeadNo, setIsSearchingLeadNo] = useState(false)
   const leadNoWrapperRef = useRef(null)
   const leadNoDebounceRef = useRef(null)
-  const leadNoInputValue = quotationData.enquiryReferenceNo || ""
+  // Typed text is only a search query; enquiryReferenceNo is set solely by
+  // picking a suggestion. null = not typing, so the box shows the selection.
+  const [leadNoQuery, setLeadNoQuery] = useState(null)
+  const selectedLeadNo = quotationData.enquiryReferenceNo || ""
+  const leadNoInputValue = leadNoQuery ?? selectedLeadNo
 
   // Keep the shown suggestions in sync with the initial pending list while
   // the field is empty (e.g. once the async initial load resolves).
   useEffect(() => {
-    if (!leadNoInputValue.trim()) {
+    if (!(leadNoQuery || "").trim()) {
       setLeadNoSuggestions(leadNoOptions || [])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leadNoOptions])
 
-  // Close the suggestion panel on outside click.
+  // Close the suggestion panel on outside click, dropping any unpicked text.
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (leadNoWrapperRef.current && !leadNoWrapperRef.current.contains(event.target)) {
         setIsLeadNoOpen(false)
+        setLeadNoQuery(null)
       }
     }
     document.addEventListener("mousedown", handleClickOutside)
@@ -54,6 +59,15 @@ const ConsigneeDetails = ({
   }, [])
   const handleCompanyChange = async (e) => {
     const selectedCompany = e.target.value
+    // A quotation saved with one enquiry's Lead No. but another company as
+    // consignee lands in the wrong enquiry's Make Quotation dropdown.
+    if (selectedLeadNo && selectedCompany !== quotationData.consigneeName) {
+      alert(
+        `Company Name is linked to Lead No. ${selectedLeadNo} and can't be changed here.\n\n` +
+        `To use a different company, select that company's Lead No. instead, or click "Remove Lead No." first.`
+      )
+      return
+    }
     handleInputChange("consigneeName", selectedCompany)
 
     if (selectedCompany && dropdownData.companies && dropdownData.companies[selectedCompany]) {
@@ -98,7 +112,7 @@ const ConsigneeDetails = ({
 
   const handleLeadNoInputChange = (e) => {
     const typedValue = e.target.value
-    handleInputChange("enquiryReferenceNo", typedValue)
+    setLeadNoQuery(typedValue)
     setIsLeadNoOpen(true)
 
     if (leadNoDebounceRef.current) clearTimeout(leadNoDebounceRef.current)
@@ -122,30 +136,35 @@ const ConsigneeDetails = ({
     }, 350)
   }
 
-  const handleLeadNoOptionPick = (option) => {
-    handleInputChange("enquiryReferenceNo", option.value)
+  const handleLeadNoOptionPick = async (option) => {
     setIsLeadNoOpen(false)
-    if (handleLeadNoSelect) {
-      handleLeadNoSelect(option.value, option)
+    setLeadNoQuery(null)
+    if (!handleLeadNoSelect) return
+    const ok = await handleLeadNoSelect(option.value, option)
+    if (ok === false) {
+      alert(`Could not load ${option.value}. Please try selecting it again.`)
+      return
     }
+    handleInputChange("enquiryReferenceNo", option.value)
   }
 
-  // Enter/blur: if the typed text exactly matches a currently-shown
-  // suggestion, treat it the same as clicking that suggestion.
-  const commitLeadNoIfExactMatch = () => {
-    const match = leadNoSuggestions.find((opt) => opt.value === leadNoInputValue)
-    if (match && handleLeadNoSelect) {
-      handleLeadNoSelect(match.value, match)
-    }
+  // Enter: if the typed text matches a shown suggestion (case-insensitive),
+  // pick that suggestion -- the saved value is always the option's own.
+  const pickTypedIfMatch = () => {
+    const typed = (leadNoQuery || "").trim().toUpperCase()
+    const match = typed && leadNoSuggestions.find((opt) => opt.value.toUpperCase() === typed)
+    if (match) handleLeadNoOptionPick(match)
+    else setLeadNoQuery(null)
   }
 
   const handleLeadNoKeyDown = (e) => {
     if (e.key === "Enter") {
       e.preventDefault()
-      commitLeadNoIfExactMatch()
+      pickTypedIfMatch()
       setIsLeadNoOpen(false)
     } else if (e.key === "Escape") {
       setIsLeadNoOpen(false)
+      setLeadNoQuery(null)
     }
   }
 
@@ -156,7 +175,13 @@ const ConsigneeDetails = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setShowLeadNoDropdown(!showLeadNoDropdown)}
+            onClick={() => {
+              if (showLeadNoDropdown) {
+                handleInputChange("enquiryReferenceNo", "")
+                setLeadNoQuery(null)
+              }
+              setShowLeadNoDropdown(!showLeadNoDropdown)
+            }}
             className="px-3 py-1 text-sm bg-primary text-white rounded hover:opacity-90"
           >
             {showLeadNoDropdown ? "Remove" : "Show"} Lead No.
@@ -177,11 +202,11 @@ const ConsigneeDetails = ({
                   onFocus={() => setIsLeadNoOpen(true)}
                   onKeyDown={handleLeadNoKeyDown}
                   onBlur={() => {
-                    // Slight delay so a click on a suggestion registers first.
-                    setTimeout(() => commitLeadNoIfExactMatch(), 100)
+                    setLeadNoQuery(null)
+                    setIsLeadNoOpen(false)
                   }}
                   className="w-full p-2 pr-8 border border-gray-300 rounded-md"
-                  placeholder="Select or type a pending lead/enquiry number"
+                  placeholder="Search and select a pending lead/enquiry number"
                   autoComplete="off"
                 />
                 {isSearchingLeadNo && (
@@ -211,7 +236,7 @@ const ConsigneeDetails = ({
                 </div>
               )}
             </div>
-            <p className="text-xs text-gray-400">Showing pending leads/enquiries only. Type to search all pending records.</p>
+            <p className="text-xs text-gray-400">Showing pending leads/enquiries only. Type to search, then pick one from the list.</p>
           </div>
         )}
 

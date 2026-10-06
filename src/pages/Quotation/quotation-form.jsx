@@ -452,15 +452,17 @@ const QuotationForm = ({
   // lead/enquiry's full detail, so the full row is fetched on demand here,
   // keyed off meta.recordId, then cached into leadNoData for this session.
   const handleLeadNoSelect = async (selectedLeadNo, meta = null) => {
+    // Returns false when the lead/enquiry couldn't be loaded, so the caller
+    // doesn't lock in a reference whose company never got filled.
     if (!selectedLeadNo || selectedLeadNo === "Select Lead No.") {
-      return;
+      return false;
     }
 
     // Already resolved earlier in this session (e.g. selected twice)? Reuse it.
     let leadData = leadNoData[selectedLeadNo];
 
     if (!leadData) {
-      if (!meta || !meta.recordId) return; // nothing to look up
+      if (!meta || !meta.recordId) return false; // nothing to look up
 
       setIsItemsLoading(true);
       try {
@@ -474,7 +476,7 @@ const QuotationForm = ({
         if (rowErr || !fullRow) {
           console.error("Error fetching lead/enquiry detail:", rowErr);
           setIsItemsLoading(false);
-          return;
+          return false;
         }
 
         leadData = {
@@ -492,7 +494,7 @@ const QuotationForm = ({
       } catch (error) {
         console.error("Error resolving selected lead/enquiry:", error);
         setIsItemsLoading(false);
-        return;
+        return false;
       }
     } else {
       setIsItemsLoading(true);
