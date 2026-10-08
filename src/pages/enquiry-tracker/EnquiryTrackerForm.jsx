@@ -63,6 +63,7 @@ function NewEnquiryTracker() {
     paymentMode: "",
     paymentTerms: "",
     transportMode: "",
+    orderLocation: "",
     creditDays: "",
     creditLimit: "",
     conveyedForRegistration: "",
@@ -498,6 +499,9 @@ function NewEnquiryTracker() {
             po_number: orderStatusData.poNumber || null,
             payment_terms_days: orderStatusData.paymentTerms ? String(orderStatusData.paymentTerms) : null,
             transport_mode: orderStatusData.transportMode || null,
+            // Synced into otp_orders.order_location by the tracker trigger
+            // (OTP_Supabase/Database/63_order_location.sql).
+            order_location: orderStatusData.orderLocation || null,
             warranty: orderStatusData.warranty || orderStatusData.orderVideo || null,
             acceptance_file_upload: typeof orderStatusData.acceptanceFile === "string" ? orderStatusData.acceptanceFile : null,
             remark: orderStatusData.orderRemark || null,

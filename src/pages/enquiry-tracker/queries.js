@@ -51,7 +51,7 @@ const TRACKER_FIELDS = [
   "quotation_validator_name", "quotation_send_status", "quotation_validation_remark",
   "send_faq_video", "send_product_video", "send_offer_video", "send_product_catalog", "send_product_image",
   "is_order_received_status", "if_no_reason_status", "if_no_reason_remark",
-  "acceptance_via", "transport_mode",
+  "acceptance_via", "transport_mode", "order_location",
   "acceptance_file_upload", "order_no", "conveyed_for_registration_form",
   "destination", "po_number",
 ];

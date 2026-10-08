@@ -12,6 +12,8 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
   const [orderVideoError, setOrderVideoError] = useState("")
   const [acceptanceFileError, setAcceptanceFileError] = useState("")
   const [transportModeOptions, setTransportModeOptions] = useState(["Road", "Air", "Sea", "Rail"])
+  const DEFAULT_ORDER_LOCATIONS = ["Warehouse-CG", "Head-Office-CG", "Service-Inbound-CG", "Maniquip-CG", "Warehouse-NE"]
+  const [orderLocationOptions, setOrderLocationOptions] = useState(DEFAULT_ORDER_LOCATIONS)
   const [quotationNumbers, setQuotationNumbers] = useState([])
   const [isLoadingQuotations, setIsLoadingQuotations] = useState(false)
   const [creditDaysOptions, setCreditDaysOptions] = useState(["30", "45", "60", "90"])
@@ -54,6 +56,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           { data: ptData },
           { data: tmData },
           { data: cdData },
+          { data: olData },
         ] = await Promise.all([
           fetchCategory("acceptance_via"),
           fetchCategory("payment_mode"),
@@ -61,6 +64,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           fetchCategory("payment_terms"),
           fetchCategory("transport_mode"),
           fetchCategory("credit_days"),
+          fetchCategory("order_location"),
         ]);
 
         const toValues = (arr) =>
@@ -72,6 +76,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
         if (ptData?.length) setPaymentTermsOptions(toValues(ptData));
         if (tmData?.length) setTransportModeOptions(toValues(tmData));
         if (cdData?.length) setCreditDaysOptions(toValues(cdData));
+        if (olData?.length) setOrderLocationOptions(toValues(olData));
 
       } catch (err) {
         console.error("Error fetching order status dropdowns:", err);
@@ -566,6 +571,28 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
                 <option value="">Select transport mode</option>
                 {transportModeOptions.map((option, index) => (
                   <option key={index} value={option.toLowerCase()}>{option}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="orderLocation" className="block text-sm font-medium text-gray-700">
+                Order Location <span className="text-destructive">*</span>
+              </label>
+              {/* Value kept in its exact case (unlike the selects above) --
+                  OTP matches it against otp_dropdown and each user's
+                  assigned location. */}
+              <select
+                id="orderLocation"
+                name="orderLocation"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                value={formData.orderLocation || ""}
+                onChange={handleChange}
+                required
+              >
+                <option value="">Select order location</option>
+                {orderLocationOptions.map((option) => (
+                  <option key={option} value={option}>{option}</option>
                 ))}
               </select>
             </div>
