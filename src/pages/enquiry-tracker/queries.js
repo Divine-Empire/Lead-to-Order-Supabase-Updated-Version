@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import supabase from "../../utils/supabase";
 import { mergeRowsChronologically } from "../../utils/mergeTrackerRows";
+import { tokenizeLoose, buildPgLooseToken } from "../../utils/looseSearch";
 
 // Local YYYY-MM-DD, NOT `date.toISOString().split("T")[0]` -- toISOString()
 // converts to UTC first, so in any timezone ahead of UTC (IST, +5:30) local
@@ -252,7 +253,17 @@ function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter
   let q = query;
 
   if (searchTerm) {
-    q = q.ilike("search_text", `%${searchTerm.toLowerCase()}%`);
+    // Loose/word-order-independent AND symbol-insensitive match: "jaiswal
+    // 9371" finds "jaiswal construction en-9371 ..." (word order doesn't
+    // matter), and "ss construction" finds "S.S. CONSTRUCTIONS" (punctuation
+    // in the stored name doesn't matter). Each whitespace-separated token is
+    // stripped to its own letters/digits, then matched via `imatch` (~*)
+    // against search_text with optional punctuation allowed between the
+    // token's own characters -- chaining these filters on the same column
+    // ANDs them, so every token must appear SOMEWHERE, in any order.
+    tokenizeLoose(searchTerm).forEach((token) => {
+      q = q.filter("search_text", "imatch", buildPgLooseToken(token));
+    });
   }
   if (currentStageFilter && currentStageFilter.length > 0) {
     q = q.in("current_stage", currentStageFilter);

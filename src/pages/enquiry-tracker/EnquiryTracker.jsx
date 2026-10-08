@@ -15,6 +15,7 @@ import DirectEnquiryForm from "./DirectEnquiryForm";
 import supabase from "../../utils/supabase";
 import { isUrlReachable, regenerateQuotationPdf } from "../../utils/regenerateQuotationPdf";
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync";
+import { tokenizeLoose, buildPgLooseToken, looseIncludes } from "../../utils/looseSearch";
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
@@ -1888,9 +1889,17 @@ const handleSaveClick = async () => {
     }
 
     if (searchTerm) {
-      query = query.or(
-        `enquiry_no.ilike.%${searchTerm}%,company_name.ilike.%${searchTerm}%,sales_person_name.ilike.%${searchTerm}%`
-      );
+      // Loose, word-order-independent AND symbol-insensitive match (same
+      // approach as applySharedFilters in queries.js): each token must match
+      // enquiry_no/company_name/sales_person_name/phone_number SOMEWHERE,
+      // ignoring punctuation on both sides -- chaining .or() calls ANDs the
+      // token-level OR groups together.
+      tokenizeLoose(searchTerm).forEach((token) => {
+        const p = buildPgLooseToken(token);
+        query = query.or(
+          `enquiry_no.imatch.${p},company_name.imatch.${p},sales_person_name.imatch.${p},phone_number.imatch.${p}`
+        );
+      });
     }
 
     if (!isAdmin()) {
@@ -2652,8 +2661,15 @@ const handleSaveClick = async () => {
   // ─── Filtered data (client-side search + filter) ──────────────────────────
   const applyFilters = (list, tab) => list.filter(tracker => {
     if (searchTerm) {
-      const t = searchTerm.toLowerCase();
-      if (!Object.values(tracker).some(v => v && v.toString().toLowerCase().includes(t))) return false;
+      // Loose + symbol-insensitive match re-applied client-side, same
+      // reasoning as applySharedFilters (queries.js): every typed token
+      // must appear SOMEWHERE across this row's fields (ignoring
+      // punctuation on both sides), not all in one field as a single
+      // contiguous phrase -- otherwise this re-filter would silently undo
+      // the server-side query's looser matching.
+      const values = Object.values(tracker).map(v => (v ? v.toString() : ""));
+      const tokens = tokenizeLoose(searchTerm);
+      if (!tokens.every(token => values.some(v => looseIncludes(v, token)))) return false;
     }
     if (valueFilter) {
       const rawValue = tracker.valueWithoutTax;
