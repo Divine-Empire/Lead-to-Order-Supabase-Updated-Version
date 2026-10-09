@@ -15,6 +15,7 @@ import MainNav from "./components/MainNav"
 import Footer from "./components/Footer"
 import Notification from "./components/Notification"
 import Sidebar from "./components/Sidebar"
+import UpdateBanner from "./components/UpdateBanner"
 import Master from "./pages/Master/Master"
 import Setting from "./pages/Setting/Setting"
 import supabase from "./utils/supabase"
@@ -382,7 +383,9 @@ function App() {
     }}>
       <DataContext.Provider value={{ userData, fetchUserData }}>
         <Router>
-          <div className="flex h-screen bg-slate-50 text-gray-900 overflow-hidden">
+          <div className="flex flex-col h-screen">
+            <UpdateBanner />
+          <div className="flex flex-1 bg-slate-50 text-gray-900 overflow-hidden">
             {isAuthenticated && (
               <Sidebar
                 mobileMenuOpen={mobileMenuOpen}
@@ -520,6 +523,7 @@ function App() {
             </div>
 
             <Notification notifications={notifications} />
+          </div>
           </div>
         </Router>
       </DataContext.Provider>
