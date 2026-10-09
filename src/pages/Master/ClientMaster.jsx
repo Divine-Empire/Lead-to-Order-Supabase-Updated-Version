@@ -76,14 +76,13 @@ function ClientMaster() {
   // Filter States -- Company/State dropdowns were removed; the search box
   // already matches company_name and state (see applyCommonFilters' .or()),
   // so they were a second way to do the same thing.
-  const [relevanceFilter, setRelevanceFilter] = useState("all");
-  // "all" | "none" (NULL/blank) | "order_received" | "order_lost" |
+  // "all" | "none" (NULL/blank) | "order_received" |
   // "open" (Call-Tracker/Enquiry Tracker/Make Quotation/.. -- still active) |
   // "safe" (none OR order_received -- clear to start a fresh lead/enquiry)
   const [trackerStatusFilter, setTrackerStatusFilter] = useState("all");
   // "all" | "new" (converted, no follow-up lead/enquiry since) | "followed"
   const [newStatusFilter, setNewStatusFilter] = useState("all");
-  const moreFiltersActiveCount = [relevanceFilter, trackerStatusFilter, newStatusFilter].filter((v) => v !== "all").length;
+  const moreFiltersActiveCount = [trackerStatusFilter, newStatusFilter].filter((v) => v !== "all").length;
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -115,8 +114,6 @@ function ClientMaster() {
         `company_name.ilike.${term},client_code.ilike.${term},client_name.ilike.${term},client_mobile_number.ilike.${term},gst_number.ilike.${term},state.ilike.${term},company_group_name.ilike.${term},sc_name.ilike.${term},crm_name.ilike.${term}`
       );
     }
-    if (relevanceFilter === "relevant") q = q.eq("isRelevant", true);
-    if (relevanceFilter === "not_relevant") q = q.eq("isRelevant", false);
     // already_in_tracker is free text ("Order Received (En-X)", "Call-
     // Tracker (LD-X)", ...) written by several different stages -- bucket
     // it by prefix rather than adding a parallel enum column.
@@ -124,8 +121,6 @@ function ClientMaster() {
       q = q.or("already_in_tracker.is.null,already_in_tracker.eq.");
     } else if (trackerStatusFilter === "order_received") {
       q = q.ilike("already_in_tracker", "Order Received%");
-    } else if (trackerStatusFilter === "order_lost") {
-      q = q.ilike("already_in_tracker", "Order Lost%");
     } else if (trackerStatusFilter === "safe") {
       q = q.or("already_in_tracker.is.null,already_in_tracker.eq.,already_in_tracker.ilike.Order Received%");
     } else if (trackerStatusFilter === "open") {
@@ -198,7 +193,6 @@ function ClientMaster() {
           creditDays: c.credit_days ?? "",
           creditLimit: c.credit_limit ?? "",
           salesType: c.sales_type || "",
-          isRelevant: c.isRelevant !== false,
           trackerStatus,
           isNewlyConverted: !!c.is_newly_converted
         };
@@ -234,12 +228,12 @@ function ClientMaster() {
   useEffect(() => {
     fetchClients();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, itemsPerPage, activeTab, debouncedSearch, relevanceFilter, trackerStatusFilter, newStatusFilter]);
+  }, [currentPage, itemsPerPage, activeTab, debouncedSearch, trackerStatusFilter, newStatusFilter]);
 
   useEffect(() => {
     fetchTabCounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, relevanceFilter, trackerStatusFilter, newStatusFilter]);
+  }, [debouncedSearch, trackerStatusFilter, newStatusFilter]);
 
   const handleOpenModal = (mode, client = null) => {
     if (!isAdmin()) return; // USER role cannot add/edit clients
@@ -385,7 +379,6 @@ function ClientMaster() {
     { key: "companyName", label: "Company Name" },
     { key: "clientCode", label: "Client Code" },
     { key: "salesType", label: "Sales Type" },
-    { key: "relevance", label: "Relevance" },
     { key: "trackerStatus", label: "Already In Tracker" },
     { key: "newStatus", label: "Status" },
     { key: "clientName", label: "Client Name" },
@@ -464,19 +457,6 @@ function ClientMaster() {
             </span>
           ) : (
             <span className="text-gray-400">-</span>
-          )}
-        </td>
-      ),
-      relevance: (
-        <td key="relevance" className="px-6 py-4 whitespace-nowrap text-sm text-center">
-          {row.isRelevant ? (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-success/10 text-success">
-              Relevant
-            </span>
-          ) : (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-destructive/10 text-destructive">
-              Not Relevant
-            </span>
           )}
         </td>
       ),
@@ -706,19 +686,6 @@ function ClientMaster() {
               {showFiltersPopover && (
                 <div className="absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-xl z-50 p-4 space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1.5">Relevance</label>
-                    <select
-                      value={relevanceFilter}
-                      onChange={(e) => { setRelevanceFilter(e.target.value); setCurrentPage(1); }}
-                      className="w-full h-9 px-3 bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                    >
-                      <option value="all">All</option>
-                      <option value="relevant">Relevant only</option>
-                      <option value="not_relevant">Not relevant only</option>
-                    </select>
-                  </div>
-
-                  <div>
                     <label className="block text-xs font-semibold text-gray-500 mb-1.5">Already In Tracker</label>
                     <select
                       value={trackerStatusFilter}
@@ -729,7 +696,6 @@ function ClientMaster() {
                       <option value="safe">Safe to re-engage (none / order received)</option>
                       <option value="none">No tracker yet</option>
                       <option value="order_received">Order received</option>
-                      <option value="order_lost">Order lost</option>
                       <option value="open">Still open / in progress</option>
                     </select>
                   </div>
@@ -750,7 +716,6 @@ function ClientMaster() {
                   {moreFiltersActiveCount > 0 && (
                     <button
                       onClick={() => {
-                        setRelevanceFilter("all")
                         setTrackerStatusFilter("all")
                         setNewStatusFilter("all")
                         setCurrentPage(1)
@@ -770,7 +735,6 @@ function ClientMaster() {
                 <button
                   className="px-3 h-9 text-sm text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-md transition-colors shrink-0"
                   onClick={() => {
-                    setRelevanceFilter("all")
                     setTrackerStatusFilter("all")
                     setNewStatusFilter("all")
                     setSearchQuery("")
