@@ -257,6 +257,13 @@ export const syncClientOnOrderConversion = async (enquiryNo, creditTerms = {}) =
       billing_address: leadData?.address || enqData?.shipping_address || enqData?.shippingAddress || existingClient?.billing_address || "",
       gst_number: leadData?.gst_number || enqData?.gst_number || enqData?.gstNumber || existingClient?.gst_number || "",
       already_in_tracker: `Order Received (${enquiryNo})`,
+      // Marks this as "converted, not yet re-engaged" -- cleared back to
+      // false the moment a new lead/enquiry is created for this company
+      // (DirectEnquiryForm.jsx, Leads.jsx). Set true on EVERY conversion,
+      // not just the first, so it always reflects "since the most recent
+      // order, has anything new come in yet" rather than conflating a
+      // repeat customer's history with a one-off that never got followed up.
+      is_newly_converted: true,
       credit_days: creditDays ? (parseInt(creditDays, 10) || null) : (existingClient?.credit_days ?? null),
       credit_limit: creditLimit ? (parseFloat(creditLimit) || null) : (existingClient?.credit_limit ?? null),
     };

@@ -205,9 +205,59 @@ function ExcelImportModal({ onClose, onSaved }) {
       const tatOffsetMs = tatDurationMinutes * 60000;
       const leadNumbers = await generateNextImportLeadNumbers(importedRows.length);
 
+      // Unlike the single-lead form (handleSubmit above), bulk import never
+      // touched lto_client_master at all -- no existingClient lookup, no SC/
+      // CRE round-robin for brand-new companies, no already_in_tracker
+      // update. Mirror that same logic here, batched: one paginated fetch
+      // of every client_master row (PostgREST caps unbounded selects at
+      // 1000) instead of a lookup per imported row, matched case-
+      // insensitively since Excel company-name casing varies.
+      const norm = (s) => String(s || "").trim().toLowerCase();
+      let existingClients = [];
+      {
+        let from = 0;
+        const step = 1000;
+        for (;;) {
+          const { data, error: fetchErr } = await supabase
+            .from("lto_client_master")
+            .select("uuid, company_name, sc_name, crm_name, company_group_name, state, state_code")
+            .range(from, from + step - 1);
+          if (fetchErr) { console.error("Error fetching client_master for bulk import:", fetchErr); break; }
+          if (!data || data.length === 0) break;
+          existingClients = existingClients.concat(data);
+          if (data.length < step) break;
+          from += step;
+        }
+      }
+      const existingByName = new Map(existingClients.map((c) => [norm(c.company_name), c]));
+
+      // Resolve SC/CRE once per unique brand-new company (same rule as
+      // DirectEnquiryForm.jsx/Leads.jsx's single-lead path), and feed the
+      // resolved SC back into that company's own row(s) below so a bulk-
+      // imported new company doesn't silently end up with a blank SC.
+      const resolvedScByCompany = new Map();
+      for (const row of importedRows) {
+        const compName = (row.companyName || "").trim();
+        if (!compName || resolvedScByCompany.has(norm(compName))) continue;
+        const existing = existingByName.get(norm(compName));
+        if (existing) continue;
+        const ownSc = (row.scName || row.handlePerson || "").trim();
+        if (ownSc) continue;
+        const resolved = await resolveScAndCreForNewCompany({
+          groupName: groupName || row.groupName,
+          salesType: row.salesType,
+          leadSource: row.source,
+          nob: row.nob,
+        });
+        resolvedScByCompany.set(norm(compName), resolved);
+      }
+
       const rowsToInsert = importedRows.map((row, idx) => {
         const createdAtDate = new Date();
         const plannedAtDate = new Date(createdAtDate.getTime() + tatOffsetMs);
+        const compName = (row.companyName || "").trim();
+        const resolved = resolvedScByCompany.get(norm(compName));
+        const scName = row.scName || row.handlePerson || resolved?.scName || "";
 
         return {
           created_at: createdAtDate.toISOString(),
@@ -215,10 +265,10 @@ function ExcelImportModal({ onClose, onSaved }) {
           lead_no: leadNumbers[idx],
           lead_receiver_name: row.receiverName || "",
           lead_source: row.source || "",
-          company_name: row.companyName || "",
+          company_name: compName,
           phone_number: row.phoneNumber || "",
           person_name: row.personName || "",
-          sc_name: row.scName || row.handlePerson || "",
+          sc_name: scName,
           location: row.location || "",
           email_address: row.email || "",
           state: row.state || "",
@@ -237,6 +287,57 @@ function ExcelImportModal({ onClose, onSaved }) {
 
       const { error } = await supabase.from("lto_leads").insert(rowsToInsert);
       if (error) throw error;
+
+      // Now sync lto_client_master for every imported company: new ones get
+      // inserted (with the SC/CRE just resolved above), existing ones get
+      // already_in_tracker + is_newly_converted updated -- same as the
+      // single-lead path's post-insert update, just batched by unique
+      // company instead of one `.ilike` call per row.
+      const byCompany = new Map();
+      rowsToInsert.forEach((r) => {
+        if (r.company_name && !byCompany.has(norm(r.company_name))) {
+          byCompany.set(norm(r.company_name), r);
+        }
+      });
+
+      const clientMasterWrites = [...byCompany.values()].map((r) => {
+        const existing = existingByName.get(norm(r.company_name));
+        const resolved = resolvedScByCompany.get(norm(r.company_name));
+        if (existing) {
+          const updatePayload = {
+            already_in_tracker: `Call-Tracker (${r.lead_no})`,
+            is_newly_converted: false,
+            updated_at: new Date().toISOString(),
+            state: r.state || existing.state || null,
+            state_code: getStateCodeFromName(r.state) || existing.state_code || null,
+          };
+          if (r.company_group_name && !existing.company_group_name) updatePayload.company_group_name = r.company_group_name;
+          if (!existing.sc_name && r.sc_name) updatePayload.sc_name = r.sc_name;
+          if (!existing.crm_name && resolved?.crmName) updatePayload.crm_name = resolved.crmName;
+          return supabase.from("lto_client_master").update(updatePayload).eq("uuid", existing.uuid);
+        }
+        return supabase.from("lto_client_master").insert([{
+          company_name: r.company_name,
+          company_group_name: r.company_group_name || null,
+          client_name: r.person_name || null,
+          client_mobile_number: r.phone_number || null,
+          state: r.state || null,
+          state_code: getStateCodeFromName(r.state),
+          billing_address: r.address || null,
+          gst_number: r.gst_number || null,
+          sc_name: r.sc_name || null,
+          crm_name: resolved?.crmName || null,
+          sales_type: r.sales_type || null,
+          isRelevant: true,
+          already_in_tracker: `Call-Tracker (${r.lead_no})`,
+          is_newly_converted: false,
+        }]);
+      });
+
+      const cmResults = await Promise.all(clientMasterWrites);
+      cmResults.forEach((res) => {
+        if (res.error) console.error("Error syncing client_master during bulk import:", res.error);
+      });
 
       showNotification(`${importedRows.length} lead(s) imported successfully!`, "success");
       onSaved(groupName);
@@ -912,7 +1013,12 @@ function Leads() {
       if (compNameTrimmed) {
         await supabase
           .from("lto_client_master")
-          .update({ already_in_tracker: `Call-Tracker (${authoritiveLeadNo})` })
+          .update({
+            already_in_tracker: `Call-Tracker (${authoritiveLeadNo})`,
+            // A new lead just came in for this company -- re-engaged,
+            // regardless of what this lead's own outcome later becomes.
+            is_newly_converted: false,
+          })
           .ilike("company_name", compNameTrimmed);
       }
 

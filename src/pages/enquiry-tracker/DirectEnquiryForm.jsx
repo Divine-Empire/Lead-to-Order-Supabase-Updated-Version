@@ -544,6 +544,11 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
           } else {
             const updatePayload = {
               already_in_tracker: `Enquiry Tracker (${assignedEnquiryNo || 'New'})`,
+              // A new enquiry just came in for this company -- it's been
+              // re-engaged, so it no longer counts as "converted but never
+              // followed up" regardless of what this new enquiry's own
+              // outcome ends up being.
+              is_newly_converted: false,
               updated_at: new Date().toISOString(),
               state: enquiryFormData.enquiryState || existingClient.state || null,
               state_code: newCallTrackerData.stateCode || existingClient.state_code || null

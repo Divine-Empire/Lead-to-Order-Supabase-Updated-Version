@@ -2,12 +2,17 @@ import { useState, useEffect, useRef, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Plus, Pencil, Trash2, RefreshCw, Eye } from "lucide-react";
 import DataTable from "../../components/DataTable";
-import SearchableDropdown from "../../components/SearchableDropdown";
 import supabase from "../../utils/supabase";
 import ModalForm from "../../components/ModalForm";
 import { TABLES, COLUMNS } from "../../constants/dbSchema";
 import { AuthContext } from "../../App";
 import { getStateCodeFromName } from "../../utils/gstStateCodes";
+
+// Read-only view (Database/04_client_master_open_work_view.sql) adding
+// has_open_work on top of every lto_client_master column -- used for every
+// SELECT below. Every write still targets TABLES.CLIENT_MASTER (the real
+// table) directly; views aren't writable here.
+const CLIENT_MASTER_READ_VIEW = "lto_client_master_with_status";
 
 function ClientMaster() {
   const authContext = useContext(AuthContext) || {};
@@ -29,12 +34,23 @@ function ClientMaster() {
   const [showColumnToggle, setShowColumnToggle] = useState(false);
   const columnToggleRef = useRef(null);
   const [hiddenColumns, setHiddenColumns] = useState([]);
-  const [activeTab, setActiveTab] = useState("converted"); // Converted vs Unconverted tab
+  const [activeTab, setActiveTab] = useState("converted"); // "converted" | "unconverted" | "new"
+
+  // "More Filters" popover -- Relevance / Already In Tracker / Status used to
+  // each sit in the toolbar as their own <select>, which is what made the
+  // row cluttered and caused the longer labels to truncate. Grouped here the
+  // same way the Columns toggle already works (ref + click-outside), so it's
+  // one more control in the row instead of three.
+  const [showFiltersPopover, setShowFiltersPopover] = useState(false);
+  const filtersPopoverRef = useRef(null);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (columnToggleRef.current && !columnToggleRef.current.contains(event.target)) {
         setShowColumnToggle(false);
+      }
+      if (filtersPopoverRef.current && !filtersPopoverRef.current.contains(event.target)) {
+        setShowFiltersPopover(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -57,10 +73,17 @@ function ClientMaster() {
     salesType: ""
   });
 
-  // Filter States
-  const [companyFilter, setCompanyFilter] = useState([]);
-  const [stateFilter, setStateFilter] = useState([]);
+  // Filter States -- Company/State dropdowns were removed; the search box
+  // already matches company_name and state (see applyCommonFilters' .or()),
+  // so they were a second way to do the same thing.
   const [relevanceFilter, setRelevanceFilter] = useState("all");
+  // "all" | "none" (NULL/blank) | "order_received" | "order_lost" |
+  // "open" (Call-Tracker/Enquiry Tracker/Make Quotation/.. -- still active) |
+  // "safe" (none OR order_received -- clear to start a fresh lead/enquiry)
+  const [trackerStatusFilter, setTrackerStatusFilter] = useState("all");
+  // "all" | "new" (converted, no follow-up lead/enquiry since) | "followed"
+  const [newStatusFilter, setNewStatusFilter] = useState("all");
+  const moreFiltersActiveCount = [relevanceFilter, trackerStatusFilter, newStatusFilter].filter((v) => v !== "all").length;
 
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
@@ -68,11 +91,7 @@ function ClientMaster() {
   const [totalResults, setTotalResults] = useState(0);
   const [convertedCount, setConvertedCount] = useState(0);
   const [unconvertedCount, setUnconvertedCount] = useState(0);
-
-  // Lightweight option lists for the filter dropdowns (fetched separately from
-  // the paginated table data, since that no longer holds the full dataset)
-  const [companyOptions, setCompanyOptions] = useState([]);
-  const [stateOptions, setStateOptions] = useState([]);
+  const [newCount, setNewCount] = useState(0);
 
   // Debounce search input so we don't fire a query per keystroke
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -96,10 +115,28 @@ function ClientMaster() {
         `company_name.ilike.${term},client_code.ilike.${term},client_name.ilike.${term},client_mobile_number.ilike.${term},gst_number.ilike.${term},state.ilike.${term},company_group_name.ilike.${term},sc_name.ilike.${term},crm_name.ilike.${term}`
       );
     }
-    if (companyFilter.length > 0) q = q.in("company_name", companyFilter);
-    if (stateFilter.length > 0) q = q.in("state", stateFilter);
     if (relevanceFilter === "relevant") q = q.eq("isRelevant", true);
     if (relevanceFilter === "not_relevant") q = q.eq("isRelevant", false);
+    // already_in_tracker is free text ("Order Received (En-X)", "Call-
+    // Tracker (LD-X)", ...) written by several different stages -- bucket
+    // it by prefix rather than adding a parallel enum column.
+    if (trackerStatusFilter === "none") {
+      q = q.or("already_in_tracker.is.null,already_in_tracker.eq.");
+    } else if (trackerStatusFilter === "order_received") {
+      q = q.ilike("already_in_tracker", "Order Received%");
+    } else if (trackerStatusFilter === "order_lost") {
+      q = q.ilike("already_in_tracker", "Order Lost%");
+    } else if (trackerStatusFilter === "safe") {
+      q = q.or("already_in_tracker.is.null,already_in_tracker.eq.,already_in_tracker.ilike.Order Received%");
+    } else if (trackerStatusFilter === "open") {
+      q = q
+        .not("already_in_tracker", "is", null)
+        .neq("already_in_tracker", "")
+        .not("already_in_tracker", "ilike", "Order Received%")
+        .not("already_in_tracker", "ilike", "Order Lost%");
+    }
+    if (newStatusFilter === "new") q = q.eq("is_newly_converted", true);
+    if (newStatusFilter === "followed") q = q.eq("is_newly_converted", false);
     // Role-based access: non-admin (USER) accounts only ever see clients
     // assigned to their own SC name (plus any delegated alternate access).
     if (!isAdmin()) {
@@ -108,10 +145,21 @@ function ClientMaster() {
     return q;
   };
 
-  const applyTabFilter = (query, tab) =>
-    tab === "converted"
-      ? query.not("client_code", "is", null).neq("client_code", "")
-      : query.or("client_code.is.null,client_code.eq.");
+  // "new" and "unconverted" both start from "no client_code" and then split
+  // on has_open_work (computed by the lto_client_master_with_status view --
+  // see Database/04_client_master_open_work_view.sql): Unconverted is still
+  // actively being worked (an open lead/enquiry exists), New has nothing
+  // open right now and is safe to re-contact without colliding with active
+  // work.
+  const applyTabFilter = (query, tab) => {
+    if (tab === "converted") {
+      return query.not("client_code", "is", null).neq("client_code", "");
+    }
+    const noCode = query.or("client_code.is.null,client_code.eq.");
+    return tab === "unconverted"
+      ? noCode.eq("has_open_work", true)
+      : noCode.eq("has_open_work", false);
+  };
 
   const fetchClients = async () => {
     fetchIdRef.current += 1;
@@ -122,7 +170,7 @@ function ClientMaster() {
       const from = (currentPage - 1) * itemsPerPage;
       const to = from + itemsPerPage - 1;
 
-      let query = supabase.from(TABLES.CLIENT_MASTER).select("*", { count: "exact" });
+      let query = supabase.from(CLIENT_MASTER_READ_VIEW).select("*", { count: "exact" });
       query = applyCommonFilters(query);
       query = applyTabFilter(query, activeTab);
       query = query.order("company_name", { ascending: true }).range(from, to);
@@ -151,7 +199,8 @@ function ClientMaster() {
           creditLimit: c.credit_limit ?? "",
           salesType: c.sales_type || "",
           isRelevant: c.isRelevant !== false,
-          trackerStatus
+          trackerStatus,
+          isNewlyConverted: !!c.is_newly_converted
         };
       });
 
@@ -168,73 +217,29 @@ function ClientMaster() {
 
   const fetchTabCounts = async () => {
     try {
-      const convertedQuery = applyTabFilter(
-        applyCommonFilters(supabase.from(TABLES.CLIENT_MASTER).select("uuid", { count: "exact", head: true })),
-        "converted"
-      );
-      const unconvertedQuery = applyTabFilter(
-        applyCommonFilters(supabase.from(TABLES.CLIENT_MASTER).select("uuid", { count: "exact", head: true })),
-        "unconverted"
-      );
-      const [convertedRes, unconvertedRes] = await Promise.all([convertedQuery, unconvertedQuery]);
+      const baseQuery = () => applyCommonFilters(supabase.from(CLIENT_MASTER_READ_VIEW).select("uuid", { count: "exact", head: true }));
+      const [convertedRes, unconvertedRes, newRes] = await Promise.all([
+        applyTabFilter(baseQuery(), "converted"),
+        applyTabFilter(baseQuery(), "unconverted"),
+        applyTabFilter(baseQuery(), "new"),
+      ]);
       setConvertedCount(convertedRes.count || 0);
       setUnconvertedCount(unconvertedRes.count || 0);
+      setNewCount(newRes.count || 0);
     } catch (error) {
       console.error("Error fetching tab counts:", error);
-    }
-  };
-
-  // Fetches the full distinct list of company names / states just for the
-  // filter dropdown options (only 2 lightweight columns, chunked past the
-  // 1000-row PostgREST cap) -- independent of the paginated table data.
-  const fetchFilterOptions = async () => {
-    try {
-      const companiesSet = new Set();
-      const statesSet = new Set();
-      let from = 0;
-      const step = 1000;
-      let fetchMore = true;
-
-      while (fetchMore) {
-        let optionsQuery = supabase
-          .from(TABLES.CLIENT_MASTER)
-          .select("company_name, state")
-          .range(from, from + step - 1);
-        if (!isAdmin()) {
-          optionsQuery = optionsQuery.in("sc_name", getUsernamesToFilter());
-        }
-        const { data, error } = await optionsQuery;
-        if (error) throw error;
-
-        (data || []).forEach((row) => {
-          if (row.company_name) companiesSet.add(row.company_name);
-          if (row.state) statesSet.add(row.state);
-        });
-
-        if (!data || data.length < step) fetchMore = false;
-        else from += step;
-      }
-
-      setCompanyOptions(Array.from(companiesSet).sort());
-      setStateOptions(Array.from(statesSet).sort());
-    } catch (error) {
-      console.error("Error fetching filter options:", error);
     }
   };
 
   useEffect(() => {
     fetchClients();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, itemsPerPage, activeTab, debouncedSearch, companyFilter, stateFilter, relevanceFilter]);
+  }, [currentPage, itemsPerPage, activeTab, debouncedSearch, relevanceFilter, trackerStatusFilter, newStatusFilter]);
 
   useEffect(() => {
     fetchTabCounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, companyFilter, stateFilter, relevanceFilter]);
-
-  useEffect(() => {
-    fetchFilterOptions();
-  }, []);
+  }, [debouncedSearch, relevanceFilter, trackerStatusFilter, newStatusFilter]);
 
   const handleOpenModal = (mode, client = null) => {
     if (!isAdmin()) return; // USER role cannot add/edit clients
@@ -382,6 +387,7 @@ function ClientMaster() {
     { key: "salesType", label: "Sales Type" },
     { key: "relevance", label: "Relevance" },
     { key: "trackerStatus", label: "Already In Tracker" },
+    { key: "newStatus", label: "Status" },
     { key: "clientName", label: "Client Name" },
     { key: "clientMobileNumber", label: "Mobile Number" },
     { key: "companyGroupName", label: "Company Group" },
@@ -496,6 +502,17 @@ function ClientMaster() {
           )}
         </td>
       ),
+      newStatus: (
+        <td key="newStatus" className="px-6 py-4 whitespace-nowrap text-sm text-center">
+          {row.isNewlyConverted ? (
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-medium shadow-sm">
+              New - No Follow-up Yet
+            </span>
+          ) : (
+            <span className="text-gray-400">-</span>
+          )}
+        </td>
+      ),
       clientName: (
         <td key="clientName" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.clientName || "-"}</td>
       ),
@@ -562,6 +579,11 @@ function ClientMaster() {
                 {item.trackerStatus}
               </span>
             )}
+            {item.isNewlyConverted && (
+              <span className="inline-flex items-center w-fit mt-1 px-2 py-0.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-[10px] font-medium">
+                New - No Follow-up Yet
+              </span>
+            )}
             {item.salesType && (
               <span className="inline-flex items-center w-fit mt-1 px-2 py-0.5 rounded bg-primary/5 text-primary border border-primary/20 text-[10px] font-medium">
                 {item.salesType}
@@ -623,77 +645,134 @@ function ClientMaster() {
                 {unconvertedCount}
               </span>
             </button>
+            <button
+              onClick={() => { setActiveTab("new"); setCurrentPage(1); }}
+              className={`px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${
+                activeTab === "new"
+                  ? "border-success/40 text-success bg-success/10 font-bold"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+              }`}
+              title="No client_code yet, and nothing currently open -- safe to re-contact"
+            >
+              Lost Clients
+              <span className={`px-2 py-0.5 rounded-full text-xs ${activeTab === "new" ? "bg-success/15 text-success" : "bg-gray-100 text-gray-600"}`}>
+                {newCount}
+              </span>
+            </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0 pb-1 w-full">
             
             {/* Title / Label */}
             <div className="text-lg font-bold text-gray-800 shrink-0 mr-2 border-r border-gray-200 pr-4">
-              {activeTab === "converted" ? "Converted Clients" : "Unconverted Clients"}
+              {activeTab === "converted" ? "Converted Clients" : activeTab === "unconverted" ? "Unconverted Clients" : "Lost Clients"}
             </div>
 
-            {/* Search Bar */}
-            <div className="relative flex-1 min-w-[150px] max-w-[200px]">
+            {/* Search Bar -- also matches company_name/state/GST/SC/CRM/etc
+                (see applyCommonFilters), so there's no separate Company/State
+                dropdown duplicating it. */}
+            <div className="relative flex-1 min-w-[200px] max-w-[360px]">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Search className="h-4 w-4 text-gray-400" />
               </div>
               <input
                 type="text"
-                placeholder="Search clients..."
+                placeholder="Search by company, state, GST, SC, CRM..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary block pl-10 h-9"
               />
             </div>
 
-            {/* Dropdown Filters */}
-            <div className="flex-1 min-w-[120px] max-w-[200px] z-[60]">
-              <SearchableDropdown
-                isMulti={true}
-                value={companyFilter}
-                onChange={(val) => { setCompanyFilter(val); setCurrentPage(1); }}
-                options={companyOptions.map(c => ({ value: c, label: c, count: 1 }))}
-                placeholder="All Companies"
-                height="h-9"
-                rounded="rounded-md"
-                className="dropdown-container"
-              />
-            </div>
-
-            <div className="flex-1 min-w-[120px] max-w-[200px] z-[40]">
-              <SearchableDropdown
-                isMulti={true}
-                value={stateFilter}
-                onChange={(val) => { setStateFilter(val); setCurrentPage(1); }}
-                options={stateOptions.map(s => ({ value: s, label: s, count: 1 }))}
-                placeholder="All States"
-                height="h-9"
-                rounded="rounded-md"
-                className="dropdown-container"
-              />
-            </div>
-
-            <div className="flex-1 min-w-[120px] max-w-[200px] z-[30]">
-              <select
-                value={relevanceFilter}
-                onChange={(e) => { setRelevanceFilter(e.target.value); setCurrentPage(1); }}
-                className="w-full h-9 px-3 bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            {/* Relevance / Already In Tracker / Status, grouped into one
+                popover -- as three separate <select>s this row ran out of
+                room and the longer labels ("Already In Tracker: All") just
+                clipped. Same ref + click-outside pattern as the Columns
+                toggle below, so it reads as the same kind of control. */}
+            <div className="relative shrink-0" ref={filtersPopoverRef}>
+              <button
+                type="button"
+                onClick={() => setShowFiltersPopover(prev => !prev)}
+                className="px-3 h-9 bg-white border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors flex items-center gap-2"
               >
-                <option value="all">All Relevance</option>
-                <option value="relevant">Relevant Only</option>
-                <option value="not_relevant">Not Relevant Only</option>
-              </select>
+                <span>Filters</span>
+                {moreFiltersActiveCount > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[11px] font-semibold">
+                    {moreFiltersActiveCount}
+                  </span>
+                )}
+              </button>
+
+              {showFiltersPopover && (
+                <div className="absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-xl z-50 p-4 space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 mb-1.5">Relevance</label>
+                    <select
+                      value={relevanceFilter}
+                      onChange={(e) => { setRelevanceFilter(e.target.value); setCurrentPage(1); }}
+                      className="w-full h-9 px-3 bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="all">All</option>
+                      <option value="relevant">Relevant only</option>
+                      <option value="not_relevant">Not relevant only</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 mb-1.5">Already In Tracker</label>
+                    <select
+                      value={trackerStatusFilter}
+                      onChange={(e) => { setTrackerStatusFilter(e.target.value); setCurrentPage(1); }}
+                      className="w-full h-9 px-3 bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="all">All</option>
+                      <option value="safe">Safe to re-engage (none / order received)</option>
+                      <option value="none">No tracker yet</option>
+                      <option value="order_received">Order received</option>
+                      <option value="order_lost">Order lost</option>
+                      <option value="open">Still open / in progress</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 mb-1.5">Status</label>
+                    <select
+                      value={newStatusFilter}
+                      onChange={(e) => { setNewStatusFilter(e.target.value); setCurrentPage(1); }}
+                      className="w-full h-9 px-3 bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    >
+                      <option value="all">All</option>
+                      <option value="new">New - no follow-up yet</option>
+                      <option value="followed">Followed up</option>
+                    </select>
+                  </div>
+
+                  {moreFiltersActiveCount > 0 && (
+                    <button
+                      onClick={() => {
+                        setRelevanceFilter("all")
+                        setTrackerStatusFilter("all")
+                        setNewStatusFilter("all")
+                        setCurrentPage(1)
+                      }}
+                      className="w-full text-center text-sm text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-md h-8 transition-colors"
+                    >
+                      Reset these filters
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Action Buttons */}
             <div className="flex items-center gap-2 shrink-0 ml-auto">
-              {((companyFilter.length > 0) || (stateFilter.length > 0) || relevanceFilter !== "all" || searchQuery) && (
+              {(moreFiltersActiveCount > 0 || searchQuery) && (
                 <button
                   className="px-3 h-9 text-sm text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-md transition-colors shrink-0"
                   onClick={() => {
-                    setCompanyFilter([])
-                    setStateFilter([])
                     setRelevanceFilter("all")
+                    setTrackerStatusFilter("all")
+                    setNewStatusFilter("all")
                     setSearchQuery("")
                     setCurrentPage(1)
                   }}
