@@ -148,6 +148,68 @@ export const VALID_SALES_TYPE_PREFIXES = ["CRR", "NBD", "NBD_CRR"];
 export const isValidSalesTypePrefix = (value) =>
   VALID_SALES_TYPE_PREFIXES.includes((value || "").trim().toUpperCase());
 
+// Strips a trailing "-NN" revision suffix (e.g. "CRR-26-27-2142-05" ->
+// "CRR-26-27-2142"), so callers always have the root number regardless of
+// which specific revision the user picked from the "Select Quotation to
+// Revise" dropdown -- that dropdown lists every past revision individually,
+// not just the latest one.
+export const getRootQuotationNo = (quotationNo) => {
+  const parts = (quotationNo || "").split("-");
+  if (parts.length === 5 && /^\d{2}$/.test(parts[4])) {
+    return parts.slice(0, 4).join("-");
+  }
+  return quotationNo;
+};
+
+// Computes the next revision number for a quotation from the TRUE current
+// max revision in the DB, not from whichever revision the user happened to
+// select as the base to revise from. Picking an older revision (e.g. "-01"
+// when "-05" already exists) used to make Quotation.jsx's save retry loop
+// increment from "-01" and collide with every already-used suffix up to
+// "-05" -- with only 5 retries total, more than 5 existing revisions ahead
+// of the selected one exhausted the loop and the save failed outright on
+// the unique constraint.
+export const getNextRevisionNo = async (quotationNo) => {
+  const root = getRootQuotationNo(quotationNo);
+
+  let data = [];
+  let from = 0;
+  const step = 1000;
+  let fetchMore = true;
+  while (fetchMore) {
+    const { data: page, error } = await supabase
+      .from("lto_make_quotations")
+      .select("quotation_no")
+      .like("quotation_no", `${root}%`)
+      .range(from, from + step - 1);
+    if (error) {
+      console.error("Error fetching existing revisions:", error);
+      return `${root}-01`;
+    }
+    if (page && page.length > 0) {
+      data = data.concat(page);
+      from += step;
+      if (page.length < step) fetchMore = false;
+    } else {
+      fetchMore = false;
+    }
+  }
+
+  let maxRevision = 0;
+  for (const item of data) {
+    const no = item.quotation_no;
+    if (!no) continue;
+    const parts = no.split("-");
+    if (parts.length === 5 && /^\d{2}$/.test(parts[4])) {
+      const n = parseInt(parts[4], 10);
+      if (!isNaN(n) && n > maxRevision) maxRevision = n;
+    }
+  }
+
+  const next = (maxRevision + 1).toString().padStart(2, "0");
+  return `${root}-${next}`;
+};
+
 // Function to get company prefix, sourced from lto_client_master --
 // client_master is the record that actually gets kept current (e.g. the
 // NBD -> NBD_CRR upgrade on order conversion, see

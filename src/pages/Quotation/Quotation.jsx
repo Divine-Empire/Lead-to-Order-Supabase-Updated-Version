@@ -8,7 +8,7 @@ import QuotationHeader from "./quotation-header";
 import QuotationForm from "./quotation-form";
 import QuotationPreview from "./quotation-preview";
 import { generatePDFFromData } from "./pdf-generator";
-import { getNextQuotationNumber } from "./quotation-service";
+import { getNextQuotationNumber, getNextRevisionNo } from "./quotation-service";
 import { useQuotationData } from "./use-quotation-data";
 import supabase from "../../utils/supabase";
 import { loadQuotationDataByNumber } from "../../utils/quotationDataLoader";
@@ -478,10 +478,13 @@ function Quotation() {
       const currentPrefix = extractPrefix(candidateNo);
 
       if (isRevising && selectedQuotation) {
-        const partsInit = candidateNo.split("-");
-        if (partsInit.length === 4) {
-          candidateNo = `${candidateNo}-01`;
-        }
+        // Computed from the true max revision in the DB, not from whichever
+        // revision the user picked as the base -- the "Select Quotation to
+        // Revise" dropdown lists every past revision individually, so
+        // picking an older one here (not necessarily the latest) used to
+        // make the retry loop below increment from that stale base and
+        // collide with every already-used suffix ahead of it.
+        candidateNo = await getNextRevisionNo(candidateNo);
       }
 
       for (let attempt = 0; attempt < 5; attempt++) {
