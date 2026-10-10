@@ -290,6 +290,48 @@ function ClientMaster() {
       return;
     }
 
+    // Changing an existing client's group is a data-classification fix
+    // (e.g. merging a misspelled/duplicate group into the real one), not by
+    // itself a decision to reassign who manages the account -- the SC/CRM
+    // already recorded reflects who actually did the work (and any order
+    // already converted keeps their own copy of it regardless). So this
+    // never updates silently: it's offered as an explicit, opt-in choice
+    // each time, and declining leaves SC/CRM untouched. client_code is
+    // never touched here either -- it may already be printed on real
+    // documents, so renumbering it is a separate, deliberate action, not an
+    // automatic side effect of a group edit.
+    let scNameToSave = formData.scName || null;
+    let crmNameToSave = formData.crmName || null;
+    const newGroup = (formData.companyGroupName || "").trim();
+    const previousGroup = (currentClient?.companyGroupName || "").trim();
+    if (modalMode === "edit" && newGroup && newGroup.toLowerCase() !== previousGroup.toLowerCase()) {
+      try {
+        const { data: groupSiblings } = await supabase
+          .from(TABLES.CLIENT_MASTER)
+          .select("sc_name, crm_name")
+          .ilike("company_group_name", newGroup)
+          .neq("uuid", currentClient.uuid)
+          .not("sc_name", "is", null)
+          .order("updated_at", { ascending: false })
+          .limit(1);
+        const sibling = groupSiblings && groupSiblings[0];
+        if (sibling?.sc_name && (sibling.sc_name !== scNameToSave || sibling.crm_name !== crmNameToSave)) {
+          const applyToo = window.confirm(
+            `Group "${newGroup}" is currently handled by SC: ${sibling.sc_name}` +
+            (sibling.crm_name ? `, CRM: ${sibling.crm_name}` : "") +
+            `.\n\nApply the same SC/CRM to this client too? (Client Code will NOT change.)\n\n` +
+            `Click Cancel to keep this client's current SC/CRM.`
+          );
+          if (applyToo) {
+            scNameToSave = sibling.sc_name;
+            crmNameToSave = sibling.crm_name || null;
+          }
+        }
+      } catch (groupCheckErr) {
+        console.error("Error checking group's existing SC/CRM:", groupCheckErr);
+      }
+    }
+
     setIsLoading(true);
     const supabaseData = {
       company_name: formData.companyName,
@@ -299,8 +341,8 @@ function ClientMaster() {
       billing_address: formData.billingAddress || null,
       gst_number: formData.gstNumber || null,
       company_group_name: formData.companyGroupName || null,
-      sc_name: formData.scName || null,
-      crm_name: formData.crmName || null,
+      sc_name: scNameToSave,
+      crm_name: crmNameToSave,
       // Admin's typed value always wins if present; otherwise derive it
       // from State so this table can't end up with one set and not the
       // other (that mismatch is what leaves the Quotation revision
