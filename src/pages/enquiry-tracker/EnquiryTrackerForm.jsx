@@ -10,6 +10,7 @@ import supabase from "../../utils/supabase"
 import { generateAndAssignClientCode } from "../Master/ClientCodeGen"
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync"
 import { generateNextOrderNumber as generateNextOrderNumberShared } from "../../utils/orderNumberGenerator"
+import { recomputeAlreadyInTracker } from "../../utils/clientMasterTrackerSync"
 
 function NewEnquiryTracker() {
   const navigate = useNavigate()
@@ -722,30 +723,13 @@ function NewEnquiryTracker() {
       const targetComp = formData.companyName || formData.Company_Name || formData.company_name;
       if (targetComp) {
         try {
-          let displayStage = currentStage;
-          if (currentStage === "order-status" || currentStage === "Order Status") {
-            if (orderStatusData.orderStatus?.toLowerCase() === "yes") {
-              displayStage = "Order Received";
-            } else if (orderStatusData.orderStatus?.toLowerCase() === "no") {
-              displayStage = "Order Lost";
-            } else {
-              displayStage = "Order Status";
-            }
-          } else if (currentStage === "make-quotation" || currentStage === "Make Quotation") {
-            displayStage = "Make Quotation";
-          } else if (currentStage === "order-expected" || currentStage === "Order Expected") {
-            displayStage = "Follow-up";
-          } else {
-            displayStage = "Enquiry Tracker";
-          }
-
-          await supabase
-            .from("lto_client_master")
-            .update({
-              already_in_tracker: `${displayStage} (${formData.enquiryNo})`,
-              updated_at: new Date().toISOString()
-            })
-            .ilike("company_name", targetComp.trim());
+          // Recomputed from the real current state of this company's
+          // enquiries/leads/trackers (src/utils/clientMasterTrackerSync.js)
+          // instead of a hardcoded label from this one submit's currentStage
+          // -- a hardcoded write here never got cleared if this enquiry's
+          // company_name was later corrected elsewhere, leaving a stale tag
+          // on the row it moved away from.
+          await recomputeAlreadyInTracker(targetComp);
         } catch (cmErr) {
           console.error("Failed to update already_in_tracker in client_master:", cmErr);
         }

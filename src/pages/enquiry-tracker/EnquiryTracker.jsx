@@ -15,6 +15,7 @@ import DirectEnquiryForm from "./DirectEnquiryForm";
 import supabase from "../../utils/supabase";
 import { isUrlReachable, regenerateQuotationPdf } from "../../utils/regenerateQuotationPdf";
 import { syncClientOnOrderConversion } from "../../utils/orderConversionClientSync";
+import { recomputeAlreadyInTrackerForRename } from "../../utils/clientMasterTrackerSync";
 import { tokenizeLoose, buildPgLooseToken, looseIncludes } from "../../utils/looseSearch";
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
@@ -872,6 +873,16 @@ const handleSaveClick = async () => {
         }
       });
 
+      // Needed below to also clean up the OLD company's already_in_tracker
+      // if this edit renamed company_name -- fetched before the update so
+      // it's the pre-edit value, not what we're about to write.
+      const { data: beforeEditRow } = await supabase
+        .from(isEnquiryRecord ? "lto_enquiries" : "lto_leads")
+        .select("company_name")
+        .eq("id", updateId)
+        .maybeSingle();
+      const previousCompanyName = beforeEditRow?.company_name;
+
       const { error } = await supabase
         .from(isEnquiryRecord ? "lto_enquiries" : "lto_leads")
         .update(updatePayload)
@@ -881,6 +892,18 @@ const handleSaveClick = async () => {
         console.error("Pending update error:", error);
         showNotification(`Error updating record: ${error.message}`, "error");
         return;
+      }
+
+      // company_name is editable here -- if it was renamed, recompute
+      // already_in_tracker for BOTH the old and new name so the row this
+      // record moved away from doesn't keep a stale tag (see
+      // src/utils/clientMasterTrackerSync.js).
+      if (editedData.companyName) {
+        try {
+          await recomputeAlreadyInTrackerForRename(previousCompanyName, editedData.companyName);
+        } catch (trackerSyncErr) {
+          console.error("Error recomputing already_in_tracker after Pending edit:", trackerSyncErr);
+        }
       }
 
       // Keep lto_client_master's sc_name in sync with whatever was just
@@ -1003,6 +1026,16 @@ const handleSaveClick = async () => {
       console.log("Direct Enquiry Update Data:", directEnquiryUpdateData);
       console.log("Updating record with ID:", updateId);
 
+      // Needed below to also clean up the OLD company's already_in_tracker
+      // if this edit renamed company_name -- fetched before the update so
+      // it's the pre-edit value, not what we're about to write.
+      const { data: beforeEditEnquiry } = await supabase
+        .from("lto_enquiries")
+        .select("company_name")
+        .eq("id", updateId)
+        .maybeSingle();
+      const previousCompanyName = beforeEditEnquiry?.company_name;
+
       const { data: updatedData, error } = await supabase
           .from("lto_enquiries")
           .update(directEnquiryUpdateData)
@@ -1013,6 +1046,18 @@ const handleSaveClick = async () => {
         console.error("Direct Enquiry update error:", error);
         alert(`Error updating record: ${error.message}`);
         throw error;
+      }
+
+      // company_name is editable here -- if it was renamed, recompute
+      // already_in_tracker for BOTH the old and new name so the row this
+      // record moved away from doesn't keep a stale tag (see
+      // src/utils/clientMasterTrackerSync.js).
+      if (directEnquiryUpdateData.company_name) {
+        try {
+          await recomputeAlreadyInTrackerForRename(previousCompanyName, directEnquiryUpdateData.company_name);
+        } catch (trackerSyncErr) {
+          console.error("Error recomputing already_in_tracker after Direct Enquiry edit:", trackerSyncErr);
+        }
       }
 
       console.log("Successfully updated Direct Enquiry record:", updatedData);
