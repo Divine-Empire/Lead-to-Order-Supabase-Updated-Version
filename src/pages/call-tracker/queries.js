@@ -64,21 +64,22 @@ export function usePendingCallTracker({
       // buckets together rather than comparing the whole array to a single
       // string, which is what silently no-op'd this filter before.
       //
-      // "Overdue" and "First Call Pending" both come from next_call_date
-      // being in the past, but pending_group ('new' = never called even
-      // once, its next_call_date is really the lead's own planned_at TAT
-      // deadline; 'existing' = already called at least once, next_call_date
-      // is a real logged follow-up date -- see call_tracker_pending_view)
-      // tells them apart, so "Overdue" only means already-contacted leads
-      // whose follow-up is late, and never-contacted leads show up under
-      // "First Call Pending" instead.
+      // "First Call Pending" is purely pending_group='new' (no_of_follow_ups
+      // = 0, i.e. never called even once) -- NOT date-scoped, so a lead sits
+      // here until its first call happens no matter how overdue its TAT
+      // deadline gets. Today/Overdue/Upcoming are therefore scoped to
+      // pending_group='existing' only (already called at least once, so
+      // next_call_date is a real logged follow-up date rather than the
+      // lead's own planned_at) -- otherwise a never-called lead whose
+      // deadline happens to fall today/in the future/in the past would also
+      // leak into one of those three, on top of First Call Pending.
       if (Array.isArray(dateFilter) && dateFilter.length > 0) {
         const todayStr = getLocalTodayStr();
         const clauses = [];
-        if (dateFilter.includes("today")) clauses.push(`next_call_date.eq.${todayStr}`);
+        if (dateFilter.includes("today")) clauses.push(`and(pending_group.eq.existing,next_call_date.eq.${todayStr})`);
         if (dateFilter.includes("overdue")) clauses.push(`and(pending_group.eq.existing,next_call_date.lt.${todayStr})`);
-        if (dateFilter.includes("first-call-pending")) clauses.push(`and(pending_group.eq.new,next_call_date.lt.${todayStr})`);
-        if (dateFilter.includes("upcoming")) clauses.push(`next_call_date.gt.${todayStr}`);
+        if (dateFilter.includes("first-call-pending")) clauses.push(`pending_group.eq.new`);
+        if (dateFilter.includes("upcoming")) clauses.push(`and(pending_group.eq.existing,next_call_date.gt.${todayStr})`);
         if (clauses.length > 0) query = query.or(clauses.join(","));
       }
 
@@ -206,10 +207,11 @@ export async function fetchCallTrackerFilterTypeCounts({ activeTab, scNameFilter
 // applied, matching what the old client-side count (derived from the
 // fully-loaded pending array) used to reflect.
 //
-// "Overdue" is scoped to pending_group='existing' (already contacted at
-// least once) and "First Call Pending" to pending_group='new' (never
-// contacted -- next_call_date there is really the lead's planned_at TAT
-// deadline) -- see the matching split in usePendingCallTracker above.
+// "First Call Pending" is purely pending_group='new' (never contacted,
+// no_of_follow_ups=0) -- NOT date-scoped, so a lead stays here however
+// overdue its TAT deadline gets. Today/Overdue/Upcoming are therefore all
+// scoped to pending_group='existing' only -- see the matching split in
+// usePendingCallTracker above.
 export async function fetchCallTrackerDateFilterCounts({ searchTerm, scNameFilter, isAdmin, usernamesToFilter }) {
   try {
     const todayStr = getLocalTodayStr();
@@ -220,10 +222,10 @@ export async function fetchCallTrackerDateFilterCounts({ searchTerm, scNameFilte
     );
 
     const [todayRes, overdueRes, firstCallPendingRes, upcomingRes] = await Promise.all([
-      base().eq("next_call_date", todayStr),
+      base().eq("pending_group", "existing").eq("next_call_date", todayStr),
       base().eq("pending_group", "existing").lt("next_call_date", todayStr),
-      base().eq("pending_group", "new").lt("next_call_date", todayStr),
-      base().gt("next_call_date", todayStr),
+      base().eq("pending_group", "new"),
+      base().eq("pending_group", "existing").gt("next_call_date", todayStr),
     ]);
     return {
       today: todayRes.count || 0,
