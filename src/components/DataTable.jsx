@@ -1,16 +1,20 @@
 import React from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import DragScrollTable from './DragScrollTable';
+import { EmptyState } from './TableStates';
 
 /**
- * DataTable Component
- * Standardized table with Desktop Table View and Mobile Card View.
- * Includes integrated pagination footer.
+ * DataTable
+ * Standardized table: Desktop table view + Mobile card view, with an integrated footer.
+ *
+ * Callers keep owning the rows (renderRow / renderCard) and the pagination state.
+ * Optional: pass `emptyTitle` (+ `emptyDescription`, `emptyAction`) to show a real empty
+ * state when `data` is empty; omit it where the page already handles emptiness itself.
  */
-const DataTable = ({ 
-  headers, 
-  data, 
-  renderRow, 
+const DataTable = ({
+  headers,
+  data,
+  renderRow,
   renderCard,
   minWidth = "1000px",
   // Pagination Props
@@ -26,29 +30,43 @@ const DataTable = ({
   // single fixed-size fetch (e.g. CallTracker/EnquiryTracker's 100-row lazy
   // load) instead of offering real page-N navigation.
   simpleFooter = false,
+  emptyTitle,
+  emptyDescription,
+  emptyAction,
+  ariaLabel = 'Data table',
 }) => {
+  const showEmpty = data.length === 0 && !!emptyTitle;
+  const emptyNode = showEmpty ? (
+    <EmptyState title={emptyTitle} description={emptyDescription} action={emptyAction} />
+  ) : null;
+
   return (
-    <div className="flex flex-col h-full min-h-0 w-full bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-lg border border-brand-200 bg-card shadow-sm">
       {/* Mobile Card View (Hidden on Desktop) */}
-      <div className="md:hidden grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 overflow-y-auto flex-1 bg-slate-50/50 scrollbar-hide content-start">
+      <div className="md:hidden grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 overflow-y-auto flex-1 bg-secondary/50 scrollbar-hide content-start">
         {data.length > 0 && (
           data.map((item, index) => renderCard(item, index))
         )}
+        {showEmpty && <div className="col-span-full">{emptyNode}</div>}
       </div>
 
       {/* Desktop Table View (Hidden on Mobile) */}
       <div className="hidden md:flex flex-col flex-1 min-h-0 overflow-hidden">
-        <DragScrollTable className="w-full flex-1 min-h-0">
-          <table className={`w-full relative border-separate border-spacing-0 ${minWidth}`}>
-            <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
+        <DragScrollTable className="w-full flex-1 min-h-0" ariaLabel={`${ariaLabel}, scrollable`}>
+          <table
+            aria-label={ariaLabel}
+            className={`w-full relative border-separate border-spacing-0 ${minWidth} [&_tbody_tr:hover>td]:bg-secondary`}
+          >
+            <thead className="sticky top-0 z-20 bg-secondary">
               <tr>
                 {headers.map((header, index) => {
                   const label = typeof header === 'object' ? header.label : header;
                   const customClass = typeof header === 'object' ? header.className : '';
                   return (
-                    <th 
-                      key={index} 
-                      className={`px-4 py-3 border-b border-gray-200 text-center text-sm font-semibold text-gray-900 whitespace-nowrap uppercase tracking-wider ${customClass}`}
+                    <th
+                      key={index}
+                      scope="col"
+                      className={`whitespace-nowrap border-b border-brand-200 bg-secondary px-4 py-2.5 text-center text-xs font-semibold text-brand-800 ${customClass}`}
                     >
                       {label}
                     </th>
@@ -56,22 +74,22 @@ const DataTable = ({
                 })}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 bg-white">
+            <tbody className="divide-y bg-card">
               {data.length > 0 && (
                 data.map((item, index) => {
                   const row = renderRow(item, index);
                   if (!row || !item || !item.orderType) return row;
-                  
+
                   const isUrgent = item.orderType.trim().toLowerCase() === 'urgent order';
                   const isStock = item.orderType.trim().toLowerCase() === 'stock order';
-                  
+
                   let customClass = '';
                   if (isUrgent) {
                     customClass = 'order-row-urgent';
                   } else if (isStock) {
                     customClass = 'order-row-stock';
                   }
-                  
+
                   if (customClass) {
                     return React.cloneElement(row, {
                       className: `${row.props.className || ''} ${customClass}`
@@ -82,52 +100,59 @@ const DataTable = ({
               )}
             </tbody>
           </table>
+          {emptyNode}
         </DragScrollTable>
       </div>
 
       {/* Footer - Unified for both views */}
-      <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-center justify-between gap-4 rounded-b-lg">
+      <div className="flex flex-col gap-2 rounded-b-lg border-t bg-card px-3 py-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
         {simpleFooter ? (
-          <span className="text-[10px] md:text-sm text-gray-500 whitespace-nowrap font-medium">
-            {data.length}
+          <span className="whitespace-nowrap tabular-nums" aria-live="polite">
+            {data.length} {data.length === 1 ? 'row' : 'rows'}
           </span>
         ) : (
           <>
-            {/* Left Side: Row Dropdown */}
-            <div className="flex items-center gap-2">
-              <select
-                value={itemsPerPage}
-                onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
-                className="border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:border-primary bg-white font-medium text-xs md:text-sm shadow-sm"
-              >
-                {itemsPerPageOptions.map(val => (
-                  <option key={val} value={val}>{val}</option>
-                ))}
-              </select>
-              <span className="text-[10px] md:text-sm text-gray-500 whitespace-nowrap font-medium hidden sm:inline">
-                {totalResults > 0 ? ((currentPage - 1) * itemsPerPage) + 1 : 0}-{Math.min(currentPage * itemsPerPage, totalResults)} of {totalResults}
+            <p className="tabular-nums" aria-live="polite">
+              {totalResults === 0
+                ? 'No rows'
+                : `Showing ${(currentPage - 1) * itemsPerPage + 1}–${Math.min(currentPage * itemsPerPage, totalResults)} of ${totalResults}`}
+            </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 whitespace-nowrap">
+              <label className="flex items-center gap-2">
+                Rows per page
+                <select
+                  value={itemsPerPage}
+                  onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
+                  className="h-8 w-[72px] rounded-md border border-input bg-card px-2 text-sm text-foreground focus:border-primary focus:outline-none"
+                >
+                  {itemsPerPageOptions.map(val => (
+                    <option key={val} value={val}>{val}</option>
+                  ))}
+                </select>
+              </label>
+              <span className="tabular-nums">
+                Page {Math.min(currentPage, totalPages || 1)} of {totalPages || 1}
               </span>
-            </div>
-
-            {/* Right Side: Pagination Controls */}
-            <div className="flex items-center gap-2 md:gap-4 text-gray-700">
-              <button
-                onClick={() => onPageChange(currentPage - 1)}
-                disabled={currentPage === 1}
-                className="p-1.5 md:px-2 md:py-1 border border-gray-300 rounded-md bg-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 transition shadow-sm flex items-center justify-center text-primary"
-              >
-                <ChevronLeft size={16} strokeWidth={2.5} />
-              </button>
-              <div className="flex items-center text-xs md:text-sm font-semibold text-gray-600">
-                {currentPage} / {totalPages || 1}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => onPageChange(currentPage - 1)}
+                  disabled={currentPage <= 1}
+                  aria-label="Previous page"
+                  className="flex h-8 w-8 items-center justify-center rounded-md border border-input bg-card text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ChevronLeft size={16} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onPageChange(currentPage + 1)}
+                  disabled={currentPage >= (totalPages || 1)}
+                  aria-label="Next page"
+                  className="flex h-8 w-8 items-center justify-center rounded-md border border-input bg-card text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ChevronRight size={16} aria-hidden="true" />
+                </button>
               </div>
-              <button
-                onClick={() => onPageChange(currentPage + 1)}
-                disabled={currentPage === totalPages || totalPages === 0}
-                className="p-1.5 md:px-2 md:py-1 border border-gray-300 rounded-md bg-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 transition shadow-sm flex items-center justify-center text-primary"
-              >
-                <ChevronRight size={16} strokeWidth={2.5} />
-              </button>
             </div>
           </>
         )}

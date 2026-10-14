@@ -1,6 +1,7 @@
 ﻿"use client";
 
-import { useState, useEffect, useContext, useCallback, useRef } from "react";
+import { useState, useEffect, useContext, useCallback, useRef, useId } from "react";
+import StatusTabs from "../../components/StatusTabs";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
 
@@ -168,14 +169,14 @@ async function fetchFosVisitCounts(rangeStart, rangeEnd) {
 // Green/amber/rose thresholds for at-a-glance conversion health -- applied
 // to both % metric cells, consistent across the whole page.
 const getPercentColorClass = (pct) => {
-    if (pct >= 50) return "text-emerald-700 bg-emerald-50";
-    if (pct >= 25) return "text-amber-700 bg-amber-50";
-    return "text-rose-600 bg-rose-50";
+    if (pct >= 50) return "text-success bg-success/10";
+    if (pct >= 25) return "text-warning-foreground bg-warning/15";
+    return "text-destructive bg-destructive/10";
 };
 
 function Spinner({ className = "h-4 w-4" }) {
     return (
-        <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <svg aria-hidden="true" className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
@@ -187,37 +188,41 @@ function Spinner({ className = "h-4 w-4" }) {
 // either date here switches that tab over to a server-queried custom range
 // instead of the default, until "Reset to default" is pressed.
 function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateChange, onReset, defaultRangeLabel }) {
+    const uid = useId();
     const hasCustomRange = !!(startDate || endDate);
     return (
-        <div className="bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 mb-5 flex flex-col md:flex-row gap-3 items-end md:items-center">
+        <div className="bg-card p-3.5 rounded-lg border mb-5 flex flex-col md:flex-row gap-3 items-end md:items-center">
             <div className="w-full md:w-1/5">
-                <label className="block text-xs font-medium text-gray-600 mb-1">Start Date</label>
+                <label htmlFor={`${uid}-start`} className="block text-xs font-medium text-muted-foreground mb-1">Start Date</label>
                 <input
+                    id={`${uid}-start`}
                     type="date"
-                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
+                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                     value={startDate}
                     onChange={(e) => onStartDateChange(e.target.value)}
                 />
             </div>
             <div className="w-full md:w-1/5">
-                <label className="block text-xs font-medium text-gray-600 mb-1">End Date</label>
+                <label htmlFor={`${uid}-end`} className="block text-xs font-medium text-muted-foreground mb-1">End Date</label>
                 <input
+                    id={`${uid}-end`}
                     type="date"
-                    className="w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
+                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                     value={endDate}
                     onChange={(e) => onEndDateChange(e.target.value)}
                 />
             </div>
             <div className="w-full md:w-auto">
                 <button
+                    type="button"
                     onClick={onReset}
                     disabled={!hasCustomRange}
-                    className="w-full md:w-auto bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 font-medium text-sm py-2 px-4 rounded-md transition-colors"
+                    className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent w-full md:w-auto disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     Reset to default
                 </button>
             </div>
-            <div className="text-xs text-gray-400 md:ml-1">
+            <div className="text-xs text-muted-foreground md:ml-1" aria-live="polite">
                 {hasCustomRange ? "Showing custom range" : defaultRangeLabel}
             </div>
         </div>
@@ -248,8 +253,8 @@ function PipelineTable({ title, section, visibleLabels, isLoading }) {
     if (!section) {
         return (
             <div className="mb-8">
-                <h3 className="text-base font-semibold text-gray-800 mb-3">{title}</h3>
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-8 text-center text-sm text-gray-500">
+                <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
+                <div className="bg-card rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
                     {isLoading ? (
                         <span className="inline-flex items-center gap-2 text-primary">
                             <Spinner className="h-4 w-4" /> Loading data for this range...
@@ -272,44 +277,44 @@ function PipelineTable({ title, section, visibleLabels, isLoading }) {
 
     return (
         <div className="mb-8">
-            <h3 className="text-base font-semibold text-gray-800 mb-3">{title}</h3>
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
+            <div className="bg-card rounded-lg border overflow-hidden">
                 {allColumns.length === 0 ? (
-                    <div className="px-4 py-6 text-center text-sm text-gray-500">No rows to show</div>
+                    <div className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</div>
                 ) : (
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-100">
-                            <thead className="bg-gray-50/80">
+                    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={`${title} table, scrollable`}>
+                        <table className="min-w-full divide-y">
+                            <thead className="bg-secondary">
                                 <tr>
-                                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide sticky left-0 bg-gray-50/80">Metric</th>
+                                    <th scope="col" className="px-4 py-2 text-left text-xs font-semibold text-brand-800 sticky left-0 bg-secondary">Metric</th>
                                     {allColumns.filter(c => c.groupStart).map(c => (
-                                        <th key={`grp-${c.key}`} colSpan={c.groupSpan} className="px-4 py-2 text-center text-xs font-bold text-primary uppercase tracking-wide border-l border-gray-200">
+                                        <th key={`grp-${c.key}`} colSpan={c.groupSpan} className="px-4 py-2 text-center text-xs font-semibold text-brand-800 border-l">
                                             {c.groupLabel}
                                         </th>
                                     ))}
                                 </tr>
                                 <tr>
-                                    <th className="px-4 py-2 text-left text-xs text-gray-400 sticky left-0 bg-gray-50/80"></th>
+                                    <th scope="col" className="px-4 py-2 text-left text-xs sticky left-0 bg-secondary"><span className="sr-only">Metric</span></th>
                                     {allColumns.map(c => (
-                                        <th key={c.key} className={`px-4 py-2 text-center text-xs font-semibold text-gray-600 ${c.groupStart ? "border-l border-gray-200" : ""}`}>
+                                        <th key={c.key} className={`px-4 py-2 text-center text-xs font-semibold text-foreground ${c.groupStart ? "border-l" : ""}`}>
                                             {c.label}
                                         </th>
                                     ))}
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-100">
+                            <tbody className="divide-y">
                                 {isLoading ? (
                                     <tr><td colSpan={allColumns.length + 1} className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading data for this range...</span></td></tr>
                                 ) : (
                                     PIPELINE_METRIC_ROWS.map(row => (
-                                        <tr key={row.key} className="hover:bg-gray-50/60">
-                                            <td className="px-4 py-2.5 text-sm font-medium text-gray-700 whitespace-nowrap sticky left-0 bg-white">{row.label}</td>
+                                        <tr key={row.key} className="hover:bg-secondary/60">
+                                            <td className="px-4 py-2.5 text-sm font-medium text-foreground whitespace-nowrap sticky left-0 bg-card">{row.label}</td>
                                             {allColumns.map(c => {
                                                 const val = c.metrics[row.key];
                                                 return (
                                                     <td
                                                         key={c.key}
-                                                        className={`px-4 py-2.5 text-center text-sm whitespace-nowrap ${c.groupStart ? "border-l border-gray-200" : ""} ${c.isTotal ? "font-semibold bg-gray-50" : "text-gray-700"} ${row.format === "percent" ? getPercentColorClass(val) : ""}`}
+                                                        className={`px-4 py-2.5 text-center text-sm whitespace-nowrap ${c.groupStart ? "border-l" : ""} ${c.isTotal ? "font-semibold bg-secondary" : "text-foreground"} ${row.format === "percent" ? getPercentColorClass(val) : ""}`}
                                                     >
                                                         {formatMetricValue(val, row.format)}
                                                     </td>
@@ -351,8 +356,8 @@ function FosMetricsTable({ title, rows, visibleNames, isLoading }) {
     if (!rows) {
         return (
             <div className="mb-8">
-                <h3 className="text-base font-semibold text-gray-800 mb-3">{title}</h3>
-                <div className="bg-white rounded-xl shadow-sm border border-gray-100 px-4 py-8 text-center text-sm text-gray-500">
+                <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
+                <div className="bg-card rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
                     {isLoading ? (
                         <span className="inline-flex items-center gap-2 text-primary">
                             <Spinner className="h-4 w-4" /> Loading data for this range...
@@ -367,30 +372,30 @@ function FosMetricsTable({ title, rows, visibleNames, isLoading }) {
 
     return (
         <div className="mb-8">
-            <h3 className="text-base font-semibold text-gray-800 mb-3">{title}</h3>
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
+            <div className="bg-card rounded-lg border overflow-hidden">
                 {visibleRows.length === 0 ? (
-                    <div className="px-4 py-6 text-center text-sm text-gray-500">No rows to show</div>
+                    <div className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</div>
                 ) : (
-                    <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-gray-100">
-                            <thead className="bg-gray-50/80">
+                    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={`${title} table, scrollable`}>
+                        <table className="min-w-full divide-y">
+                            <thead className="bg-secondary">
                                 <tr>
-                                    <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide sticky left-0 bg-gray-50/80">Name</th>
+                                    <th scope="col" className="px-4 py-2 text-left text-xs font-semibold text-brand-800 sticky left-0 bg-secondary">Name</th>
                                     {FOS_METRIC_COLUMNS.map(c => (
-                                        <th key={c.key} className="px-4 py-2 text-center text-xs font-semibold text-gray-600 whitespace-nowrap">{c.label}</th>
+                                        <th key={c.key} className="px-4 py-2 text-center text-xs font-semibold text-foreground whitespace-nowrap">{c.label}</th>
                                     ))}
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-100">
+                            <tbody className="divide-y">
                                 {isLoading ? (
                                     <tr><td colSpan={FOS_METRIC_COLUMNS.length + 1} className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading data for this range...</span></td></tr>
                                 ) : (
                                     visibleRows.map(row => (
-                                        <tr key={row.name} className="hover:bg-gray-50/60">
-                                            <td className="px-4 py-2.5 text-sm font-medium text-gray-900 whitespace-nowrap sticky left-0 bg-white">{row.name}</td>
+                                        <tr key={row.name} className="hover:bg-secondary/60">
+                                            <td className="px-4 py-2.5 text-sm font-medium text-foreground whitespace-nowrap sticky left-0 bg-card">{row.name}</td>
                                             {FOS_METRIC_COLUMNS.map(c => (
-                                                <td key={c.key} className="px-4 py-2.5 text-center text-sm whitespace-nowrap text-gray-700">
+                                                <td key={c.key} className="px-4 py-2.5 text-center text-sm whitespace-nowrap text-foreground">
                                                     {formatMetricValue(row[c.key], c.format)}
                                                 </td>
                                             ))}
@@ -512,21 +517,21 @@ function Report() {
     // restricted to curated names.
     const fetchScPipelinePersons = useCallback(async () => {
         try {
-            // lto_leads has no enquiry_assign_to_person column -- the
-            // assigned person only lives on lto_call_tracker_for_leads
-            // (same attribution gap as fetchFosMetrics/fetchScPipelineMetrics
-            // below). Classification here must key off the SAME field the
-            // actual metrics are computed from, or a person's CRR/NBD_CRR
-            // vs NBD-only tier could disagree with what their column shows.
-            const [{ data: masterData, error: masterErr }, { data: leadsData, error: leadsErr }, { data: leadCallsData, error: leadCallsErr }, { data: enqData, error: enqErr }] = await Promise.all([
+            // Leads are attributed by their own lead_receiver_name (same
+            // field the Calling Data tab already uses) -- NOT
+            // enquiry_assign_to_person via lto_call_tracker_for_leads, which
+            // is only ever set on a lead once a call has been logged for it
+            // (9 of 1188 leads in practice). Classification here must key
+            // off the SAME field the actual metrics are computed from (see
+            // fetchScPipelineMetrics below), or a person's CRR/NBD_CRR vs
+            // NBD-only tier could disagree with what their column shows.
+            const [{ data: masterData, error: masterErr }, { data: leadsData, error: leadsErr }, { data: enqData, error: enqErr }] = await Promise.all([
                 fetchAllRows(() => supabase.from("lto_dropdown").select("value").eq("category", REPORT_PERSON_CATEGORY.SC_PIPELINE)),
-                fetchAllRows(() => supabase.from("lto_leads").select("id, sales_type")),
-                fetchAllRows(() => supabase.from("lto_call_tracker_for_leads").select("lead_id, enquiry_assign_to_person, created_at")),
+                fetchAllRows(() => supabase.from("lto_leads").select("sales_type, lead_receiver_name")),
                 fetchAllRows(() => supabase.from("lto_enquiries").select("enquiry_assign_to_person, sales_type")),
             ]);
             if (masterErr) throw masterErr;
             if (leadsErr) throw leadsErr;
-            if (leadCallsErr) throw leadCallsErr;
             if (enqErr) throw enqErr;
 
             const masterNames = new Set();
@@ -542,15 +547,7 @@ function Report() {
                 if (category === "NBD") nbdOnly.add(trimmed);
             };
 
-            const personByLeadId = new Map();
-            (leadCallsData || []).forEach(c => {
-                if (!c.lead_id || !c.enquiry_assign_to_person) return;
-                const existing = personByLeadId.get(c.lead_id);
-                if (!existing || new Date(c.created_at) > new Date(existing.at)) {
-                    personByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, at: c.created_at });
-                }
-            });
-            (leadsData || []).forEach(l => classify(personByLeadId.get(l.id)?.person, l.sales_type));
+            (leadsData || []).forEach(l => classify(l.lead_receiver_name, l.sales_type));
             (enqData || []).forEach(e => classify(e.enquiry_assign_to_person, e.sales_type));
 
             // A curated person with literally zero matching records yet
@@ -1178,33 +1175,25 @@ function Report() {
             // deliberately NOT capping the upper end keeps "is it currently
             // converted" correct even when fetchEnd is a past custom date
             // (an order logged after that date still counts).
-            // lto_leads has no enquiry_assign_to_person column -- same
-            // attribution gap as FOS Report -- so the assigned person is
-            // looked up via lto_call_tracker_for_leads (unbounded, most
-            // recent assignment per lead wins) and attached as a synthetic
-            // `_assignedPerson` field for buildSection to key off.
-            const [{ data: allLeads }, { data: allLeadTrackers }, { data: allLeadCalls }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_leads").select("id, sales_type, created_at")
+            // Leads are attributed by their own lead_receiver_name (same
+            // field the Calling Data tab uses, and fetchScPipelinePersons'
+            // classification above) -- NOT enquiry_assign_to_person via
+            // lto_call_tracker_for_leads, which is only set once a call has
+            // been logged for a lead (9 of 1188 leads in practice) and was
+            // the reason this section used to come out all zero.
+            const [{ data: allLeads }, { data: allLeadTrackers }] = await Promise.all([
+                fetchAllRows(() => supabase.from("lto_leads").select("id, sales_type, created_at, lead_receiver_name")
                     .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, created_at, is_order_received_status, quotation_value_without_tax, amount_with_tax")
                     .gte("created_at", fetchStartISO)),
-                fetchAllRows(() => supabase.from("lto_call_tracker_for_leads").select("lead_id, enquiry_assign_to_person, created_at")),
             ]);
-            const personByLeadId = new Map();
-            (allLeadCalls || []).forEach(c => {
-                if (!c.lead_id || !c.enquiry_assign_to_person) return;
-                const existing = personByLeadId.get(c.lead_id);
-                if (!existing || new Date(c.created_at) > new Date(existing.at)) {
-                    personByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, at: c.created_at });
-                }
-            });
             const leadTrackerByLeadId = new Map();
             (allLeadTrackers || []).forEach(t => {
                 if (!t.lead_id) return;
                 if (!leadTrackerByLeadId.has(t.lead_id)) leadTrackerByLeadId.set(t.lead_id, []);
                 leadTrackerByLeadId.get(t.lead_id).push(t);
             });
-            const leadRecordsWithPerson = (allLeads || []).map(l => ({ ...l, _assignedPerson: personByLeadId.get(l.id)?.person || null }));
+            const leadRecordsWithPerson = (allLeads || []).map(l => ({ ...l, _assignedPerson: l.lead_receiver_name || null }));
             const leadsSection = buildSection(leadRecordsWithPerson, leadTrackerByLeadId, "_assignedPerson", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
 
             // ---- Enquiries ----
@@ -1257,53 +1246,26 @@ function Report() {
     }, [fetchCallingDataReport, fetchFosMetrics, fetchScPipelineMetrics, activeTab]);
 
     return (
-        <div className="min-h-screen bg-slate-50">
-            <div className="container mx-auto max-w-[1600px]">
-                {/* Header */}
-                <div className="mb-5">
-                    <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Reports</h1>
-                    <p className="mt-1 text-sm text-gray-500">
-                        Overview of calls, enquiries, quotations, and orders.
-                    </p>
-                </div>
-
+        <div className="flex flex-col">
+            <div className="mx-auto w-full max-w-[1600px]">
                 {/* Tabs */}
-                <div className="mb-5 border-b border-gray-200">
-                    <nav className="-mb-px flex space-x-6">
-                        <button
-                            onClick={() => setActiveTab("calling")}
-                            className={`${activeTab === "calling"
-                                ? "border-primary text-primary"
-                                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                                } whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors`}
-                        >
-                            Calling Data
-                        </button>
-                        <button
-                            onClick={() => setActiveTab("fos")}
-                            className={`${activeTab === "fos"
-                                ? "border-primary text-primary"
-                                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                                } whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors`}
-                        >
-                            FOS Report
-                        </button>
-                        <button
-                            onClick={() => setActiveTab("sc_pipeline")}
-                            className={`${activeTab === "sc_pipeline"
-                                ? "border-primary text-primary"
-                                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                                } whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors`}
-                        >
-                            SC Pipeline
-                        </button>
-                    </nav>
-                </div>
+                <StatusTabs
+                    variant="underline"
+                    label="Report views"
+                    className="mb-5"
+                    activeTab={activeTab}
+                    onChange={setActiveTab}
+                    tabs={[
+                        { id: "calling", label: "Calling Data" },
+                        { id: "fos", label: "FOS Report" },
+                        { id: "sc_pipeline", label: "SC Pipeline" },
+                    ]}
+                />
 
                 {/* CALLING DATA TAB CONTENT */}
                 {activeTab === "calling" && (
                     <>
-                        <p className="text-sm text-gray-500 mb-3 flex items-center gap-2">
+                        <p className="text-sm text-muted-foreground mb-3 flex items-center gap-2">
                             {callingFilters.startDate || callingFilters.endDate
                                 ? "Custom date range -- one row per Person."
                                 : "Current week (Monday through today) -- one row per Person."}
@@ -1322,42 +1284,42 @@ function Report() {
 
                         {/* Leads Section */}
                         <div className="mb-8">
-                            <h3 className="text-base font-semibold text-gray-800 mb-3">Leads</h3>
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                                <div className="overflow-x-auto">
-                                    <table className="min-w-full divide-y divide-gray-100">
-                                        <thead className="bg-gray-50/80">
+                            <h2 className="text-base font-semibold text-foreground mb-3">Leads</h2>
+                            <div className="bg-card rounded-lg border overflow-hidden">
+                                <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Calling data: leads, scrollable">
+                                    <table className="min-w-full divide-y">
+                                        <thead className="bg-secondary">
                                             <tr>
-                                                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Person</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Leads</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">No. of Calls</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Converted to Enquiries</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Quotations</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Quotation Amount</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Order Converted</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Incoming</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Outgoing</th>
+                                                <th scope="col" className="px-4 py-2 text-left text-xs font-semibold text-brand-800">Person</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total Leads</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">No. of Calls</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Converted to Enquiries</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total Quotations</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Quotation Amount</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Order Converted</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Incoming</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Outgoing</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="divide-y divide-gray-100">
+                                        <tbody className="divide-y">
                                             {isLoading ? (
                                                 <tr><td colSpan="9" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
                                             ) : leadsReportRows.length === 0 ? (
-                                                <tr><td colSpan="9" className="px-4 py-6 text-center text-sm text-gray-500">No rows to show</td></tr>
+                                                <tr><td colSpan="9" className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</td></tr>
                                             ) : (
                                                 leadsReportRows.map(row => (
-                                                    <tr key={row.name} className="hover:bg-gray-50/60">
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.totalLeads}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.calls}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.convertedToEnquiry}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.quotations}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
+                                                    <tr key={row.name} className="hover:bg-secondary/60">
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-foreground">{row.name}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.totalLeads}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.calls}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.convertedToEnquiry}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.quotations}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
-                                                            <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.orderConverted > 0 ? "bg-emerald-50 text-emerald-700" : "text-gray-400"}`}>{row.orderConverted}</span>
+                                                            <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.orderConverted > 0 ? "bg-success/10 text-success" : "text-muted-foreground"}`}>{row.orderConverted}</span>
                                                         </td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-sky-700">{row.incoming}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-amber-700">{row.outgoing}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-info">{row.incoming}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-warning-foreground">{row.outgoing}</td>
                                                     </tr>
                                                 ))
                                             )}
@@ -1369,38 +1331,38 @@ function Report() {
 
                         {/* Enquiries Section */}
                         <div>
-                            <h3 className="text-base font-semibold text-gray-800 mb-3">Enquiries</h3>
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                                <div className="overflow-x-auto">
-                                    <table className="min-w-full divide-y divide-gray-100">
-                                        <thead className="bg-gray-50/80">
+                            <h2 className="text-base font-semibold text-foreground mb-3">Enquiries</h2>
+                            <div className="bg-card rounded-lg border overflow-hidden">
+                                <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Calling data: enquiries, scrollable">
+                                    <table className="min-w-full divide-y">
+                                        <thead className="bg-secondary">
                                             <tr>
-                                                <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Person</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Enquiries</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Quotations</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Quotation Amount</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Order Converted</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Incoming</th>
-                                                <th className="px-4 py-2 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide">Outgoing</th>
+                                                <th scope="col" className="px-4 py-2 text-left text-xs font-semibold text-brand-800">Person</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total Enquiries</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total Quotations</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Quotation Amount</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Order Converted</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Incoming</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Outgoing</th>
                                             </tr>
                                         </thead>
-                                        <tbody className="divide-y divide-gray-100">
+                                        <tbody className="divide-y">
                                             {isLoading ? (
                                                 <tr><td colSpan="7" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
                                             ) : enquiriesReportRows.length === 0 ? (
-                                                <tr><td colSpan="7" className="px-4 py-6 text-center text-sm text-gray-500">No rows to show</td></tr>
+                                                <tr><td colSpan="7" className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</td></tr>
                                             ) : (
                                                 enquiriesReportRows.map(row => (
-                                                    <tr key={row.name} className="hover:bg-gray-50/60">
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-gray-900">{row.name}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.totalEnquiries}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.quotations}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-gray-700">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
+                                                    <tr key={row.name} className="hover:bg-secondary/60">
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-foreground">{row.name}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.totalEnquiries}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.quotations}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.quotationAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
-                                                            <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.orderConverted > 0 ? "bg-emerald-50 text-emerald-700" : "text-gray-400"}`}>{row.orderConverted}</span>
+                                                            <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.orderConverted > 0 ? "bg-success/10 text-success" : "text-muted-foreground"}`}>{row.orderConverted}</span>
                                                         </td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-sky-700">{row.incoming}</td>
-                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-amber-700">{row.outgoing}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-info">{row.incoming}</td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-warning-foreground">{row.outgoing}</td>
                                                     </tr>
                                                 ))
                                             )}
@@ -1415,22 +1377,23 @@ function Report() {
                 {/* FOS REPORT TAB CONTENT */}
                 {activeTab === "fos" && (
                     <>
-                        <p className="text-sm text-gray-500 mb-1 flex items-center gap-2">
+                        <p className="text-sm text-muted-foreground mb-1 flex items-center gap-2">
                             {fosFilters.startDate || fosFilters.endDate
                                 ? "Custom date range applies to every metric below, including Pipeline."
                                 : "This week (Monday through today) for Enquiries/Orders columns; Pipeline looks back 60 days at non-converted work."}
                             {!isAdmin() && " You're seeing only your own row."}
                             {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
                         </p>
-                        <p className="text-xs text-gray-400 mb-3">
+                        <p className="text-xs text-muted-foreground mb-3">
                             New/Existing F2F Visits always cover last Monday through today, regardless of the date filter below.
                         </p>
 
                         {isAdmin() && (
-                            <div className="bg-white p-3.5 rounded-xl shadow-sm border border-gray-100 mb-3">
-                                <label className="block text-xs font-medium text-gray-600 mb-1">Receiver Name</label>
+                            <div className="bg-card p-3.5 rounded-lg border mb-3">
+                                <label htmlFor="fos-receiver" className="block text-xs font-medium text-muted-foreground mb-1">Receiver Name</label>
                                 <select
-                                    className="w-full md:w-1/4 border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary text-sm p-2 border"
+                                    id="fos-receiver"
+                                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none md:w-1/4"
                                     value={fosFilters.receiverName}
                                     onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
                                 >
@@ -1452,13 +1415,13 @@ function Report() {
                         />
 
                         {fosError && (
-                            <div className="mb-5 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-700">
+                            <div className="mb-5 px-4 py-3 rounded-md bg-destructive/10 border border-destructive/30 text-sm text-destructive" role="alert">
                                 Couldn't load FOS report data: {fosError}
                             </div>
                         )}
 
                         {fosVisitError && (
-                            <div className="mb-5 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-700">
+                            <div className="mb-5 px-4 py-3 rounded-md bg-destructive/10 border border-destructive/30 text-sm text-destructive" role="alert">
                                 Couldn't load Total Visit count from the sheet: {fosVisitError}
                             </div>
                         )}
@@ -1478,7 +1441,7 @@ function Report() {
                 {/* SC PIPELINE TAB CONTENT */}
                 {activeTab === "sc_pipeline" && (
                     <>
-                        <p className="text-sm text-gray-500 mb-3 flex items-center gap-2">
+                        <p className="text-sm text-muted-foreground mb-3 flex items-center gap-2">
                             {scPipelineFilters.startDate || scPipelineFilters.endDate
                                 ? "Custom date range applies to every metric below, including Pipeline Value."
                                 : "This week (Monday through today) for Enquiries/Orders columns; Pipeline Value looks back 60 days at non-converted work."}
@@ -1496,7 +1459,7 @@ function Report() {
                         />
 
                         {scPipelineError && (
-                            <div className="mb-5 px-4 py-3 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-700">
+                            <div className="mb-5 px-4 py-3 rounded-md bg-destructive/10 border border-destructive/30 text-sm text-destructive" role="alert">
                                 Couldn't load SC Pipeline data: {scPipelineError}
                             </div>
                         )}

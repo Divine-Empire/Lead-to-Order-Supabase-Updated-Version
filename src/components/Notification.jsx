@@ -1,42 +1,42 @@
+import { CheckCircle2, AlertCircle, AlertTriangle, Info, Loader2 } from "lucide-react"
+
 // Renders a STACK of toasts, not just one -- each background operation
 // (e.g. a Google Sheets sync) gets its own independent entry with its own
 // id, so two overlapping syncs no longer stomp each other's "loading"
 // state (previously a single global `notification` object, matched for
 // dismissal purely by message-string equality, which broke down the moment
 // two calls shared the same literal text).
-function Notification({ notifications = [] }) {
-  const bgColor = {
-    success: "bg-success/10 border-success text-success",
-    error: "bg-destructive/10 border-destructive text-destructive",
-    info: "bg-info/10 border-info text-info",
-    warning: "bg-warning/10 border-warning text-warning-foreground",
-    loading: "bg-info/10 border-info text-info",
-  }
+//
+// Look: neutral card + a coloured left edge and icon. The message text stays
+// in the normal foreground colour so contrast never depends on the status hue,
+// and the icon (not just colour) says what kind of message it is.
+const TONES = {
+  success: { edge: "border-l-success", icon: CheckCircle2, iconClass: "text-success" },
+  error: { edge: "border-l-destructive", icon: AlertCircle, iconClass: "text-destructive" },
+  warning: { edge: "border-l-warning", icon: AlertTriangle, iconClass: "text-warning-foreground" },
+  info: { edge: "border-l-info", icon: Info, iconClass: "text-info" },
+  loading: { edge: "border-l-info", icon: Loader2, iconClass: "text-info animate-spin" },
+}
 
+function Notification({ notifications = [] }) {
   if (!notifications.length) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col-reverse gap-2 max-w-md">
-      {notifications.map(({ id, message, type = "info" }) => (
-        <div
-          key={id}
-          className={`p-4 rounded-md border-l-4 shadow-md flex items-center gap-3 ${bgColor[type]}`}
-        >
-          {type === "loading" && (
-            <svg
-              className="animate-spin h-4 w-4 flex-shrink-0"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-          )}
-          <span>{message}</span>
-        </div>
-      ))}
+    <div className="fixed bottom-4 right-4 z-[1100] flex max-w-md flex-col-reverse gap-2">
+      {notifications.map(({ id, message, type = "info" }) => {
+        const tone = TONES[type] || TONES.info
+        const Icon = tone.icon
+        return (
+          <div
+            key={id}
+            role={type === "error" ? "alert" : "status"}
+            className={`flex items-center gap-3 rounded-md border border-l-4 bg-card p-3 text-sm text-foreground shadow-lg ${tone.edge}`}
+          >
+            <Icon className={`h-4 w-4 shrink-0 ${tone.iconClass}`} aria-hidden="true" />
+            <span>{message}</span>
+          </div>
+        )
+      })}
     </div>
   )
 }

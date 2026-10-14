@@ -746,24 +746,24 @@ function NewEnquiryTracker() {
 
 
   return (
-    <div className="container mx-auto py-1 px-2">
-      <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-sm border border-slate-200">
-        <div className="px-3 py-2 border-b border-slate-100">
-          <h2 className="text-base font-bold text-slate-800">Enquiry Tracker</h2>
-          <p className="text-[11px] text-slate-500">
+    <div className="mx-auto w-full py-1 px-2">
+      <div className="max-w-2xl mx-auto bg-card rounded-lg border">
+        <div className="px-4 py-3 border-b">
+          <h2 className="text-base font-semibold text-foreground">Enquiry Tracker</h2>
+          <p className="text-xs text-muted-foreground">
             Track the progress of the enquiry
-            {formData.enquiryNo && <span className="font-medium text-primary"> for Enquiry #{formData.enquiryNo}</span>}
+            {formData.enquiryNo && <span className="font-medium text-foreground"> for Enquiry #{formData.enquiryNo}</span>}
           </p>
         </div>
         <form onSubmit={handleSubmit}>
-          <div className="p-2 space-y-3">
+          <div className="p-4 space-y-4">
             <div className="space-y-2">
-              <label htmlFor="enquiryNo" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="enquiryNo" className="block text-sm font-medium text-foreground">
                 Enquiry No.
                <span className="text-destructive">*</span></label>
               <input
                 id="enquiryNo"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="En-01"
                 value={formData.enquiryNo}
                 onChange={handleInputChange}
@@ -772,12 +772,12 @@ function NewEnquiryTracker() {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="enquiryStatus" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="enquiryStatus" className="block text-sm font-medium text-foreground">
                 Enquiry Status
                <span className="text-destructive">*</span></label>
               <select
                 id="enquiryStatus"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.enquiryStatus}
                 onChange={handleInputChange}
                 required
@@ -790,13 +790,13 @@ function NewEnquiryTracker() {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="customerFeedback" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="customerFeedback" className="block text-sm font-medium text-foreground">
                 What Did Customer Say
                <span className="text-destructive">*</span></label>
               <input
                 list="customer-feedback-options"
                 id="customerFeedback"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Select or type customer feedback"
                 value={formData.customerFeedback}
                 onChange={handleInputChange}
@@ -810,8 +810,8 @@ function NewEnquiryTracker() {
             </div>
 
 
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Current Stage</label>
+            <div role="group" aria-labelledby="grp-current-stage" className="space-y-2">
+              <span id="grp-current-stage" className="block text-sm font-medium text-foreground">Current Stage</span>
               <div className="space-y-1">
                 <div className="flex items-center space-x-2">
                   <input
@@ -823,9 +823,9 @@ function NewEnquiryTracker() {
                     onChange={async (e) => {
                       setCurrentStage(e.target.value)
                     }}
-                    className="h-4 w-4 text-primary focus:ring-primary"
+                    className="h-4 w-4 accent-primary"
                   />
-                  <label htmlFor="make-quotation" className="text-sm text-gray-700">
+                  <label htmlFor="make-quotation" className="text-sm text-foreground">
                     Make Quotation
                   </label>
                 </div>
@@ -840,9 +840,9 @@ function NewEnquiryTracker() {
                     onChange={async (e) => {
                       setCurrentStage(e.target.value)
                     }}
-                    className="h-4 w-4 text-primary focus:ring-primary"
+                    className="h-4 w-4 accent-primary"
                   />
-                  <label htmlFor="order-expected" className="text-sm text-gray-700">
+                  <label htmlFor="order-expected" className="text-sm text-foreground">
                     Order Expected
                   </label>
                 </div>
@@ -859,9 +859,9 @@ function NewEnquiryTracker() {
 
                       // Use useEffect to handle the side effect instead
                     }}
-                    className="h-4 w-4 text-primary focus:ring-primary"
+                    className="h-4 w-4 accent-primary"
                   />
-                  <label htmlFor="order-status" className="text-sm text-gray-700">
+                  <label htmlFor="order-status" className="text-sm text-foreground">
                     Order Status
                   </label>
                 </div>
@@ -891,18 +891,18 @@ function NewEnquiryTracker() {
               />
             )}
           </div>
-          <div className="p-6 border-t flex justify-between">
+          <div className="p-4 border-t flex justify-between">
             <button
               type="button"
               onClick={() => navigate(-1)}
-              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+              className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-4 py-2 brand-gradient hover:opacity-90 text-white font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+              className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting ? "Saving..." : "Submit"}
             </button>

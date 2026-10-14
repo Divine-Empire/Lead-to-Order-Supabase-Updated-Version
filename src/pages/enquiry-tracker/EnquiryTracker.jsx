@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useEffect, useContext, useMemo } from "react";
+import { useState, useEffect, useContext, useMemo, useId } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   PlusIcon,
@@ -11,6 +11,7 @@ import {
 } from "../../components/Icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { AuthContext } from "../../App";
+import useConfirmDialog from "../../components/useConfirmDialog";
 import DirectEnquiryForm from "./DirectEnquiryForm";
 import supabase from "../../utils/supabase";
 import { isUrlReachable, regenerateQuotationPdf } from "../../utils/regenerateQuotationPdf";
@@ -19,6 +20,7 @@ import { recomputeAlreadyInTrackerForRename } from "../../utils/clientMasterTrac
 import { tokenizeLoose, buildPgLooseToken, looseIncludes } from "../../utils/looseSearch";
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
+import useDialogBehavior from "../../components/useDialogBehavior";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import MakeQuotationForm from "../../components/enquiry-tracker/MakeQuotationFrom";
 import { compressImageFile, validateFileSize } from "../../utils/imageCompression";
@@ -226,6 +228,7 @@ function EnquiryTracker() {
     getLeadSourcesToFilter = () => [],
     showNotification = () => {},
   } = authContext;
+  const { confirmAsync, confirmDialog } = useConfirmDialog();
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTabState] = useState(() => {
     return localStorage.getItem("enquiryTrackerActiveTab") || "pending";
@@ -259,7 +262,7 @@ function EnquiryTracker() {
   // Fixed at 100 -- Pending/History each lazy-load a single capped page of
   // 100 rows (see usePendingEnquiries/useHistoryEnquiries's `enabled`
   // gating in queries.js), no page-N navigation.
-  const [itemsPerPage] = useState(100);
+  const [itemsPerPage, setItemsPerPage] = useState(100);
   const [, setHasMoreHistory] = useState(true);
   const [, setHasMoreDirectEnquiry] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
@@ -480,7 +483,12 @@ function EnquiryTracker() {
         "This cannot be undone. Continue?"
       : "Are you sure you want to delete this record? This cannot be undone.";
 
-    if (!window.confirm(confirmMessage)) return;
+    const confirmed = await confirmAsync({
+      title: "Delete record?",
+      message: confirmMessage,
+      confirmText: "Delete",
+    });
+    if (!confirmed) return;
 
     try {
       const isLeadRecord = tracker.sourceType === "lead" || (tracker.enquiryNo || "").toUpperCase().startsWith("LD-");
@@ -585,7 +593,7 @@ function EnquiryTracker() {
         await syncClientOnOrderConversion(identifier);
       }
 
-      alert("Updated successfully!");
+      showNotification("Updated successfully!", "success");
       fetchHistoryData(1, searchTerm, false, getDateFiltersFromCallingDays());
       setIsHistoryEditModalOpen(false);
       setEditedData({});
@@ -821,7 +829,7 @@ const handleSaveClick = async () => {
       }
 
       if (!editedData.id && !editedData.dbId) {
-        alert("Error: No valid ID found for this record. Please refresh the page and try again.");
+        showNotification("Error: No valid ID found for this record. Please refresh the page and try again.", "error");
         console.error("Missing ID in editedData:", editedData);
         return;
       }
@@ -982,7 +990,7 @@ const handleSaveClick = async () => {
     if (activeTab === "directEnquiry") {
       // Validate that we have a valid ID
       if (!editedData.id && !editedData.dbId) {
-        alert("Error: No valid ID found for this record. Please refresh the page and try again.");
+        showNotification("Error: No valid ID found for this record. Please refresh the page and try again.", "error");
         console.error("Missing ID in editedData:", editedData);
         return;
       }
@@ -1044,7 +1052,7 @@ const handleSaveClick = async () => {
 
       if (error) {
         console.error("Direct Enquiry update error:", error);
-        alert(`Error updating record: ${error.message}`);
+        showNotification(`Error updating record: ${error.message}`, "error");
         throw error;
       }
 
@@ -1061,7 +1069,7 @@ const handleSaveClick = async () => {
       }
 
       console.log("Successfully updated Direct Enquiry record:", updatedData);
-      alert("Updated successfully!");
+      showNotification("Updated successfully!", "success");
       fetchDirectEnquiryData(currentPage, searchTerm, getDateFiltersFromCallingDays());
       setEditingRowId(null);
       setEditedData({});
@@ -1135,7 +1143,7 @@ const handleSaveClick = async () => {
       .eq("id", editedData.id);
 
     if (error) {
-      alert(`Error updating ${tableName}: ${error.message}`);
+      showNotification(`Error updating ${tableName}: ${error.message}`, "error");
       console.error(`Error updating ${tableName}:`, error);
       return;
     }
@@ -1148,7 +1156,7 @@ const handleSaveClick = async () => {
       await syncClientOnOrderConversion(identifier);
     }
 
-    alert("Updated successfully!");
+    showNotification("Updated successfully!", "success");
 
     // Refresh data
     fetchHistoryData(1, searchTerm, false, getDateFiltersFromCallingDays());
@@ -1156,7 +1164,7 @@ const handleSaveClick = async () => {
     setEditedData({});
   } catch (error) {
     console.error("Error updating:", error);
-    alert(`Error updating: ${error.message}`);
+    showNotification(`Error updating: ${error.message}`, "error");
   }
 };
 
@@ -2330,359 +2338,6 @@ const handleSaveClick = async () => {
     return counts;
   }, [activeTab, pendingData, directEnquiryData, historyData]);
 
-  // Mobile Card View Component for CallTracker
-  const MobileCardView = ({ data, type, onView }) => {
-    if (type === "pending") {
-      return (
-        <div className="space-y-4 md:hidden">
-          {data.map((tracker, index) => (
-            <div
-              key={index}
-              className="overflow-hidden bg-white rounded-xl border border-gray-100 shadow-lg"
-            >
-              {/* Header Section */}
-              <div className="p-4 bg-primary/5 border-b border-gray-200">
-                <div className="flex justify-between items-center mb-2">
-                  <h3 className="text-lg font-bold text-gray-900">
-                    {tracker.lead_no}
-                  </h3>
-                  <span
-                    className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                      tracker.priority === "High"
-                        ? "bg-destructive/10 text-destructive"
-                        : tracker.priority === "Medium"
-                        ? "bg-warning/15 text-warning-foreground"
-                        : "bg-slate-100 text-slate-700"
-                    }`}
-                  >
-                    {tracker.Lead_Source}
-                  </span>
-                </div>
-                <div className="flex items-center text-sm text-gray-600">
-                  <svg
-                    className="mr-1 w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                    ></path>
-                  </svg>
-                  <span>{tracker.Lead_Receiver_Name}</span>
-                </div>
-              </div>
-
-              {/* Content Section */}
-              <div className="p-4 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-gray-50 rounded-lg">
-                    <p className="mb-1 text-xs text-gray-500">Company</p>
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {tracker.Company_Name}
-                    </p>
-                  </div>
-
-                  <div className="p-3 bg-gray-50 rounded-lg">
-                    <p className="mb-1 text-xs text-gray-500">Phone</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {tracker.Phone_Number}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-gray-50 rounded-lg">
-                    <p className="mb-1 text-xs text-gray-500">Salesperson</p>
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {tracker.salesperson_Name}
-                    </p>
-                  </div>
-
-                  <div className="p-3 bg-gray-50 rounded-lg">
-                    <p className="mb-1 text-xs text-gray-500">Call Date</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {tracker.Timestamp}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-3 bg-gray-50 rounded-lg">
-                  <p className="mb-1 text-xs text-gray-500">Current Stage</p>
-                  <p className="text-sm font-medium text-gray-900">
-                    {tracker.Current_Stage}
-                  </p>
-                </div>
-
-                <div className="p-3 bg-warning/5 rounded-lg border border-warning/20">
-                  <p className="mb-1 text-xs font-medium text-warning-foreground">
-                    Items
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => openItemDetailsModal(tracker)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-primary/20 text-primary text-xs font-medium hover:bg-primary/5 transition-colors"
-                  >
-                    <EyeIcon className="h-3.5 w-3.5" />
-                    View Items
-                  </button>
-                </div>
-              </div>
-
-              {/* Action Section */}
-              <div className="px-4 pb-4">
-                <Link
-                  state={{ activeTab: "pending", sc_name: tracker.sc_name }}
-                  to={`/enquiry-tracker/form?leadId=${tracker.lead_no}`}
-                  className="flex justify-center items-center px-4 py-3 w-full text-white brand-gradient rounded-lg shadow-md transition-all duration-200 hover:opacity-90"
-                >
-                  <ArrowRightIcon className="mr-2 w-5 h-5" />
-                  Process Now
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    } else if (type === "directEnquiry") {
-      return (
-        <div className="space-y-4 md:hidden">
-          {data.map((tracker, index) => (
-            <div
-              key={index}
-              className="overflow-hidden bg-white rounded-xl border border-gray-100 shadow-lg"
-            >
-              {/* Header Section */}
-              <div className="p-4 bg-primary/5 border-b border-gray-200">
-                <div className="flex justify-between items-center mb-2">
-                  <h3 className="text-lg font-bold text-gray-900">
-                    {tracker.enquiry_no}
-                  </h3>
-                  <span
-                    className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                      tracker.priority === "High"
-                        ? "bg-destructive/10 text-destructive"
-                        : tracker.priority === "Medium"
-                        ? "bg-warning/15 text-warning-foreground"
-                        : "bg-slate-100 text-slate-700"
-                    }`}
-                  >
-                    {tracker.lead_source}
-                  </span>
-                </div>
-                <div className="flex items-center text-sm text-gray-600">
-                  <svg
-                    className="mr-1 w-4 h-4"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                    ></path>
-                  </svg>
-                  <span>{tracker.lead_receiver_name}</span>
-                </div>
-              </div>
-
-              {/* Content Section */}
-              <div className="p-4 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-gray-50 rounded-lg">
-                    <p className="mb-1 text-xs text-gray-500">Company</p>
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {tracker.company_name}
-                    </p>
-                  </div>
-
-                  <div className="p-3 bg-gray-50 rounded-lg">
-                    <p className="mb-1 text-xs text-gray-500">Call Date</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {tracker.timestamp}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-3 bg-gray-50 rounded-lg">
-                  <p className="mb-1 text-xs text-gray-500">Current Stage</p>
-                  <p className="text-sm font-medium text-gray-900">
-                    {tracker.current_stage}
-                  </p>
-                </div>
-
-                <div className="p-3 bg-warning/5 rounded-lg border border-warning/20">
-                  <p className="mb-1 text-xs font-medium text-warning-foreground">
-                    Items
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => openItemDetailsModal(tracker)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-primary/20 text-primary text-xs font-medium hover:bg-primary/5 transition-colors"
-                  >
-                    <EyeIcon className="h-3.5 w-3.5" />
-                    View Items
-                  </button>
-                </div>
-              </div>
-
-              {/* Action Section */}
-              <div className="flex px-4 pb-4 space-x-2">
-                <Link
-                  state={{
-                    activeTab: "directEnquiry",
-                    sc_name: tracker.sc_name,
-                  }}
-                  to={`/enquiry-tracker/form?leadId=${tracker.enquiry_no}`}
-                  className="flex flex-1 justify-center items-center px-4 py-3 text-white brand-gradient rounded-lg shadow-md transition-all duration-200 hover:opacity-90"
-                >
-                  <ArrowRightIcon className="mr-2 w-5 h-5" />
-                  Process
-                </Link>
-                <button
-                  onClick={() => onView(tracker)}
-                  className="flex-1 px-4 py-3 text-gray-700 rounded-lg border border-gray-300 transition-all duration-200 hover:bg-gray-50"
-                >
-                  View
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    } else {
-      // History tab mobile view
-      return (
-        <div className="space-y-4 md:hidden">
-          {data.map((tracker, index) => (
-            <div
-              key={index}
-              className="overflow-hidden bg-white rounded-xl border border-gray-100 shadow-lg"
-            >
-              {/* Header Section */}
-              <div className="p-4 bg-primary/5 border-b border-gray-200">
-                <div className="flex justify-between items-center mb-2">
-                  <h3 className="text-lg font-bold text-gray-900">
-                    {tracker.enquiryNo}
-                  </h3>
-                  <span
-                    className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                      tracker.priority === "High"
-                        ? "bg-destructive/10 text-destructive"
-                        : tracker.priority === "Medium"
-                        ? "bg-warning/15 text-warning-foreground"
-                        : "bg-slate-100 text-slate-700"
-                    }`}
-                  >
-                    {tracker.enquiryStatus}
-                  </span>
-                </div>
-                {tracker.Timestamp && (
-                  <div className="flex items-center text-sm text-gray-600">
-                    <svg
-                      className="mr-1 w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                      ></path>
-                    </svg>
-                    <span>{tracker.Timestamp}</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Content Section */}
-              <div className="p-4 space-y-3">
-                {tracker.customerFeedback && (
-                  <div className="p-3 bg-info/10 rounded-lg border border-info/30">
-                    <p className="flex items-center mb-1 text-xs font-medium text-info">
-                      <svg
-                        className="mr-1 w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                        xmlns="http://www.w3.org/2000/svg"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
-                        ></path>
-                      </svg>
-                      Customer Said
-                    </p>
-                    <p className="text-sm italic text-gray-800">
-                      "{tracker.customerFeedback}"
-                    </p>
-                  </div>
-                )}
-
-                <div className="p-3 bg-gray-50 rounded-lg">
-                  <p className="mb-1 text-xs text-gray-500">Current Stage</p>
-                  <p className="text-sm font-medium text-gray-900">
-                    {tracker.currentStage}
-                  </p>
-                </div>
-
-                {tracker.nextCallDate && (
-                  <div className="p-3 bg-success/10 rounded-lg border border-success/20">
-                    <p className="flex items-center mb-1 text-xs font-medium text-success">
-                      <svg
-                        className="mr-1 w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                        xmlns="http://www.w3.org/2000/svg"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2"
-                          d="M13 10V3L4 14h7v7l9-11h-7z"
-                        ></path>
-                      </svg>
-                      Next Follow-up
-                    </p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {tracker.nextCallDate}{" "}
-                      {tracker.nextCallTime && `at ${tracker.nextCallTime}`}
-                    </p>
-                  </div>
-                )}
-
-                {tracker.orderStatus && (
-                  <div className="p-3 bg-primary/5 rounded-lg border border-primary/30">
-                    <p className="mb-1 text-xs font-medium text-primary">
-                      Order Status
-                    </p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {tracker.orderStatus}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      );
-    }
-  };
-
   // ─── Merge directEnquiry into pending and Deduplicate ─────────────────────────
   const allPendingRaw = [
     ...(pendingData || []),
@@ -2779,9 +2434,13 @@ const handleSaveClick = async () => {
     return activeTab === "history" ? -cmp : cmp;
   });
 
-  const totalResults = currentData.length;
+  // The pending/history queries already return exactly one server page
+  // (.range()), so the rows are shown as-is and the total comes from the
+  // query's count; slicing by currentPage here would blank every page > 1.
+  const activeEnquiryQuery = activeTab === "pending" ? pendingQuery : historyQuery;
+  const totalResults = Math.max(activeEnquiryQuery.data?.totalCount || 0, currentData.length);
   const totalPages = Math.max(1, Math.ceil(totalResults / itemsPerPage));
-  const paginatedData = currentData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const paginatedData = currentData;
 
 
 
@@ -2829,7 +2488,7 @@ const handleSaveClick = async () => {
         );
       } else if (opt.key === "leadSource" || opt.key === "enquiryStatus") {
         cellContent = val && val !== "—" ? (
-          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800">
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-secondary text-foreground border">
             {val}
           </span>
         ) : "—";
@@ -2903,22 +2562,21 @@ const handleSaveClick = async () => {
     `${tracker.id || "row"}-${tracker.quotationNumber || tracker.created_at || ""}-${index}`;
 
   const renderPendingRow = (tracker, index) => (
-    <tr key={tracker.id || index} className="hover:bg-slate-50 transition-colors group">
-      <td className="px-3 py-3 whitespace-nowrap text-sm font-medium sticky left-0 bg-white group-hover:bg-slate-50 z-10 shadow-[1px_0_0_0_#e5e7eb] border-r border-gray-200">
+    <tr key={tracker.id || index} className="group">
+      <td className="px-3 py-3 whitespace-nowrap text-sm font-medium sticky left-0 bg-card z-10 border-r">
         <div className="flex gap-2">
           <Link
             to={`/enquiry-tracker/form?leadId=${tracker.leadNo || tracker.lead_no || tracker.leadId || tracker.enquiryNo || tracker.enquiry_no}`}
             state={{ activeTab: "pending", sc_name: tracker.sc_name }}
+            className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-colors border-primary/30 text-primary hover:bg-accent hover:text-accent-foreground"
           >
-            <button className="px-2 py-1 text-xs border border-primary/20 text-primary hover:bg-primary/5 rounded-md">
-              Process <ArrowRightIcon className="ml-1 h-3 w-3 inline" />
-            </button>
+            Process <ArrowRightIcon className="ml-1 h-3 w-3 inline" aria-hidden="true" />
           </Link>
           {/* Edit is admin-only, and opens a modal restricted to 11 master
               fields -- see handleSaveClick's pending branch and the
               ModalForm near the bottom of this component. */}
           {isAdmin() && (
-            <button onClick={() => handleEditClick(tracker, index)} className="px-2 py-1 text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-md">Edit</button>
+            <button type="button" onClick={() => handleEditClick(tracker, index)} className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-colors border-input bg-card text-foreground hover:bg-accent">Edit</button>
           )}
         </div>
       </td>
@@ -2927,19 +2585,19 @@ const handleSaveClick = async () => {
   );
 
   const renderHistoryRow = (tracker, index) => (
-    <tr key={historyRowKey(tracker, index)} className="hover:bg-slate-50 transition-colors">
+    <tr key={historyRowKey(tracker, index)}>
       <td className="px-3 py-3 whitespace-nowrap text-sm font-medium">
         <div className="flex gap-2">
-          <button onClick={() => { setSelectedTracker(tracker); setShowPopup(true); }} className="px-3 py-1 text-xs border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-md">
+          <button type="button" onClick={() => { setSelectedTracker(tracker); setShowPopup(true); }} className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-colors border-input bg-card text-foreground hover:bg-accent">
             View
           </button>
           {isAdmin() && (
-            <button onClick={() => handleHistoryEditClick(tracker)} className="px-3 py-1 text-xs border border-gray-300 text-gray-600 hover:bg-gray-50 rounded-md">
+            <button type="button" onClick={() => handleHistoryEditClick(tracker)} className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-colors border-input bg-card text-foreground hover:bg-accent">
               Edit
             </button>
           )}
           {isAdmin() && (
-            <button onClick={() => handleHistoryDeleteClick(tracker)} className="px-3 py-1 text-xs border border-red-200 text-red-600 hover:bg-red-50 rounded-md">
+            <button type="button" onClick={() => handleHistoryDeleteClick(tracker)} className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-colors border-destructive/30 text-destructive hover:bg-destructive/10">
               Delete
             </button>
           )}
@@ -2950,7 +2608,7 @@ const handleSaveClick = async () => {
   );
 
   const renderPendingCard = (tracker, index) => (
-    <div key={tracker.id || index} className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 space-y-3">
+    <div key={tracker.id || index} className="bg-card rounded-lg border p-4 space-y-3">
       <div className="flex justify-between items-start">
         <div className="flex-1">
           <span className="text-xs font-semibold text-gray-500">{tracker.timestamp}</span>
@@ -2966,22 +2624,20 @@ const handleSaveClick = async () => {
         <div><span className="block text-xs text-gray-400">Phone</span><p className="font-medium">{tracker.phoneNo}</p></div>
         <div><span className="block text-xs text-gray-400">Stage</span><p className="text-primary font-medium">{tracker.currentStage || "Pending"}</p></div>
       </div>
-      <div className="pt-2 border-t border-gray-100 flex justify-end">
+      <div className="pt-2 border-t flex justify-end">
         <Link
           to={`/enquiry-tracker/form?leadId=${tracker.leadNo || tracker.lead_no}`}
           state={{ activeTab: "pending", sc_name: tracker.sc_name }}
-          className="w-full"
+          className="flex h-9 w-full items-center justify-center rounded-md border border-primary/30 text-sm font-medium text-primary transition-colors hover:bg-accent hover:text-accent-foreground"
         >
-          <button className="flex items-center justify-center w-full px-3 py-2 text-sm border border-primary/20 text-primary hover:bg-primary/5 rounded-md font-medium">
-            Process <ArrowRightIcon className="ml-1 h-3 w-3" />
-          </button>
+          Process <ArrowRightIcon className="ml-1 h-3 w-3" aria-hidden="true" />
         </Link>
       </div>
     </div>
   );
 
   const renderHistoryCard = (tracker, index) => (
-    <div key={historyRowKey(tracker, index)} className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 space-y-3">
+    <div key={historyRowKey(tracker, index)} className="bg-card rounded-lg border p-4 space-y-3">
       <div className="flex justify-between items-start">
         <div>
           <span className="text-xs font-semibold text-gray-500">{tracker.timestamp}</span>
@@ -2993,8 +2649,8 @@ const handleSaveClick = async () => {
         <div><span className="block text-xs text-gray-400">Stage</span><p className="text-primary font-medium">{tracker.currentStage}</p></div>
         <div><span className="block text-xs text-gray-400">Status</span><p>{tracker.enquiryStatus}</p></div>
       </div>
-      <div className="pt-2 border-t border-gray-100">
-        <button onClick={() => { setSelectedTracker(tracker); setShowPopup(true); }} className="w-full flex items-center justify-center px-3 py-2 text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-md font-medium">
+      <div className="pt-2 border-t">
+        <button type="button" onClick={() => { setSelectedTracker(tracker); setShowPopup(true); }} className="flex h-9 w-full items-center justify-center rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent">
           View
         </button>
       </div>
@@ -3005,7 +2661,7 @@ const handleSaveClick = async () => {
   const getHeaders = () => {
     if (activeTab === "pending") {
       const baseHeaders = [
-        { label: "Actions", className: "sticky left-0 bg-gray-50 z-30 shadow-[1px_0_0_0_#e5e7eb] border-r border-gray-200" }
+        { label: "Actions", className: "sticky left-0 z-30 bg-secondary border-r border-brand-200" }
       ];
       columnsConfig.forEach(opt => {
         if (visiblePendingColumns[opt.key]) {
@@ -3061,9 +2717,9 @@ const handleSaveClick = async () => {
 
       <div className="flex-1 flex flex-col min-h-0 mt-1">
         {isLoading ? (
-          <div className="p-8 text-center flex-1 flex flex-col justify-center items-center bg-white rounded-lg border border-gray-200 shadow-sm">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
-            <p className="text-slate-500">Loading Enquiry tracker data...</p>
+          <div className="p-8 text-center flex-1 flex flex-col justify-center items-center bg-card rounded-lg border" role="status">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-brand-200 border-t-primary mb-4" aria-hidden="true"></div>
+            <p className="text-muted-foreground text-sm">Loading Enquiry tracker data...</p>
           </div>
         ) : (
           <DataTable
@@ -3076,7 +2732,15 @@ const handleSaveClick = async () => {
             itemsPerPage={itemsPerPage}
             totalResults={totalResults}
             minWidth="min-w-[1200px]"
-            simpleFooter
+            itemsPerPageOptions={[25, 50, 100]}
+            onPageChange={(p) => setCurrentPage(Math.min(Math.max(1, p), totalPages))}
+            onItemsPerPageChange={(n) => {
+              setItemsPerPage(n);
+              setCurrentPage(1);
+            }}
+            ariaLabel={activeTab === "pending" ? "Pending enquiries" : "Enquiry history"}
+            emptyTitle={activeTab === "pending" ? "No pending enquiries" : "No enquiry history yet"}
+            emptyDescription="Try a different search or clear the filters."
           />
         )}
       </div>
@@ -3099,88 +2763,58 @@ const handleSaveClick = async () => {
 
       {/* Item-Details Modal */}
       {itemDetailsModal.open && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={closeItemDetailsModal}></div>
-          <div className="relative bg-white rounded-lg shadow-xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden">
-            <div className="border-b p-4 flex justify-between items-center shrink-0">
-              <h3 className="text-base font-bold text-gray-900">
-                Item Details {itemDetailsModal.title ? `— ${itemDetailsModal.title}` : ""}
-              </h3>
-              <button
-                onClick={closeItemDetailsModal}
-                className="text-gray-400 hover:text-gray-600 font-bold text-xl leading-none"
-              >
-                &times;
-              </button>
-            </div>
-            <div className="p-4 overflow-y-auto flex-1">
-              {itemDetailsModal.loading ? (
-                <div className="text-center py-8 text-gray-400 text-sm">Loading items...</div>
-              ) : itemDetailsModal.items.length === 0 ? (
-                <div className="text-center py-8 text-gray-400 text-sm">No items found for this record.</div>
-              ) : (
-                <table className="w-full text-left text-sm border-collapse">
-                  <thead>
-                    <tr className="border-b border-gray-200 text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                      <th className="py-2 pr-3">Item Name</th>
-                      <th className="py-2 text-right">Quantity</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {itemDetailsModal.items.map((it, idx) => (
-                      <tr key={idx}>
-                        <td className="py-2 pr-3 text-gray-800">{it.item_name || "—"}</td>
-                        <td className="py-2 text-right text-gray-800">{it.quantity ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        </div>
+        <ItemDetailsDialog title={itemDetailsModal.title} onClose={closeItemDetailsModal}>
+          {itemDetailsModal.loading ? (
+            <div className="text-center py-8 text-muted-foreground text-sm" role="status">Loading items...</div>
+          ) : itemDetailsModal.items.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground text-sm">No items found for this record.</div>
+          ) : (
+            <table className="w-full text-left text-sm border-collapse">
+              <thead>
+                <tr className="border-b text-xs font-semibold text-muted-foreground">
+                  <th scope="col" className="py-2 pr-3">Item Name</th>
+                  <th scope="col" className="py-2 text-right">Quantity</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {itemDetailsModal.items.map((it, idx) => (
+                  <tr key={idx}>
+                    <td className="py-2 pr-3 text-foreground">{it.item_name || "—"}</td>
+                    <td className="py-2 text-right text-foreground tabular-nums">{it.quantity ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </ItemDetailsDialog>
       )}
 
       {/* View Popup Modal */}
       {showPopup && selectedTracker && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowPopup(false)}></div>
-          <div className="relative bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] overflow-auto">
-            <div className="sticky top-0 bg-white border-b p-4 flex justify-between items-center">
-              <h3 className="text-lg font-bold text-gray-900">
-                {activeTab === "pending" ? `Enquiry Details: ${selectedTracker?.leadNo || selectedTracker?.lead_no}` : `Enquiry History: ${selectedTracker?.enquiryNo}`}
-              </h3>
-              <button onClick={() => setShowPopup(false)} className="text-gray-500 hover:text-gray-700">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {columnOptions.filter(o => visibleColumns[o.key]).map(o => (
-                  <div key={o.key} className="space-y-1">
-                    <p className="text-sm font-medium text-gray-500">{o.label}</p>
-                    <p className="text-base">{selectedTracker[o.key] ?? "—"}</p>
-                  </div>
-                ))}
+        <TrackerViewDialog
+          title={activeTab === "pending" ? `Enquiry Details: ${selectedTracker?.leadNo || selectedTracker?.lead_no}` : `Enquiry History: ${selectedTracker?.enquiryNo}`}
+          onClose={() => setShowPopup(false)}
+          actions={
+            activeTab === "pending" && (
+              <Link
+                to={`/enquiry-tracker/form?leadId=${selectedTracker?.leadNo || selectedTracker?.lead_no}`}
+                state={{ activeTab: "pending", sc_name: selectedTracker?.sc_name }}
+                className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                Process <ArrowRightIcon className="ml-1 h-4 w-4 inline" aria-hidden="true" />
+              </Link>
+            )
+          }
+        >
+          <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+            {columnOptions.filter(o => visibleColumns[o.key]).map(o => (
+              <div key={o.key} className="space-y-1">
+                <dt className="text-xs font-medium text-muted-foreground">{o.label}</dt>
+                <dd className="text-sm text-foreground">{selectedTracker[o.key] ?? "—"}</dd>
               </div>
-            </div>
-            <div className="border-t p-4 flex justify-end gap-3">
-              <button onClick={() => setShowPopup(false)} className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50">Close</button>
-              {activeTab === "pending" && (
-                <Link
-                  to={`/enquiry-tracker/form?leadId=${selectedTracker?.leadNo || selectedTracker?.lead_no}`}
-                  state={{ activeTab: "pending", sc_name: selectedTracker?.sc_name }}
-                >
-                  <button className="px-4 py-2 brand-gradient text-white font-medium rounded-md">
-                    Process <ArrowRightIcon className="ml-1 h-4 w-4 inline" />
-                  </button>
-                </Link>
-              )}
-            </div>
-          </div>
-        </div>
+            ))}
+          </dl>
+        </TrackerViewDialog>
       )}
 
       {/* Pending tab Edit modal -- admin-only, replaces the old inline
@@ -3196,11 +2830,12 @@ const handleSaveClick = async () => {
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Company Name</label>
+            <label htmlFor="pending-edit-1" className="block text-sm font-medium text-foreground">Company Name</label>
             <select
+              id="pending-edit-1"
               value={companyOptions.includes(editedData.companyName) ? editedData.companyName : ""}
               onChange={(e) => handleFieldChange("companyName", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select company</option>
               {companyOptions.map((option) => (
@@ -3209,47 +2844,52 @@ const handleSaveClick = async () => {
             </select>
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Phone Number</label>
+            <label htmlFor="pending-edit-2" className="block text-sm font-medium text-foreground">Phone Number</label>
             <input
+              id="pending-edit-2"
               type="text"
               value={editedData.phoneNumber || ""}
               onChange={(e) => handleFieldChange("phoneNumber", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Person Name</label>
+            <label htmlFor="pending-edit-3" className="block text-sm font-medium text-foreground">Person Name</label>
             <input
+              id="pending-edit-3"
               type="text"
               value={editedData.salespersonName || ""}
               onChange={(e) => handleFieldChange("salespersonName", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Shipping Address</label>
+            <label htmlFor="pending-edit-4" className="block text-sm font-medium text-foreground">Shipping Address</label>
             <input
+              id="pending-edit-4"
               type="text"
               value={editedData.shippingAddress || ""}
               onChange={(e) => handleFieldChange("shippingAddress", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">GST Number</label>
+            <label htmlFor="pending-edit-5" className="block text-sm font-medium text-foreground">GST Number</label>
             <input
+              id="pending-edit-5"
               type="text"
               value={editedData.gstNumber || ""}
               onChange={(e) => handleFieldChange("gstNumber", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Enquiry for State</label>
+            <label htmlFor="pending-edit-6" className="block text-sm font-medium text-foreground">Enquiry for State</label>
             <select
+              id="pending-edit-6"
               value={enquiryStateOptions.includes(editedData.enquiryState) ? editedData.enquiryState : ""}
               onChange={(e) => handleFieldChange("enquiryState", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select state</option>
               {enquiryStateOptions.map((option) => (
@@ -3258,20 +2898,22 @@ const handleSaveClick = async () => {
             </select>
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Address (Billing Address)</label>
+            <label htmlFor="pending-edit-7" className="block text-sm font-medium text-foreground">Address (Billing Address)</label>
             <input
+              id="pending-edit-7"
               type="text"
               value={editedData.billingAddress || ""}
               onChange={(e) => handleFieldChange("billingAddress", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Enquiry Type</label>
+            <label htmlFor="pending-edit-8" className="block text-sm font-medium text-foreground">Enquiry Type</label>
             <select
+              id="pending-edit-8"
               value={salesTypeOptions.includes(editedData.salesType) ? editedData.salesType : ""}
               onChange={(e) => handleFieldChange("salesType", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select type</option>
               {salesTypeOptions.map((option) => (
@@ -3280,11 +2922,12 @@ const handleSaveClick = async () => {
             </select>
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Enquiry Receiver Name</label>
+            <label htmlFor="pending-edit-9" className="block text-sm font-medium text-foreground">Enquiry Receiver Name</label>
             <select
+              id="pending-edit-9"
               value={receiverNameOptions.includes(editedData.enquiryReceiverName) ? editedData.enquiryReceiverName : ""}
               onChange={(e) => handleFieldChange("enquiryReceiverName", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select receiver</option>
               {receiverNameOptions.map((option) => (
@@ -3293,11 +2936,12 @@ const handleSaveClick = async () => {
             </select>
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Enquiry Approach</label>
+            <label htmlFor="pending-edit-10" className="block text-sm font-medium text-foreground">Enquiry Approach</label>
             <select
+              id="pending-edit-10"
               value={enquiryApproachOptions.includes(editedData.enquiryApproach) ? editedData.enquiryApproach : ""}
               onChange={(e) => handleFieldChange("enquiryApproach", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select approach</option>
               {enquiryApproachOptions.map((option) => (
@@ -3306,11 +2950,12 @@ const handleSaveClick = async () => {
             </select>
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Enquiry Assign to Person</label>
+            <label htmlFor="pending-edit-11" className="block text-sm font-medium text-foreground">Enquiry Assign to Person</label>
             <select
+              id="pending-edit-11"
               value={assignToPersonOptions.includes(editedData.enquiryAssignToProject) ? editedData.enquiryAssignToProject : ""}
               onChange={(e) => handleFieldChange("enquiryAssignToProject", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select person</option>
               {assignToPersonOptions.map((option) => (
@@ -3319,11 +2964,12 @@ const handleSaveClick = async () => {
             </select>
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">SC Name</label>
+            <label htmlFor="pending-edit-12" className="block text-sm font-medium text-foreground">SC Name</label>
             <select
+              id="pending-edit-12"
               value={scNameOptions.includes(editedData.sc_name) ? editedData.sc_name : ""}
               onChange={(e) => handleFieldChange("sc_name", e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select SC name</option>
               {scNameOptions.map((option) => (
@@ -3357,17 +3003,17 @@ const handleSaveClick = async () => {
         )}
 
         <div className="space-y-4 border p-4 rounded-md">
-          <h4 className="font-medium text-sm text-gray-700">Order Status</h4>
+          <h4 className="text-sm font-semibold text-foreground">Order Status</h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label htmlFor="historyPaymentMode" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="historyPaymentMode" className="block text-sm font-medium text-foreground">
                 Payment Mode
               </label>
               <select
                 id="historyPaymentMode"
                 value={editedData.paymentMode || ""}
                 onChange={(e) => handleFieldChange("paymentMode", e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               >
                 <option value="">Select mode</option>
                 {historyPaymentModeOptions.map((option, index) => (
@@ -3377,14 +3023,14 @@ const handleSaveClick = async () => {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="historyPaymentTerms" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="historyPaymentTerms" className="block text-sm font-medium text-foreground">
                 Payment Terms
               </label>
               <select
                 id="historyPaymentTerms"
                 value={editedData.paymentTerms || ""}
                 onChange={(e) => handleFieldChange("paymentTerms", e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               >
                 <option value="">Select payment terms</option>
                 {historyPaymentTermsOptions.map((option, index) => (
@@ -3395,14 +3041,14 @@ const handleSaveClick = async () => {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="historyAcceptanceFile" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="historyAcceptanceFile" className="block text-sm font-medium text-foreground">
               Acceptance Copy
             </label>
             <input
               id="historyAcceptanceFile"
               type="file"
               onChange={handleHistoryAcceptanceFileChange}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm file:mr-3 file:rounded file:border-0 file:bg-secondary file:px-2 file:py-1 file:text-xs file:font-medium focus:border-primary focus:outline-none"
             />
             {historyAcceptanceFileError && (
               <p className="text-sm text-destructive">{historyAcceptanceFileError}</p>
@@ -3423,6 +3069,72 @@ const handleSaveClick = async () => {
           onFieldChange={handleFieldChange}
         />
       </ModalForm>
+      {confirmDialog}
+    </div>
+  );
+}
+
+function ItemDetailsDialog({ title, onClose, children }) {
+  const dialogRef = useDialogBehavior(onClose);
+  const titleId = useId();
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true"></div>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative bg-card rounded-lg shadow-lg border w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden"
+      >
+        <div className="border-b px-4 py-3 shrink-0">
+          <h2 id={titleId} className="text-base font-semibold text-foreground">
+            Item Details {title ? `— ${title}` : ""}
+          </h2>
+        </div>
+        <div className="p-4 overflow-y-auto flex-1">{children}</div>
+        <div className="border-t px-4 py-3 shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 w-full rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrackerViewDialog({ title, onClose, actions, children }) {
+  const dialogRef = useDialogBehavior(onClose);
+  const titleId = useId();
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true"></div>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative bg-card rounded-lg shadow-lg border w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden"
+      >
+        <div className="border-b px-4 py-3 shrink-0">
+          <h2 id={titleId} className="text-base font-semibold text-foreground">{title}</h2>
+        </div>
+        <div className="p-4 overflow-y-auto flex-1">{children}</div>
+        <div className="border-t px-4 py-3 flex justify-end gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            Close
+          </button>
+          {actions}
+        </div>
+      </div>
     </div>
   );
 }

@@ -56,13 +56,16 @@ function UpdateBanner() {
   if (!updateAvailable) return null
 
   return (
-    <div className="flex items-center justify-center gap-3 bg-amber-500 text-white text-sm font-medium px-4 py-2 shrink-0">
+    <div
+      role="status"
+      className="flex shrink-0 items-center justify-center gap-3 border-b border-warning/30 bg-warning/15 px-4 py-2 text-sm font-medium text-warning-foreground"
+    >
       <span>A new version of this app is available. Please refresh to get the latest updates.</span>
       <button
         onClick={() => window.location.reload()}
-        className="bg-white text-amber-700 px-3 py-1 rounded-md font-semibold hover:bg-amber-50 transition-colors"
+        className="rounded-md bg-primary px-3 py-1 font-medium text-primary-foreground transition-colors hover:bg-primary/90"
       >
-        Refresh Now
+        Refresh now
       </button>
     </div>
   )

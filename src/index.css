@@ -1,58 +1,139 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
+/*
+ * Divine design tokens (shared with IMS-Supabase).
+ * Brand: gear blue #2274B8 (primary) + lime #96CE10 (accent only, never as text on white).
+ * Palettes below are REMAPPED onto the brand so every existing indigo/violet/sky/blue/slate/gray
+ * utility already used across the app follows the brand colour without per-file edits.
+ */
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  --color-brand-50: #f0f6fc;
+  --color-brand-100: #e1edf9;
+  --color-brand-200: #c5ddf3;
+  --color-brand-300: #9cc4ea;
+  --color-brand-400: #66a5dd;
+  --color-brand-500: #3b8ad0;
+  --color-brand-600: #2274b8;
+  --color-brand-700: #1b5e98;
+  --color-brand-800: #174d7c;
+  --color-brand-900: #153f66;
+  --color-brand-950: #0d2740;
+
+  --color-indigo-50: #f0f6fc;  --color-indigo-100: #e1edf9; --color-indigo-200: #c5ddf3; --color-indigo-300: #9cc4ea;
+  --color-indigo-400: #66a5dd; --color-indigo-500: #3b8ad0; --color-indigo-600: #2274b8; --color-indigo-700: #1b5e98;
+  --color-indigo-800: #174d7c; --color-indigo-900: #153f66; --color-indigo-950: #0d2740;
+
+  --color-violet-50: #f0f6fc;  --color-violet-100: #e1edf9; --color-violet-200: #c5ddf3; --color-violet-300: #9cc4ea;
+  --color-violet-400: #66a5dd; --color-violet-500: #3b8ad0; --color-violet-600: #2274b8; --color-violet-700: #1b5e98;
+  --color-violet-800: #174d7c; --color-violet-900: #153f66; --color-violet-950: #0d2740;
+
+  --color-sky-50: #f0f6fc;  --color-sky-100: #e1edf9; --color-sky-200: #c5ddf3; --color-sky-300: #9cc4ea;
+  --color-sky-400: #66a5dd; --color-sky-500: #3b8ad0; --color-sky-600: #2274b8; --color-sky-700: #1b5e98;
+  --color-sky-800: #174d7c; --color-sky-900: #153f66; --color-sky-950: #0d2740;
+
+  --color-blue-50: #f0f6fc;  --color-blue-100: #e1edf9; --color-blue-200: #c5ddf3; --color-blue-300: #9cc4ea;
+  --color-blue-400: #66a5dd; --color-blue-500: #3b8ad0; --color-blue-600: #2274b8; --color-blue-700: #1b5e98;
+  --color-blue-800: #174d7c; --color-blue-900: #153f66; --color-blue-950: #0d2740;
+
+  /* Cool, slightly blue-tinted neutrals (slate and gray share one ramp) */
+  --color-slate-50: #f4f7fa;  --color-slate-100: #eaf0f5; --color-slate-200: #dbe3ec; --color-slate-300: #c3cedb;
+  --color-slate-400: #8a9bb0; --color-slate-500: #64748b; --color-slate-600: #4b5a6e; --color-slate-700: #3a4859;
+  --color-slate-800: #263241; --color-slate-900: #172030; --color-slate-950: #0c1320;
+  --color-gray-50: #f4f7fa;  --color-gray-100: #eaf0f5; --color-gray-200: #dbe3ec; --color-gray-300: #c3cedb;
+  --color-gray-400: #8a9bb0; --color-gray-500: #64748b; --color-gray-600: #4b5a6e; --color-gray-700: #3a4859;
+  --color-gray-800: #263241; --color-gray-900: #172030; --color-gray-950: #0c1320;
+}
+
 :root {
-  /* Brand: indigo -> violet, matching the reference UI kit's colorway,
-     adapted from a mobile fintech app to this desktop B2B CRM. */
-  --background: 0 0% 100%;
-  --foreground: 222 20% 14%;
+  --background: 208 36% 96%;
+  --foreground: 222 47% 11%;
 
   --card: 0 0% 100%;
-  --card-foreground: 222 20% 14%;
+  --card-foreground: 222 47% 11%;
   --popover: 0 0% 100%;
-  --popover-foreground: 222 20% 14%;
+  --popover-foreground: 222 47% 11%;
 
-  --primary: 243 75% 59%;        /* indigo-600 */
-  --primary-to: 262 83% 58%;     /* violet-600, gradient end for brand accents */
+  --primary: 207 69% 43%;        /* #2274B8 */
+  --primary-to: 207 69% 43%;     /* same as primary: any leftover gradient renders flat */
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 262 83% 96%;      /* pale violet tint */
-  --secondary-foreground: 243 75% 40%;
+  --secondary: 207 40% 95%;
+  --secondary-foreground: 207 69% 26%;
 
-  --muted: 220 20% 96%;
-  --muted-foreground: 220 10% 46%;
+  --muted: 207 30% 95%;
+  --muted-foreground: 215 16% 40%;
 
-  --accent: 262 83% 96%;
-  --accent-foreground: 243 75% 40%;
+  --accent: 207 70% 93%;
+  --accent-foreground: 207 69% 26%;
 
-  /* Semantic status colors -- one consistent meaning app-wide:
+  /* Semantic status colours: one meaning app-wide, always paired with text or an icon.
      success = won/converted/positive, warning = pending/in-progress,
      destructive = rejected/lost/overdue, info = neutral/informational. */
-  --success: 160 84% 32%;
+  --success: 84 75% 22%;
   --success-foreground: 0 0% 100%;
   --warning: 38 92% 50%;
   --warning-foreground: 26 83% 14%;
-  --destructive: 347 77% 50%;
+  --destructive: 0 72% 42%;
   --destructive-foreground: 0 0% 100%;
-  --info: 199 89% 48%;
+  --info: 207 69% 38%;
   --info-foreground: 0 0% 100%;
 
-  --border: 220 20% 90%;
-  --input: 220 20% 88%;
-  --ring: 243 75% 59%;
+  /* Brand lime (#96CE10): accents/indicators only */
+  --brand-lime: 78 86% 43%;
 
-  --radius: 0.75rem;
+  --border: 208 28% 87%;
+  --input: 208 24% 78%;
+  --ring: 207 69% 43%;
+
+  --radius: 0.5rem;
+}
+
+@layer base {
+  /* Tailwind v4 defaults a bare `border` to currentColor; keep the v3 behaviour (a quiet token colour) */
+  *,
+  ::before,
+  ::after,
+  ::backdrop {
+    border-color: hsl(var(--border));
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Visible keyboard focus for anything interactive that has no ring of its own */
+  :where(a, button, [role="button"], summary, [tabindex]):focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
 }
 
 @layer utilities {
+  /* Kept for existing call sites; flat now (no gradients in the design system) */
   .brand-gradient {
-    background-image: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-to)));
+    background-image: none;
+    background-color: hsl(var(--primary));
   }
   .brand-gradient-text {
-    background-image: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-to)));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    color: hsl(var(--primary));
+  }
+  /* Thin, quiet scrollbar for dialog bodies */
+  .modal-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--input)) transparent;
+  }
+  .modal-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .modal-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .modal-scrollbar::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--input));
+    border-radius: 4px;
   }
   .scrollbar-hide {
     /* IE and Edge */

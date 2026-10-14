@@ -3,6 +3,11 @@ import { useContext } from "react"
 import { AuthContext } from "../App"
 import { useLocation } from "react-router-dom"
 
+function initials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean)
+  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || "U"
+}
+
 function MainNav({ setMobileMenuOpen }) {
   const authContext = useContext(AuthContext) || {}
   const { currentUser = null, userType = null, isAdmin = () => false } = authContext
@@ -47,42 +52,43 @@ function MainNav({ setMobileMenuOpen }) {
 
   const { title, description } = getPageHeader()
   const showAdminView = (location.pathname.startsWith("/call-tracker") || location.pathname.startsWith("/enquiry-tracker")) && isAdmin && isAdmin()
+  const displayName = currentUser?.username || "User"
 
   return (
-    <header className="sticky top-0 z-40 flex h-auto min-h-[4rem] w-full items-center justify-between border-b bg-white px-4 py-2 shadow-sm">
-      <div className="flex items-center gap-4 flex-1">
+    <header className="sticky top-0 z-40 flex min-h-14 w-full items-center justify-between gap-3 border-b border-brand-200 bg-card px-4 py-2 shadow-[inset_0_2px_0_0_hsl(var(--brand-lime))] md:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
         <button
           type="button"
-          className="text-slate-500 hover:text-slate-700 focus:outline-none md:hidden"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
           onClick={() => setMobileMenuOpen(true)}
+          aria-label="Open navigation menu"
         >
-          <MenuIcon className="h-6 w-6" />
+          <MenuIcon className="h-5 w-5" />
         </button>
 
-        <div className="flex flex-col">
-          {title && <h1 className="text-xl font-bold brand-gradient-text">{title}</h1>}
-          <div className="flex items-center gap-2 mt-0.5">
-            {description && <p className="text-sm text-slate-500 hidden md:block">{description}</p>}
-            {description && showAdminView && <span className="hidden md:block text-slate-300">|</span>}
-            {showAdminView && <p className="text-success font-semibold text-xs">Admin View: Showing all data</p>}
+        <div className="min-w-0">
+          {title && <h1 className="truncate text-lg font-semibold leading-6 tracking-tight text-foreground">{title}</h1>}
+          <div className="flex items-center gap-2">
+            {description && <p className="hidden truncate text-sm text-muted-foreground md:block">{description}</p>}
+            {showAdminView && (
+              <span className="inline-flex shrink-0 items-center rounded border border-success/25 bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+                Admin view: showing all data
+              </span>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-700">
-            {currentUser?.username || "User"}
-          </span>
-          {userType && (
-            <span
-              className={`px-2.5 py-0.5 text-xs font-semibold rounded-full ${
-                userType === "admin" ? "bg-primary/10 text-primary" : "bg-slate-100 text-slate-700"
-              }`}
-            >
-              {userType}
-            </span>
-          )}
+      <div className="flex shrink-0 items-center gap-2">
+        <span
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
+          aria-hidden="true"
+        >
+          {initials(displayName)}
+        </span>
+        <div className="hidden leading-tight sm:block">
+          <p className="text-sm font-medium text-foreground">{displayName}</p>
+          {userType && <p className="text-xs capitalize text-muted-foreground">{userType}</p>}
         </div>
       </div>
     </header>

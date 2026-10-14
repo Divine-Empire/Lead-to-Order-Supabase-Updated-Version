@@ -1,12 +1,16 @@
 ﻿import { useState, useEffect, useRef, useContext, useMemo, useCallback } from "react";
-import { Search, Plus, Pencil, Trash2, RefreshCw, Eye } from "lucide-react";
+import { Plus, Pencil, Trash2, RefreshCw } from "lucide-react";
+import ColumnSelector from "../../components/ColumnSelector";
+import { FilterSearch } from "../../components/FilterBar";
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
 import supabase from "../../utils/supabase";
 import { AuthContext } from "../../App";
+import useConfirmDialog from "../../components/useConfirmDialog";
 
 function Items() {
   const { showNotification } = useContext(AuthContext) || {};
+  const { askConfirm, confirmDialog } = useConfirmDialog();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [itemsData, setItemsData] = useState([]);
@@ -197,7 +201,7 @@ function Items() {
       if (showNotification) {
         showNotification("Failed to save item: " + message, "error");
       } else {
-        alert("Failed to save item: " + message);
+        showNotification("Failed to save item: " + message, "error");
       }
       setIsLoading(false);
     }
@@ -208,7 +212,7 @@ function Items() {
       if (showNotification) showNotification("Cannot delete: this item has no uuid.", "error");
       return;
     }
-    if (window.confirm(`Are you sure you want to delete ${item.item_name}?`)) {
+    askConfirm({ title: "Delete item?", message: `Are you sure you want to delete ${item.item_name}?`, confirmText: "Delete" }, async () => {
       setIsLoading(true);
       try {
         const { data, error } = await supabase
@@ -225,14 +229,10 @@ function Items() {
         await fetchItems();
       } catch (err) {
         console.error("Error deleting item:", err);
-        if (showNotification) {
-          showNotification("Failed to delete item: " + (err.message || err), "error");
-        } else {
-          alert("Failed to delete item: " + (err.message || err));
-        }
+        if (showNotification) showNotification("Failed to delete item: " + (err.message || err), "error");
         setIsLoading(false);
       }
-    }
+    });
   }, [showNotification, fetchItems]);
 
   // Header column configuration
@@ -250,32 +250,36 @@ function Items() {
   const renderRow = useCallback((row, index) => {
     const columnCells = {
       actions: (
-        <td key="actions" className="px-6 py-4 whitespace-nowrap text-sm text-center">
+        <td key="actions" className="px-4 py-3 whitespace-nowrap text-sm text-center">
           <div className="flex items-center justify-center gap-3">
             <button
+              type="button"
               onClick={() => handleOpenModal("edit", row)}
-              className="text-info hover:text-info transition-colors"
+              className="flex h-8 w-8 items-center justify-center rounded-md text-info transition-colors hover:bg-accent"
+              aria-label={`Edit ${row.item_name}`}
               title="Edit Item"
             >
-              <Pencil size={16} />
+              <Pencil size={16} aria-hidden="true" />
             </button>
             <button
+              type="button"
               onClick={() => handleDelete(row)}
-              className="text-destructive hover:text-destructive transition-colors"
+              className="flex h-8 w-8 items-center justify-center rounded-md text-destructive transition-colors hover:bg-destructive/10"
+              aria-label={`Delete ${row.item_name}`}
               title="Delete Item"
             >
-              <Trash2 size={16} />
+              <Trash2 size={16} aria-hidden="true" />
             </button>
           </div>
         </td>
       ),
       item_name: (
-        <td key="item_name" className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900 text-center">
+        <td key="item_name" className="px-4 py-3 whitespace-nowrap text-sm font-semibold text-gray-900 text-center">
           {row.item_name}
         </td>
       ),
       item_code: (
-        <td key="item_code" className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-primary text-center">
+        <td key="item_code" className="px-4 py-3 whitespace-nowrap text-sm font-semibold text-primary text-center">
           {row.item_code ? (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary text-xs font-mono font-semibold">
               {row.item_code}
@@ -286,7 +290,7 @@ function Items() {
         </td>
       ),
       rate: (
-        <td key="rate" className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
+        <td key="rate" className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
           {row.rate !== null && row.rate !== undefined ? (
             <span>₹{Number(row.rate).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
           ) : (
@@ -295,14 +299,14 @@ function Items() {
         </td>
       ),
       description: (
-        <td key="description" className="px-6 py-4 text-sm text-gray-600 min-w-[200px] truncate max-w-xs text-center" title={row.description}>
+        <td key="description" className="px-4 py-3 text-sm text-gray-600 min-w-[200px] truncate max-w-xs text-center" title={row.description}>
           {row.description || <span className="text-gray-400 font-normal italic">-</span>}
         </td>
       )
     };
 
     return (
-      <tr key={row.uuid || index} className="hover:bg-primary/30 transition-colors border-b border-gray-100 last:border-0">
+      <tr key={row.uuid || index}>
         {visibleHeaders.map(col => columnCells[col.key])}
       </tr>
     );
@@ -310,7 +314,7 @@ function Items() {
 
   const renderCard = useCallback((item, index) => {
     return (
-      <div key={item.uuid || index} className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+      <div key={item.uuid || index} className="bg-card p-4 rounded-lg border">
         <div className="flex justify-between items-start mb-2">
           <div className="flex flex-col">
             <span className="font-semibold text-gray-800">{item.item_name}</span>
@@ -329,115 +333,82 @@ function Items() {
             {item.description}
           </div>
         )}
-        <div className="flex justify-end gap-4 mt-2 pt-2 border-t border-gray-100">
-          <button onClick={() => handleOpenModal("edit", item)} className="text-info" title="Edit"><Pencil size={16} /></button>
-          <button onClick={() => handleDelete(item)} className="text-destructive" title="Delete"><Trash2 size={16} /></button>
+        <div className="flex justify-end gap-2 mt-2 pt-2 border-t">
+          <button type="button" onClick={() => handleOpenModal("edit", item)} className="flex h-8 w-8 items-center justify-center rounded-md text-info hover:bg-accent" aria-label={`Edit ${item.item_name}`}><Pencil size={16} aria-hidden="true" /></button>
+          <button type="button" onClick={() => handleDelete(item)} className="flex h-8 w-8 items-center justify-center rounded-md text-destructive hover:bg-destructive/10" aria-label={`Delete ${item.item_name}`}><Trash2 size={16} aria-hidden="true" /></button>
         </div>
       </div>
     );
   }, [handleOpenModal, handleDelete]);
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0">
+    <div className="flex-1 flex flex-col h-full min-h-0 gap-3">
       {/* Top Filter & Controls Section */}
-      <div className="flex flex-col gap-3 mb-3 bg-white shrink-0 p-1">
-        <div className="flex flex-wrap items-center gap-2 shrink-0 pb-1 w-full">
-          {/* Title / Label */}
-          <div className="text-lg font-bold text-gray-800 shrink-0 mr-2 border-r border-gray-200 pr-4">
-            Items Master
-          </div>
+      <div className="flex flex-wrap items-center gap-2 shrink-0 w-full">
+        <h2 className="mr-2 text-base font-semibold text-foreground shrink-0">Items Master</h2>
 
-          {/* Search Bar */}
-          <div className="relative flex-1 min-w-[180px] max-w-[280px]">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className="h-4 w-4 text-gray-400" />
-            </div>
-            <input
-              type="text"
-              placeholder="Search items by name, code, rate..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary block pl-10 h-9"
+        <FilterSearch
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search items by name, code, rate..."
+          className="max-w-[320px]"
+        />
+
+        <div className="flex items-center gap-2 shrink-0 ml-auto">
+          {searchQuery && (
+            <button
+              type="button"
+              className="h-9 px-3 text-sm font-medium text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-md transition-colors shrink-0"
+              onClick={() => { setSearchQuery(""); setCurrentPage(1); }}
+            >
+              Clear Filter
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={fetchItems}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-input bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="Refresh items"
+            title="Refresh Items"
+          >
+            <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} aria-hidden="true" />
+          </button>
+
+          {/* Column visibility */}
+          <div ref={columnToggleRef}>
+            <ColumnSelector
+              idPrefix="items-col"
+              options={allHeaders}
+              visible={Object.fromEntries(allHeaders.map((col) => [col.key, !hiddenColumns.includes(col.key)]))}
+              onToggle={(key) =>
+                setHiddenColumns((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
+              }
+              onSelectAll={() =>
+                setHiddenColumns(hiddenColumns.length === 0 ? allHeaders.map((col) => col.key) : [])
+              }
+              open={showColumnToggle}
+              onOpenChange={setShowColumnToggle}
             />
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex items-center gap-2 shrink-0 ml-auto">
-            {searchQuery && (
-              <button
-                className="px-3 h-9 text-sm text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-md transition-colors shrink-0"
-                onClick={() => { setSearchQuery(""); setCurrentPage(1); }}
-              >
-                Clear Filter
-              </button>
-            )}
-
-            <button
-              onClick={fetchItems}
-              className="px-3 h-9 bg-white border border-gray-300 rounded-md shadow-sm text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors"
-              title="Refresh Items"
-            >
-              <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} />
-            </button>
-
-            {/* Column Visibility Toggle Button & Popover */}
-            <div className="relative" ref={columnToggleRef}>
-              <button
-                type="button"
-                onClick={() => setShowColumnToggle(prev => !prev)}
-                className="px-3 h-9 bg-white border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors flex items-center gap-2"
-                title="Toggle Column Visibility"
-              >
-                <Eye size={16} />
-                <span>Columns</span>
-              </button>
-
-              {showColumnToggle && (
-                <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded-lg shadow-xl z-50 p-2 max-h-80 overflow-y-auto">
-                  <div className="text-xs font-bold text-gray-500 uppercase px-2 py-1 border-b border-gray-100 flex justify-between items-center mb-1">
-                    <span>Visible Columns</span>
-                    <button 
-                      onClick={() => setHiddenColumns([])}
-                      className="text-[11px] text-primary hover:underline capitalize font-normal"
-                    >
-                      Show All
-                    </button>
-                  </div>
-                  {allHeaders.map(col => (
-                    <label key={col.key} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded text-xs font-medium text-gray-700 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={!hiddenColumns.includes(col.key)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setHiddenColumns(hiddenColumns.filter(k => k !== col.key));
-                          } else {
-                            setHiddenColumns([...hiddenColumns, col.key]);
-                          }
-                        }}
-                        className="rounded text-primary focus:ring-primary h-3.5 w-3.5"
-                      />
-                      {col.label}
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <button
-              onClick={() => handleOpenModal("add")}
-              className="px-3 h-9 bg-primary hover:opacity-90 text-white rounded-md shadow-sm transition-colors flex items-center gap-2"
-            >
-              <Plus size={16} />
-              <span className="font-medium text-sm">Add Item</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => handleOpenModal("add")}
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <Plus size={16} aria-hidden="true" />
+            Add Item
+          </button>
         </div>
       </div>
 
       {/* Main Table Area */}
       <div className="flex-1 min-h-0 overflow-hidden relative">
         <DataTable
+          ariaLabel="Items"
+          emptyTitle="No items found"
+          emptyDescription="Add an item or adjust your search."
           headers={headers}
           data={itemsData}
           renderRow={renderRow}
@@ -462,53 +433,58 @@ function Items() {
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2 col-span-1 md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700">Item Name *</label>
+            <label htmlFor="item-field-1" className="block text-sm font-medium text-foreground">Item Name *</label>
             <input
+              id="item-field-1"
               type="text"
               required
               placeholder="e.g. Solar Panel 400W"
               value={formData.item_name}
               onChange={(e) => setFormData({ ...formData, item_name: e.target.value })}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Item Code</label>
+            <label htmlFor="item-field-2" className="block text-sm font-medium text-foreground">Item Code</label>
             <input
+              id="item-field-2"
               type="text"
               placeholder="e.g. ITM-001"
               value={formData.item_code}
               onChange={(e) => setFormData({ ...formData, item_code: e.target.value })}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
 
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Rate (₹)</label>
+            <label htmlFor="item-field-3" className="block text-sm font-medium text-foreground">Rate (₹)</label>
             <input
+              id="item-field-3"
               type="number"
               step="0.01"
               min="0"
               placeholder="e.g. 1500.00"
               value={formData.rate}
               onChange={(e) => setFormData({ ...formData, rate: e.target.value })}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
 
           <div className="space-y-2 col-span-1 md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700">Description</label>
+            <label htmlFor="item-field-4" className="block text-sm font-medium text-foreground">Description</label>
             <textarea
+              id="item-field-4"
               rows={3}
               placeholder="Enter additional details or specifications..."
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+              className="w-full rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none resize-none"
             />
           </div>
         </div>
       </ModalForm>
+      {confirmDialog}
     </div>
   );
 }

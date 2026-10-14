@@ -1,6 +1,10 @@
 import React, { useState, useRef } from 'react';
 
-const DragScrollTable = ({ children, className = "" }) => {
+/**
+ * Horizontally/vertically scrolling container with mouse drag-to-scroll on desktop.
+ * It is keyboard focusable (arrow keys scroll) and announced as a labelled region.
+ */
+const DragScrollTable = ({ children, className = "", ariaLabel = "Scrollable table" }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [startX, setStartX] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -24,21 +28,24 @@ const DragScrollTable = ({ children, className = "" }) => {
 
   const handleMouseMove = (e) => {
     if (!isDragging) return;
-    
-    // Only prevent default if we are actually dragging a significant amount 
+
+    // Only prevent default if we are actually dragging a significant amount
     // and not trying to scroll vertically. However, on mobile, native scroll is better.
     // So we'll check if it's a touch-capable device and avoid interfering.
     if (window.matchMedia("(pointer: coarse)").matches) return;
 
     e.preventDefault();
     const x = e.pageX - containerRef.current.offsetLeft;
-    const walk = (x - startX) * 2; 
+    const walk = (x - startX) * 2;
     containerRef.current.scrollLeft = scrollLeft - walk;
   };
 
   return (
     <div
       ref={containerRef}
+      role="region"
+      aria-label={ariaLabel}
+      tabIndex={0}
       onMouseDown={(e) => {
         if (window.matchMedia("(pointer: coarse)").matches) return;
         handleMouseDown(e);

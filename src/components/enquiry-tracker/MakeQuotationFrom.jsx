@@ -194,7 +194,7 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
               type="text"
               placeholder="En-001"
               value={enquiryNo}
-              className="w-full p-2 border border-gray-300 rounded-md bg-gray-100"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none bg-secondary text-muted-foreground"
               readOnly
             />
           </div>
@@ -210,7 +210,7 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
               placeholder="001"
               value={formData.sendQuotationNo}
               onChange={handleChange}
-              className="w-full p-2 border border-gray-300 rounded-md bg-gray-100"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none bg-secondary text-muted-foreground"
               readOnly
               required
             />
@@ -225,7 +225,7 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
               name="quotationSharedBy"
               value={formData.quotationSharedBy}
               onChange={handleChange}
-              className="w-full p-2 border border-gray-300 rounded-md"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               required
             >
               <option value="">Select person</option>
@@ -244,7 +244,7 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
               name="quotationNumber"
               value={formData.quotationNumber}
               onChange={handleChange}
-              className="w-full p-2 border border-gray-300 rounded-md"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               required
             >
               <option value="">Select quotation number</option>
@@ -267,7 +267,7 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
               placeholder="₹10,000"
               value={formData.valueWithoutTax}
               onChange={handleChange}
-              className="w-full p-2 border border-gray-300 rounded-md"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               required
             />
           </div>
@@ -283,7 +283,7 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
               placeholder="₹11,800"
               value={formData.valueWithTax}
               onChange={handleChange}
-              className="w-full p-2 border border-gray-300 rounded-md"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               required
             />
           </div>
@@ -294,15 +294,15 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
             Quotation Upload <span className="text-destructive">*</span>
           </label>
           <div className="flex items-center justify-center w-full">
-            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
+            <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-input border-dashed rounded-lg cursor-pointer bg-secondary hover:bg-accent">
               <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                <svg className="w-8 h-8 mb-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
+                <svg className="w-8 h-8 mb-4 text-muted-foreground" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
                   <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"/>
                 </svg>
-                <p className="mb-2 text-sm text-gray-500">
+                <p className="mb-2 text-sm text-muted-foreground">
                   <span className="font-semibold">Click to upload</span> or drag and drop
                 </p>
-                <p className="text-xs text-gray-500">PDF, Word, Excel, or image files (MAX. 10MB)</p>
+                <p className="text-xs text-muted-foreground">PDF, Word, Excel, or image files (MAX. 10MB)</p>
               </div>
               <input
                 id="quotationFile"
@@ -318,7 +318,7 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
             <p className="mt-1 text-sm text-destructive">{fileError}</p>
           )}
           {formData.quotationFile && (
-            <div className="flex items-center mt-2 p-2 bg-gray-50 rounded-md">
+            <div className="flex items-center mt-2 p-2 bg-secondary rounded-md">
               <svg className="w-5 h-5 mr-2 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
@@ -366,7 +366,7 @@ function MakeQuotationForm({ enquiryNo, formData, onFieldChange }) {
             value={formData.remarks}
             onChange={handleChange}
             rows="4"
-            className="w-full p-2 border border-gray-300 rounded-md"
+            className="w-full min-h-[72px] rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none"
           ></textarea>
         </div>
       </div>

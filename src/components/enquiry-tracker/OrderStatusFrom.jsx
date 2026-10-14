@@ -312,12 +312,12 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
 
   return (
     <div className="space-y-6 border p-4 rounded-md">
-      <h3 className="text-lg font-medium">Order Status</h3>
-      <hr className="border-gray-200" />
+      <h3 className="text-base font-semibold text-foreground">Order Status</h3>
+      <hr className="" />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <label htmlFor="orderStatusQuotationNumber" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="orderStatusQuotationNumber" className="block text-sm font-medium text-foreground">
             Quotation Number
            <span className="text-destructive">*</span></label>
           {isLoadingQuotations ? (
@@ -325,7 +325,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
               <input
                 id="orderStatusQuotationNumber"
                 name="orderStatusQuotationNumber"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Loading quotation numbers..."
                 value={formData.orderStatusQuotationNumber || ""}
                 onChange={handleChange}
@@ -338,7 +338,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             <select
               id="orderStatusQuotationNumber"
               name="orderStatusQuotationNumber"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               value={formData.orderStatusQuotationNumber || ""}
               onChange={handleChange}
               required
@@ -352,7 +352,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             <input
               id="orderStatusQuotationNumber"
               name="orderStatusQuotationNumber"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               placeholder="Enter quotation number"
               value={formData.orderStatusQuotationNumber || ""}
               onChange={handleChange}
@@ -367,12 +367,12 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
           )}
           {enquiryNo && quotationNumbers.length === 0 && !isLoadingQuotations && (
-            <div className="text-xs text-orange-500 mt-1">No matching quotations found for enquiry #{enquiryNo}</div>
+            <div className="text-xs text-warning-foreground mt-1">No matching quotations found for enquiry #{enquiryNo}</div>
           )}
         </div>
       </div>
-      <div className="space-y-2">
-        <label className="block text-sm font-medium text-gray-700">Is Order Received? Status <span className="text-destructive">*</span></label>
+      <div role="group" aria-labelledby="grp-order-received" className="space-y-2">
+        <span id="grp-order-received" className="block text-sm font-medium text-foreground">Is Order Received? Status <span className="text-destructive">*</span></span>
         <div className="space-y-1">
           <div className="flex items-center space-x-2">
             <input
@@ -382,10 +382,10 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
               value="yes"
               checked={orderStatus === "yes"}
               onChange={() => handleStatusChange("yes")}
-              className="h-4 w-4 text-primary focus:ring-primary"
+              className="h-4 w-4 accent-primary"
               required={!orderStatus}
             />
-            <label htmlFor="order-yes" className="text-sm text-gray-700">
+            <label htmlFor="order-yes" className="text-sm text-foreground">
               YES
             </label>
           </div>
@@ -397,9 +397,9 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
               value="no"
               checked={orderStatus === "no"}
               onChange={() => handleStatusChange("no")}
-              className="h-4 w-4 text-primary focus:ring-primary"
+              className="h-4 w-4 accent-primary"
             />
-            <label htmlFor="order-no" className="text-sm text-gray-700">
+            <label htmlFor="order-no" className="text-sm text-foreground">
               NO
             </label>
           </div>
@@ -412,14 +412,14 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
 
           {/* Items Display Section */}
           {isLoadingItems ? (
-            <div className="p-4 bg-gray-50 rounded-md">
+            <div className="p-4 bg-secondary rounded-md">
               <p className="text-sm text-gray-500">Loading items from quotation...</p>
             </div>
           ) : quotationItems.length > 0 ? (
             <div className="space-y-3 p-4 bg-info/10 rounded-md border border-info/30">
               <h5 className="font-medium text-info">Items from Quotation</h5>
               <div className="overflow-x-auto">
-                <table className="min-w-full bg-white rounded-md overflow-hidden">
+                <table className="min-w-full bg-card rounded-md overflow-hidden">
                   <thead className="bg-info/10">
                     <tr>
                       <th className="px-4 py-2 text-left text-sm font-medium text-info">#</th>
@@ -430,9 +430,9 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
                   <tbody>
                     {quotationItems.map((item, index) => (
                       <tr key={item.id} className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                        <td className="px-4 py-2 text-sm text-gray-700">{index + 1}</td>
-                        <td className="px-4 py-2 text-sm text-gray-700">{item.name}</td>
-                        <td className="px-4 py-2 text-sm text-gray-700">{item.qty}</td>
+                        <td className="px-4 py-2 text-sm text-foreground">{index + 1}</td>
+                        <td className="px-4 py-2 text-sm text-foreground">{item.name}</td>
+                        <td className="px-4 py-2 text-sm text-foreground">{item.qty}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -451,13 +451,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label htmlFor="approvedBy" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="approvedBy" className="block text-sm font-medium text-foreground">
                 Approve By <span className="text-destructive">*</span>
               </label>
               <select
                 id="approvedBy"
                 name="approvedBy"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.approvedBy || ""}
                 onChange={handleChange}
                 required
@@ -470,13 +470,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="acceptanceVia" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="acceptanceVia" className="block text-sm font-medium text-foreground">
                 Acceptance Via
                <span className="text-destructive">*</span></label>
               <select
                 id="acceptanceVia"
                 name="acceptanceVia"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.acceptanceVia || ""}
                 onChange={handleChange}
                 required
@@ -489,13 +489,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="paymentMode" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="paymentMode" className="block text-sm font-medium text-foreground">
                 Payment Mode
                <span className="text-destructive">*</span></label>
               <select
                 id="paymentMode"
                 name="paymentMode"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.paymentMode || ""}
                 onChange={handleChange}
                 required
@@ -508,13 +508,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="destination" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="destination" className="block text-sm font-medium text-foreground">
                 Destination <span className="text-destructive">*</span>
               </label>
               <input
                 id="destination"
                 name="destination"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter destination"
                 value={formData.destination || ""}
                 onChange={handleChange}
@@ -523,13 +523,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="poNumber" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="poNumber" className="block text-sm font-medium text-foreground">
                 PO Number <span className="text-destructive">*</span>
               </label>
               <input
                 id="poNumber"
                 name="poNumber"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter PO number"
                 value={formData.poNumber || ""}
                 onChange={handleChange}
@@ -538,13 +538,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="paymentTerms" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="paymentTerms" className="block text-sm font-medium text-foreground">
                 Payment Terms
                <span className="text-destructive">*</span></label>
               <select
                 id="paymentTerms"
                 name="paymentTerms"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.paymentTerms || ""}
                 onChange={handleChange}
                 required
@@ -557,13 +557,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="transportMode" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="transportMode" className="block text-sm font-medium text-foreground">
                 Transport Mode <span className="text-destructive">*</span>
               </label>
               <select
                 id="transportMode"
                 name="transportMode"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.transportMode || ""}
                 onChange={handleChange}
                 required
@@ -576,7 +576,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="orderLocation" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="orderLocation" className="block text-sm font-medium text-foreground">
                 Order Location <span className="text-destructive">*</span>
               </label>
               {/* Value kept in its exact case (unlike the selects above) --
@@ -585,7 +585,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
               <select
                 id="orderLocation"
                 name="orderLocation"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.orderLocation || ""}
                 onChange={handleChange}
                 required
@@ -598,13 +598,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="creditDays" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="creditDays" className="block text-sm font-medium text-foreground">
                 Credit Days
               </label>
               <select
                 id="creditDays"
                 name="creditDays"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.creditDays || ""}
                 onChange={handleChange}
               >
@@ -616,7 +616,7 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="creditLimit" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="creditLimit" className="block text-sm font-medium text-foreground">
                 Credit Limit
               </label>
               <input
@@ -626,20 +626,20 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
                 id="creditLimit"
                 name="creditLimit"
                 placeholder="Enter credit limit"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.creditLimit || ""}
                 onChange={handleChange}
               />
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="conveyedForRegistration" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="conveyedForRegistration" className="block text-sm font-medium text-foreground">
                 CONVEYED FOR REGISTRATION FORM <span className="text-destructive">*</span>
               </label>
               <select
                 id="conveyedForRegistration"
                 name="conveyedForRegistration"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.conveyedForRegistration || ""}
                 onChange={handleChange}
                 required
@@ -653,13 +653,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="warranty" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="warranty" className="block text-sm font-medium text-foreground">
               Warranty <span className="text-destructive">*</span>
             </label>
             <select
               id="warranty"
               name="warranty"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               value={formData.warranty || formData.orderVideo || ""}
               onChange={handleChange}
               required
@@ -671,14 +671,14 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="acceptanceFile" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="acceptanceFile" className="block text-sm font-medium text-foreground">
               Acceptance File Upload <span className="text-destructive">*</span>
             </label>
             <input
               id="acceptanceFile"
               name="acceptanceFile"
               type="file"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               onChange={handleFileChange}
               required={!formData.acceptanceFile}
             />
@@ -688,13 +688,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="orderRemark" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="orderRemark" className="block text-sm font-medium text-foreground">
               REMARK <span className="text-destructive">*</span>
             </label>
             <textarea
               id="orderRemark"
               name="orderRemark"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full min-h-[72px] rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none"
               placeholder="Enter remarks"
               value={formData.orderRemark || ""}
               onChange={handleChange}
@@ -709,14 +709,14 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           <h4 className="font-medium">Order Lost Details</h4>
 
           <div className="space-y-2">
-            <label htmlFor="apologyVideo" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="apologyVideo" className="block text-sm font-medium text-foreground">
               Order Lost Apology Video
             </label>
             <input
               id="apologyVideo"
               name="apologyVideo"
               type="file"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               onChange={handleFileChange}
             />
             {orderVideoError && (
@@ -725,13 +725,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="reasonStatus" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="reasonStatus" className="block text-sm font-medium text-foreground">
               If No then get relevant reason Status
              <span className="text-destructive">*</span></label>
             <select
               id="reasonStatus"
               name="reasonStatus"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               value={formData.reasonStatus || ""}
               onChange={handleChange}
               required
@@ -745,13 +745,13 @@ function OrderStatusForm({ formData, onFieldChange, enquiryNo, activeTab }) {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="reasonRemark" className="block text-sm font-medium text-gray-700">
+            <label htmlFor="reasonRemark" className="block text-sm font-medium text-foreground">
               If No then get relevant reason Remark <span className="text-destructive">*</span>
             </label>
             <textarea
               id="reasonRemark"
               name="reasonRemark"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full min-h-[72px] rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none"
               placeholder="Enter reason remarks"
               value={formData.reasonRemark || ""}
               onChange={handleChange}

@@ -19,8 +19,8 @@ const SearchableDropdown = ({
   onAdd, 
   placeholder = "Select option...", 
   className = "",
-  height = "h-[30px] md:h-[34px]",
-  rounded = "rounded",
+  height = "h-9",
+  rounded = "rounded-md",
   isMulti = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -60,6 +60,10 @@ const SearchableDropdown = ({
     }
     return value === optValue;
   };
+
+  const hasValue = isMulti
+    ? Array.isArray(value) && value.length > 0
+    : value !== undefined && value !== null && value !== '';
 
   const hasAddButton = !!onAdd;
   const totalItemCount = filteredOptions.length + (hasAddButton ? 1 : 0);
@@ -237,42 +241,47 @@ const SearchableDropdown = ({
         ref={triggerRef}
         type="button"
         onClick={handleToggle}
-        className={`w-full bg-gray-50 border border-gray-200 ${rounded} px-2 py-1 flex justify-between items-center cursor-pointer hover:border-sky-500 ${height} shadow-sm group outline-none focus:ring-2 focus:ring-sky-500/20`}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        className={`w-full border ${hasValue ? "border-brand-300 bg-brand-50" : "border-input bg-card"} ${rounded} px-3 py-1 flex justify-between items-center cursor-pointer hover:border-primary/60 ${height} group outline-none focus-visible:ring-2 focus-visible:ring-ring/30`}
       >
-        <span className={`text-sm truncate ${(isMulti ? (value && value.length > 0) : (selectedOption && selectedOption.value !== '' || value)) ? 'text-gray-900 font-medium' : 'text-gray-400 font-medium'}`}>
+        <span className={`text-sm truncate ${(isMulti ? (value && value.length > 0) : (selectedOption && selectedOption.value !== '' || value)) ? 'text-foreground' : 'text-muted-foreground'}`}>
           {getTriggerText()}
         </span>
         <ChevronDown
           size={14}
-          className={`text-gray-400 group-hover:text-sky-500 ${isOpen ? 'rotate-180' : ''}`}
+          className={`text-muted-foreground transition-transform group-hover:text-primary ${isOpen ? 'rotate-180' : ''}`}
         />
       </button>
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className={`absolute left-0 right-0 ${openUp ? 'bottom-full mb-1' : 'top-full mt-1'} bg-white border border-gray-200 rounded shadow-2xl z-[150] overflow-hidden min-w-[180px]`}>
+        <div className={`absolute left-0 right-0 ${openUp ? 'bottom-full mb-1' : 'top-full mt-1'} bg-popover border rounded-md shadow-lg z-[150] overflow-hidden min-w-[180px]`}>
           {/* Search Box */}
-          <div className="p-1.5 border-b border-gray-100 bg-gray-50 flex gap-1.5 items-center">
+          <div className="p-1.5 border-b bg-secondary flex gap-1.5 items-center">
             <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-[7px] text-gray-400" size={10} />
+              <Search className="absolute left-2.5 top-2.5 text-muted-foreground" size={14} aria-hidden="true" />
               <input
                 ref={searchInputRef}
                 type="text"
                 placeholder="Filter..."
+                aria-label="Filter options"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onClick={(e) => e.stopPropagation()}
-                className="w-full bg-white border border-gray-200 rounded pl-7 pr-2 py-1 text-sm focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/20 shadow-inner"
+                className="h-8 w-full rounded-md border border-input bg-card pl-8 pr-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-ring/30"
               />
             </div>
           </div>
 
           {/* Options List */}
-          <div className="max-h-52 overflow-y-auto py-1 scrollbar-hide" ref={listRef}>
+          <div className="max-h-52 overflow-y-auto py-1 scrollbar-hide" ref={listRef} role="listbox" aria-multiselectable={isMulti || undefined}>
             {filteredOptions.length > 0 ? (
               filteredOptions.map((opt, idx) => (
                 <div
                   key={opt.value}
+                  role="option"
+                  aria-selected={isSelected(opt.value)}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -294,36 +303,36 @@ const SearchableDropdown = ({
                     }
                   }}
                   className={`px-3 py-1.5 text-sm cursor-pointer flex justify-between items-center transition-colors group ${
-                    isSelected(opt.value) ? 'bg-slate-50/50' : ''
+                    isSelected(opt.value) ? 'bg-accent/40' : ''
                   } ${
                     focusedIndex === idx 
-                      ? 'bg-sky-100 text-sky-900 font-bold' 
-                      : 'hover:bg-slate-50'
+                      ? 'bg-accent text-accent-foreground font-medium' 
+                      : 'hover:bg-accent/60'
                   }`}
                 >
                   <div className="flex items-center gap-2 flex-1 min-w-0">
                     {isMulti ? (
                       isSelected(opt.value) ? (
-                        <CheckSquare size={14} className="text-sky-600 flex-shrink-0" />
+                        <CheckSquare size={14} className="text-primary flex-shrink-0" />
                       ) : (
-                        <Square size={14} className="text-gray-300 flex-shrink-0" />
+                        <Square size={14} className="text-muted-foreground/60 flex-shrink-0" />
                       )
                     ) : (
                       isSelected(opt.value) && (
-                        <Check size={12} className="text-sky-600 flex-shrink-0" />
+                        <Check size={12} className="text-primary flex-shrink-0" />
                       )
                     )}
-                    <span className="truncate text-[#0a3161] font-medium">{opt.label}</span>
+                    <span className="truncate text-foreground">{opt.label}</span>
                   </div>
                   {opt.count !== undefined && (
-                    <span className="text-gray-500 text-xs pl-2 font-medium shrink-0">
+                    <span className="text-muted-foreground text-xs pl-2 tabular-nums shrink-0">
                       ({opt.count})
                     </span>
                   )}
                 </div>
               ))
             ) : (
-              <div className="px-3 py-4 text-xs text-center text-gray-400 italic font-medium uppercase tracking-tight">
+              <div className="px-3 py-4 text-sm text-center text-muted-foreground">
                 No matching results found
               </div>
             )}
@@ -345,14 +354,14 @@ const SearchableDropdown = ({
                 onAdd();
                 setIsOpen(false);
               }}
-              className={`w-full border-t border-gray-100 px-3 py-2 text-sky-600 transition-all flex items-center justify-center gap-2 bg-white active:bg-sky-100 ${
+              className={`w-full border-t px-3 py-2 text-primary transition-colors flex items-center justify-center gap-2 bg-popover active:bg-accent ${
                 focusedIndex === filteredOptions.length 
-                  ? 'bg-sky-100 font-bold' 
-                  : 'hover:bg-sky-50'
+                  ? 'bg-accent font-medium' 
+                  : 'hover:bg-accent/60'
               }`}
             >
-              <Plus size={14} strokeWidth={3} />
-              <span className="text-xs font-black uppercase tracking-widest">Add New</span>
+              <Plus size={14} aria-hidden="true" />
+              <span className="text-sm font-medium">Add new</span>
             </button>
           )}
         </div>

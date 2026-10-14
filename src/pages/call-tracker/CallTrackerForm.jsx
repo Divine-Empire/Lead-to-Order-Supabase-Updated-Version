@@ -524,24 +524,24 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
   }
 
   return (
-    <div className="container mx-auto max-w-4xl py-2">
-      <div className="bg-white rounded-lg shadow border border-slate-200 overflow-hidden">
-        <div className="px-3 py-2 border-b border-slate-100">
-          <h2 className="text-base font-bold text-slate-800">Lead Follow-Up</h2>
-          <p className="text-[11px] text-slate-500">
+    <div className="mx-auto w-full max-w-4xl py-2">
+      <div className="bg-card rounded-lg border overflow-hidden">
+        <div className="px-4 py-3 border-b">
+          <h2 className="text-base font-semibold text-foreground">Lead Follow-Up</h2>
+          <p className="text-xs text-muted-foreground">
             Record details of the follow-up call
-            {activeLeadId && <span className="font-medium text-warning-foreground"> for Lead #{activeLeadId}</span>}
+            {activeLeadId && <span className="font-medium text-foreground"> for Lead #{activeLeadId}</span>}
           </p>
         </div>
         <form onSubmit={handleSubmit}>
-          <div className="p-2 space-y-3">
+          <div className="p-4 space-y-4">
             <div className="space-y-2">
-              <label htmlFor="enquiryNo" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="enquiryNo" className="block text-sm font-medium text-foreground">
                 Lead No.
                 <span className="text-destructive">*</span></label>
               <input
                 id="enquiryNo"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="LD-001"
                 value={formData.leadNo}
                 onChange={handleChange}
@@ -550,11 +550,11 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="customerFeedback" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="customerFeedback" className="block text-sm font-medium text-foreground">
                 What did the customer say ? <span className="text-destructive">*</span></label>
               <select
                 id="customerFeedback"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={formData.customerFeedback || ""}
                 onChange={handleChange}
                 required
@@ -570,13 +570,13 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
 
             {formData.customerFeedback === "Other" && (
               <div className="space-y-2">
-                <label htmlFor="otherRemarks" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="otherRemarks" className="block text-sm font-medium text-foreground">
                   Other Remarks
                   <span className="text-destructive">*</span></label>
                 <input
                   type="text"
                   id="otherRemarks"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   placeholder="Enter remarks for Other"
                   value={formData.otherRemarks || ""}
                   onChange={handleChange}
@@ -587,7 +587,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
 
             {salesType === "NBD" && (
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700">Lead Status <span className="text-destructive">*</span>
+                <label className="block text-sm font-medium text-foreground">Lead Status <span className="text-destructive">*</span>
                 </label>
                 <div className="space-y-1">
                   <div className="flex items-center space-x-2">
@@ -598,10 +598,10 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                       value="hot"
                       checked={leadStatus === "Relevant"}
                       onChange={() => setLeadStatus("Relevant")}
-                      className="h-4 w-4 text-destructive focus:ring-destructive"
+                      className="h-4 w-4 accent-primary"
                       required={salesType === "NBD"}
                     />
-                    <label htmlFor="hot" className="text-sm text-gray-700">
+                    <label htmlFor="hot" className="text-sm text-foreground">
                       Relevant
                     </label>
                   </div>
@@ -613,10 +613,10 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                       value="warm"
                       checked={leadStatus === "Not Relevant"}
                       onChange={() => setLeadStatus("Not Relevant")}
-                      className="h-4 w-4 text-warning-foreground focus:ring-primary"
+                      className="h-4 w-4 accent-primary"
                       required={salesType === "NBD"}
                     />
-                    <label htmlFor="warm" className="text-sm text-gray-700">
+                    <label htmlFor="warm" className="text-sm text-foreground">
                       Not Relevant
                     </label>
                   </div>
@@ -625,7 +625,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
             )}
 
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Enquiry Received Status <span className="text-destructive">*</span></label>
+              <label className="block text-sm font-medium text-foreground">Enquiry Received Status <span className="text-destructive">*</span></label>
               <div className="space-y-1">
                 <div className="flex items-center space-x-2">
                   <input
@@ -635,10 +635,10 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                     value="yes"
                     checked={enquiryStatus === "yes"}
                     onChange={() => setEnquiryStatus("yes")}
-                    className="h-4 w-4 text-warning-foreground focus:ring-primary"
+                    className="h-4 w-4 accent-primary"
                     required
                   />
-                  <label htmlFor="yes" className="text-sm text-gray-700">
+                  <label htmlFor="yes" className="text-sm text-foreground">
                     Yes
                   </label>
                 </div>
@@ -650,10 +650,10 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                     value="expected"
                     checked={enquiryStatus === "expected"}
                     onChange={() => setEnquiryStatus("expected")}
-                    className="h-4 w-4 text-warning-foreground focus:ring-primary"
+                    className="h-4 w-4 accent-primary"
                     required
                   />
-                  <label htmlFor="expected" className="text-sm text-gray-700">
+                  <label htmlFor="expected" className="text-sm text-foreground">
                     Expected
                   </label>
                 </div>
@@ -665,10 +665,10 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                     value="not-interested"
                     checked={enquiryStatus === "not-interested"}
                     onChange={() => setEnquiryStatus("not-interested")}
-                    className="h-4 w-4 text-warning-foreground focus:ring-primary"
+                    className="h-4 w-4 accent-primary"
                     required
                   />
-                  <label htmlFor="not-interested" className="text-sm text-gray-700">
+                  <label htmlFor="not-interested" className="text-sm text-foreground">
                     Not Interested
                   </label>
                 </div>
@@ -678,14 +678,14 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
             {enquiryStatus === "expected" && (
               <div className="space-y-4 border p-4 rounded-md">
                 <div className="space-y-2">
-                  <label htmlFor="nextAction" className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="nextAction" className="block text-sm font-medium text-foreground">
                     Next Action
                     <span className="text-destructive">*</span></label>
                   <input
                     id="nextAction"
                     value={formData.nextAction || ""}
                     onChange={handleChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                     placeholder="Enter next action"
                     required
                   />
@@ -693,7 +693,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label htmlFor="nextCallDate" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="nextCallDate" className="block text-sm font-medium text-foreground">
                       Next Call Date
                       <span className="text-destructive">*</span></label>
                     <input
@@ -701,13 +701,13 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                       type="date"
                       value={formData.nextCallDate || ""}
                       onChange={handleChange}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       required
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="nextCallTime" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="nextCallTime" className="block text-sm font-medium text-foreground">
                       Next Call Time
                       <span className="text-destructive">*</span></label>
                     <input
@@ -715,7 +715,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                       type="time"
                       value={formData.nextCallTime || ""}
                       onChange={handleChange}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       required
                     />
                   </div>
@@ -725,17 +725,17 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
 
             {enquiryStatus === "yes" && (
               <div className="space-y-6 border p-4 rounded-md">
-                <h3 className="text-lg font-medium">Enquiry Details</h3>
-                <hr className="border-gray-200" />
+                <h3 className="text-base font-semibold text-foreground">Enquiry Details</h3>
+                <hr />
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label htmlFor="leadSource" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="leadSource" className="block text-sm font-medium text-foreground">
                       Enquiry Source
                       <span className="text-destructive">*</span></label>
                     <select
                       id="leadSource"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={leadSource}
                       onChange={(e) => handleSourceChange(e.target.value)}
                       required
@@ -750,13 +750,13 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="companyName" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="companyName" className="block text-sm font-medium text-foreground">
                       Company Name
                       <span className="text-destructive">*</span></label>
                     <input
                       list="companyOptions"
                       id="companyName"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={companyName}
                       onChange={(e) => handleCompanyChange(e.target.value)}
                       required
@@ -769,12 +769,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="phoneNumber" className="block text-sm font-medium text-foreground">
                       Phone Number
                       <span className="text-destructive">*</span></label>
                     <input
                       id="phoneNumber"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       placeholder="Enter phone number"
                       value={phoneNumber}
                       onChange={(e) => setPhoneNumber(e.target.value)}
@@ -783,12 +783,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="salesPersonName" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="salesPersonName" className="block text-sm font-medium text-foreground">
                       Person Name
                       <span className="text-destructive">*</span></label>
                     <input
                       id="salesPersonName"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       placeholder="Enter person name"
                       value={salesPersonName}
                       onChange={(e) => setSalesPersonName(e.target.value)}
@@ -797,12 +797,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="location" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="location" className="block text-sm font-medium text-foreground">
                       Billing Address
                       <span className="text-destructive">*</span></label>
                     <input
                       id="location"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       placeholder="Enter billing address"
                       value={billingLocation}
                       onChange={(e) => setBillingLocation(e.target.value)}
@@ -811,13 +811,13 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="emailAddress" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="emailAddress" className="block text-sm font-medium text-foreground">
                       Email Address
                     </label>
                     <input
                       id="emailAddress"
                       type="email"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       placeholder="Enter email address"
                       value={emailAddress}
                       onChange={(e) => setEmailAddress(e.target.value)}
@@ -825,12 +825,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="shippingAddress" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="shippingAddress" className="block text-sm font-medium text-foreground">
                       Shipping Address
                       <span className="text-destructive">*</span></label>
                     <input
                       id="shippingAddress"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       placeholder="Enter shipping address"
                       value={shippingAddress}
                       onChange={(e) => setShippingAddress(e.target.value)}
@@ -839,12 +839,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="enquiryReceiverName" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="enquiryReceiverName" className="block text-sm font-medium text-foreground">
                       Enquiry Receiver Name
                       <span className="text-destructive">*</span></label>
                     <select
                       id="enquiryReceiverName"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={enquiryReceiverName}
                       onChange={(e) => setEnquiryReceiverName(e.target.value)}
                       required
@@ -859,12 +859,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="enquiryAssignToProject" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="enquiryAssignToProject" className="block text-sm font-medium text-foreground">
                       Enquiry Assign to Person
                       <span className="text-destructive">*</span></label>
                     <select
                       id="enquiryAssignToProject"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={enquiryAssignToProject}
                       onChange={(e) => setEnquiryAssignToProject(e.target.value)}
                       required
@@ -879,12 +879,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="gstNumber" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="gstNumber" className="block text-sm font-medium text-foreground">
                       GST Number
                       <span className="text-destructive">*</span></label>
                     <input
                       id="gstNumber"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       placeholder="Enter GST number"
                       value={gstNumber}
                       onChange={(e) => setGstNumber(e.target.value)}
@@ -893,13 +893,13 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="enquiryDate" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="enquiryDate" className="block text-sm font-medium text-foreground">
                       Enquiry Received Date
                       <span className="text-destructive">*</span></label>
                     <input
                       id="enquiryDate"
                       type="date"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={enquiryDate}
                       onChange={(e) => setEnquiryDate(e.target.value)}
                       required
@@ -907,12 +907,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="enquiryState" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="enquiryState" className="block text-sm font-medium text-foreground">
                       Enquiry for State
                       <span className="text-destructive">*</span></label>
                     <select
                       id="enquiryState"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={enquiryState}
                       onChange={(e) => setEnquiryState(e.target.value)}
                       required
@@ -927,12 +927,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="projectName" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="projectName" className="block text-sm font-medium text-foreground">
                       NOB
                       <span className="text-destructive">*</span></label>
                     <select
                       id="projectName"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={projectName}
                       onChange={(e) => setProjectName(e.target.value)}
                       required
@@ -947,12 +947,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="salesType" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="salesType" className="block text-sm font-medium text-foreground">
                       Enquiry Type
                       <span className="text-destructive">*</span></label>
                     <select
                       id="salesType"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={salesType}
                       onChange={(e) => setSalesType(e.target.value)}
                       required
@@ -967,12 +967,12 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="enquiryApproach" className="block text-sm font-medium text-gray-700">
+                    <label htmlFor="enquiryApproach" className="block text-sm font-medium text-foreground">
                       Enquiry Approach
                       <span className="text-destructive">*</span></label>
                     <select
                       id="enquiryApproach"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={enquiryApproach}
                       onChange={(e) => setEnquiryApproach(e.target.value)}
                       required
@@ -994,7 +994,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                     <button
                       type="button"
                       onClick={addItem}
-                      className="px-3 py-1 text-xs border border-warning/30 text-warning-foreground hover:bg-warning/5 rounded-md"
+                      className="h-8 px-3 text-xs font-medium border border-primary/30 text-primary hover:bg-accent hover:text-accent-foreground rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={items.length >= 300}
                     >
                       + Add Item ({items.length}/300)
@@ -1004,7 +1004,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   {items.map((item, index) => (
                     <div key={item.id} className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
                       <div className="md:col-span-6 space-y-2">
-                        <label htmlFor={`itemName-${item.id}`} className="block text-sm font-medium text-gray-700">
+                        <label htmlFor={`itemName-${item.id}`} className="block text-sm font-medium text-foreground">
                           Item Name {index + 1}
                           <span className="text-destructive">*</span>
                         </label>
@@ -1012,7 +1012,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                           <input
                             list={`item-options-${item.id}`}
                             id={`itemName-${item.id}`}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                            className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                             value={item.name}
                             onChange={(e) => updateItem(item.id, "name", e.target.value)}
                             required
@@ -1027,13 +1027,13 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                       </div>
 
                       <div className="md:col-span-5 space-y-2">
-                        <label htmlFor={`quantity-${item.id}`} className="block text-sm font-medium text-gray-700">
+                        <label htmlFor={`quantity-${item.id}`} className="block text-sm font-medium text-foreground">
                           Quantity
                           <span className="text-destructive">*</span>
                         </label>
                         <input
                           id={`quantity-${item.id}`}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                          className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                           placeholder="Enter quantity"
                           value={item.quantity}
                           onChange={(e) => updateItem(item.id, "quantity", e.target.value)}
@@ -1046,9 +1046,11 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                           type="button"
                           onClick={() => removeItem(item.id)}
                           disabled={items.length === 1}
-                          className="p-2 text-slate-500 hover:text-slate-700 disabled:opacity-50"
+                          aria-label={`Remove item ${index + 1}`}
+                          className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <svg
+                            aria-hidden="true"
                             xmlns="http://www.w3.org/2000/svg"
                             width="16"
                             height="16"
@@ -1071,7 +1073,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
               </div>
             )}
           </div>
-          <div className="p-6 border-t flex justify-between">
+          <div className="p-4 border-t flex justify-between">
             <button
               type="button"
               onClick={() => {
@@ -1081,14 +1083,14 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   navigate(-1)
                 }
               }}
-              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+              className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-4 py-2 brand-gradient hover:opacity-90 text-white font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+              className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting ? "Saving..." : "Submit"}
             </button>

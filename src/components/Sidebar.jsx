@@ -4,7 +4,6 @@ import { useContext, useState, useEffect } from "react"
 import { AuthContext } from "../App"
 import supabase from "../utils/supabase"
 import { fetchClosedIdSet, countOpenRows } from "../utils/pendingStatus"
-import logoSvg from "../assests/logo.jpeg"
 
 function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     const location = useLocation()
@@ -17,7 +16,6 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         itemsMaster: null
     })
 
-    const isMasterActive = location.pathname.startsWith("/master")
 
     useEffect(() => {
         const fetchCounts = async () => {
@@ -152,48 +150,37 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         fetchCounts();
     }, [location.pathname]);
 
-    // Base routes available to all users
-    const routes = [
-        {
-            href: "/",
-            label: "Dashboard",
-            icon: <HomeIcon className="h-5 w-5 mr-3" />,
-            active: location.pathname === "/",
-        },
-        {
-            href: "/leads",
-            label: "Leads",
-            icon: <UsersIcon className="h-5 w-5 mr-3" />,
-            active: location.pathname.startsWith("/leads"),
-        },
-        {
-            href: "/call-tracker",
-            label: "Call Tracker",
-            icon: <PhoneCallIcon className="h-5 w-5 mr-3" />,
-            active: location.pathname.startsWith("/call-tracker"),
-        },
-        {
-            href: "/enquiry-tracker",
-            label: "Enquiry Tracker",
-            icon: <BarChartIcon className="h-5 w-5 mr-3" />,
-            active: location.pathname.startsWith("/enquiry-tracker"),
-        },
-        {
-            href: "/quotation",
-            label: "Quotation",
-            icon: <FileTextIcon className="h-5 w-5 mr-3" />,
-            active: location.pathname.startsWith("/quotation"),
-        },
-    ]
+    // Esc closes the mobile drawer
+    useEffect(() => {
+        if (!mobileMenuOpen) return undefined
+        const onKey = (e) => { if (e.key === "Escape") setMobileMenuOpen(false) }
+        document.addEventListener("keydown", onKey)
+        return () => document.removeEventListener("keydown", onKey)
+    }, [mobileMenuOpen, setMobileMenuOpen])
 
-    // Report is visible to everyone -- admins see system-wide data, other
-    // users see data scoped to their own assigned SC.
-    routes.push({
-        href: "/report",
-        label: "Report",
-        icon: <ShieldIcon className="h-5 w-5 mr-3" />,
-        active: location.pathname.startsWith("/report"),
-    })
+    const isActive = (item) => (item.href === "/" ? location.pathname === "/" : location.pathname.startsWith(item.match || item.href))
+    const countFor = (href) =>
+        href === "/call-tracker" ? counts.callTracker : href === "/enquiry-tracker" ? counts.enquiryTracker : null
+
+    // Grouped navigation. Visibility rules are unchanged: Report is for everyone
+    // (admins see system-wide data, others their own SC's), Settings is admin-only.
+    const groups = [
+        { name: "Overview", items: [{ href: "/", label: "Dashboard", icon: HomeIcon }] },
+        {
+            name: "Sales pipeline",
+            items: [
+                { href: "/leads", label: "Leads", icon: UsersIcon },
+                { href: "/call-tracker", label: "Call Tracker", icon: PhoneCallIcon },
+                { href: "/enquiry-tracker", label: "Enquiry Tracker", icon: BarChartIcon },
+                { href: "/quotation", label: "Quotation", icon: FileTextIcon },
+            ],
+        },
+        { name: "Insights", items: [{ href: "/report", label: "Report", icon: ShieldIcon }] },
+        { name: "Data", items: [{ href: "/master/client", match: "/master", label: "Master Data", icon: DatabaseIcon }] },
+    ]
+    if (isAdmin && isAdmin()) {
+        groups.push({ name: "Admin", items: [{ href: "/setting", label: "Settings", icon: SettingsIcon }] })
+    }
 
     return (
         <>
@@ -202,92 +189,67 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                 <div
                     className="fixed inset-0 z-40 bg-black/50 md:hidden"
                     onClick={() => setMobileMenuOpen(false)}
+                    aria-hidden="true"
                 />
             )}
 
-            {/* Sidebar Component */}
             <aside
-                className={`fixed inset-y-0 left-0 z-50 w-52 transform bg-white border-r border-slate-100 text-slate-800 transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:inset-auto flex flex-col ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full"
-                    }`}
+                aria-label="Sidebar"
+                className={`fixed inset-y-0 left-0 z-50 flex w-56 shrink-0 transform flex-col border-r bg-card transition-transform duration-300 ease-in-out md:static md:inset-auto md:translate-x-0 2xl:w-60 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full"}`}
             >
-                <div className="flex h-16 items-center justify-start border-b border-slate-100 px-4">
-                    <Link to="/" className="flex items-center" onClick={() => setMobileMenuOpen(false)}>
-                        <div className="flex flex-row items-center gap-2">
-                            <img src={logoSvg} alt="Divine" className="h-9 w-auto object-contain" />
-                            <span className="text-lg font-bold brand-gradient-text">
-                                Divine
-                            </span>
+                <div className="flex h-14 shrink-0 items-center border-b px-4">
+                    <Link to="/" className="flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
+                        <img src="/divine-logo.svg" alt="Divine" className="h-8 w-auto shrink-0" />
+                        <div className="leading-tight">
+                            <p className="text-sm font-semibold">Divine</p>
+                            <p className="text-xs text-muted-foreground">Lead to Order</p>
                         </div>
                     </Link>
                 </div>
 
-                <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
-                    {routes.map((route) => (
-                        <Link
-                            key={route.href}
-                            to={route.href}
-                            onClick={() => setMobileMenuOpen(false)}
-                            className={`flex items-center justify-between rounded-lg px-2.5 py-2 text-xs font-medium transition-all duration-200 ${route.active
-                                ? "brand-gradient text-white shadow-md shadow-primary/20"
-                                : "text-slate-600 hover:bg-primary/5 hover:text-primary"
-                                }`}
-                        >
-                            <div className="flex items-center truncate">
-                                {route.icon}
-                                <span className="truncate">{route.label}</span>
-                            </div>
-                            {route.href === "/call-tracker" && counts.callTracker !== null && (
-                                <span className={`px-1.5 py-0.5 text-[11px] font-bold rounded-full shrink-0 ${route.active ? "bg-white text-primary" : "bg-primary/10 text-primary"}`}>
-                                    {counts.callTracker}
-                                </span>
-                            )}
-                            {route.href === "/enquiry-tracker" && counts.enquiryTracker !== null && (
-                                <span className={`px-1.5 py-0.5 text-[11px] font-bold rounded-full shrink-0 ${route.active ? "bg-white text-primary" : "bg-primary/10 text-primary"}`}>
-                                    {counts.enquiryTracker}
-                                </span>
-                            )}
-                        </Link>
+                <nav aria-label="Main" className="flex flex-1 flex-col gap-4 overflow-y-auto px-2 py-3">
+                    {groups.map((group) => (
+                        <div key={group.name} className="flex flex-col gap-0.5">
+                            <p className="px-3 pb-1 text-xs font-medium text-muted-foreground">{group.name}</p>
+                            {group.items.map((item) => {
+                                const active = isActive(item)
+                                const Icon = item.icon
+                                const count = countFor(item.href)
+                                return (
+                                    <Link
+                                        key={item.href}
+                                        to={item.href}
+                                        onClick={() => setMobileMenuOpen(false)}
+                                        aria-current={active ? "page" : undefined}
+                                        className={`relative flex h-9 items-center justify-between rounded-md px-3 text-sm transition-colors ${
+                                            active
+                                                ? "bg-accent font-medium text-foreground before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-brand-lime"
+                                                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                                        }`}
+                                    >
+                                        <span className="flex min-w-0 items-center gap-3">
+                                            <Icon className={`h-4 w-4 shrink-0 ${active ? "text-primary" : ""}`} />
+                                            <span className="truncate">{item.label}</span>
+                                        </span>
+                                        {count !== null && (
+                                            <span className="ml-2 shrink-0 rounded bg-primary/10 px-1.5 text-xs font-semibold tabular-nums text-brand-700">
+                                                {count}
+                                            </span>
+                                        )}
+                                    </Link>
+                                )
+                            })}
+                        </div>
                     ))}
-
-                    {/* Master Data Link */}
-                    <Link
-                        to="/master/client"
-                        onClick={() => setMobileMenuOpen(false)}
-                        className={`flex items-center rounded-lg px-2.5 py-2 text-xs font-medium transition-all duration-200 ${
-                            isMasterActive
-                                ? "bg-primary/10 text-primary font-semibold shadow-sm border border-primary/10"
-                                : "text-slate-600 hover:bg-primary/5 hover:text-primary hover:shadow-sm"
-                        }`}
-                    >
-                        <DatabaseIcon className="h-5 w-5 mr-2.5 shrink-0" />
-                        <span className="truncate">Master Data</span>
-                    </Link>
-                        {/* Settings for Admins (below Master) */}
-                        {isAdmin && isAdmin() && (
-                            <div className="pt-2 mt-2 border-t border-slate-100">
-                                <Link
-                                    to="/setting"
-                                    onClick={() => setMobileMenuOpen(false)}
-                                    className={`flex items-center rounded-lg px-2.5 py-2 text-xs font-medium transition-all duration-200 ${
-                                        location.pathname.startsWith("/setting")
-                                            ? "bg-primary/10 text-primary font-semibold shadow-sm border border-primary/10"
-                                            : "text-slate-600 hover:bg-primary/5 hover:text-primary hover:shadow-sm"
-                                    }`}
-                                >
-                                    <SettingsIcon className="h-5 w-5 mr-2.5 shrink-0" />
-                                    <span className="truncate">Settings</span>
-                                </Link>
-                            </div>
-                        )}
                 </nav>
 
-                <div className="border-t border-slate-100 p-3 space-y-2">
+                <div className="shrink-0 border-t p-2">
                     <button
                         onClick={logout}
-                        className="flex w-full items-center justify-center rounded-lg px-3 py-2 text-xs font-bold text-white bg-destructive hover:bg-destructive/90 transition-all duration-200 shadow-sm hover:shadow-md"
+                        className="flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                     >
-                        <LogoutIcon className="h-4 w-4 mr-2 shrink-0" />
-                        <span>Logout</span>
+                        <LogoutIcon className="h-4 w-4 shrink-0" />
+                        <span>Log out</span>
                     </button>
                 </div>
             </aside>

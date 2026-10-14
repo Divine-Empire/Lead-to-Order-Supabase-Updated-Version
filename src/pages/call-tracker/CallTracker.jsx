@@ -9,7 +9,9 @@ import supabase from "../../utils/supabase";
 import SearchableDropdown from "../../components/SearchableDropdown";
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
+import useDialogBehavior from "../../components/useDialogBehavior";
 import CallTrackerFilter from "../../components/call-tracker/CallTrackerFilter";
+import useConfirmDialog from "../../components/useConfirmDialog";
 import NewCallTracker from "./CallTrackerForm";
 import { formatDateToDDMMYYYY } from "../../utils/formatDate";
 import {
@@ -20,13 +22,18 @@ import {
   fetchCallTrackerDateFilterCounts,
   fetchCallTrackerScNameOptions,
   fetchPendingFilterOptionsSource,
+  assignLeadsForToday,
+  fetchTodayAssignments,
+  fetchCalledTodayLeadIds,
 } from "./queries";
+import { getPersistedDateFilter, setPersistedDateFilter } from "./dateFilterPersistence";
 
 function CallTracker() {
   const authContext = useContext(AuthContext) || {};
   const {
     currentUser = null,
     isAdmin = () => false,
+    showNotification = () => {},
     getUsernamesToFilter = () => []
   } = authContext;
   const queryClient = useQueryClient();
@@ -35,7 +42,7 @@ function CallTracker() {
   // Fixed at 100 -- Pending/History each lazy-load a single capped page of
   // 100 rows (see usePendingCallTracker/useHistoryCallTracker's `enabled`
   // gating in queries.js), no page-N navigation.
-  const [itemsPerPage] = useState(100);
+  const [itemsPerPage, setItemsPerPage] = useState(100);
   // Lightweight source for CallTrackerFilter's Company/Person/Phone dropdown
   // options -- separate from the true paginated pendingFollowUps below, since
   // those options need to span every pending row, not just the current page.
@@ -60,7 +67,14 @@ function CallTracker() {
   // Today's Calls/Older Calls for History) -- must be an array, since
   // CallTrackerFilter.jsx renders it via SearchableDropdown's isMulti mode
   // and calls setDateFilter with an array of selected values.
-  const [dateFilter, setDateFilter] = useState([]);
+  // Initialized from (and kept in sync with) a module-level store so the
+  // selection survives navigating away and back -- see
+  // dateFilterPersistence.js for why a plain useState isn't enough here.
+  const [dateFilter, setDateFilterState] = useState(getPersistedDateFilter);
+  const setDateFilter = (value) => {
+    setDateFilterState(value);
+    setPersistedDateFilter(value);
+  };
   const [scNameFilter,] = useState([]);
   const [startDate,] = useState("");
   const [endDate,] = useState("");
@@ -88,6 +102,18 @@ function CallTracker() {
 
   const [historyCounts, setHistoryCounts] = useState({ today: 0, older: 0 });
   const [, setFilteredCount] = useState(0);
+
+  // Admin-only bulk "assign for today" -- see Database/08_call_tracker_today_assignments.sql.
+  // selectedLeadIds is checkbox selection (admin-only, Pending tab); todayAssignments
+  // is the full (RBAC-scoped) set of today's assignment rows, keyed by lead_id, so both
+  // admin and the owning SC can see the "Assigned for Today" badge; calledTodayIds is a
+  // separate small targeted lookup (not derived from the current page) so the badge/stat
+  // stay correct even for assigned leads that aren't on the currently-loaded page.
+  const [selectedLeadIds, setSelectedLeadIds] = useState(() => new Set());
+  const [todayAssignments, setTodayAssignments] = useState(() => new Map());
+  const [calledTodayIds, setCalledTodayIds] = useState(() => new Set());
+  const [isAssigning, setIsAssigning] = useState(false);
+  const { askConfirm, confirmDialog } = useConfirmDialog();
 
   const [visibleColumns, setVisibleColumns] = useState({
     timestamp: true,
@@ -364,13 +390,55 @@ function CallTracker() {
 
       if (error) throw error;
 
-      alert("Updated successfully!");
+      showNotification("Updated successfully!", "success");
       fetchFollowUpData(currentPage, false, searchTerm);
       setIsPendingEditModalOpen(false);
       setPendingEditedData({});
     } catch (error) {
       console.error("Error updating lead:", error);
-      alert(`Error updating: ${error.message}`);
+      showNotification(`Error updating: ${error.message}`, "error");
+    }
+  };
+
+  const toggleLeadSelected = (id) => {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllOnPage = (pageIds) => {
+    setSelectedLeadIds((prev) => {
+      const allSelected = pageIds.length > 0 && pageIds.every((id) => prev.has(id));
+      if (allSelected) {
+        const next = new Set(prev);
+        pageIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      return new Set([...prev, ...pageIds]);
+    });
+  };
+
+  // Each selected lead is assigned to ITS OWN existing assignedTo/sc_name
+  // (no SC picker anywhere in this flow) -- so this never changes RBAC
+  // scoping, it only adds a same-day "Assigned for Today" tag.
+  const handleAssignForToday = async () => {
+    const rows = pendingFollowUps.filter((f) => selectedLeadIds.has(f.id));
+    if (rows.length === 0) return;
+    setIsAssigning(true);
+    try {
+      await assignLeadsForToday(rows, currentUser?.fullName || currentUser?.username || "Admin");
+      setSelectedLeadIds(new Set());
+      const assignedRows = await fetchTodayAssignments({ isAdmin: isAdmin(), usernamesToFilter });
+      setTodayAssignments(new Map(assignedRows.map((r) => [r.lead_id, r])));
+      setCalledTodayIds(await fetchCalledTodayLeadIds(assignedRows.map((r) => r.lead_id)));
+    } catch (error) {
+      console.error("Error assigning leads for today:", error);
+      showNotification(`Error assigning leads: ${error.message}`, "error");
+    } finally {
+      setIsAssigning(false);
     }
   };
 
@@ -503,6 +571,34 @@ function CallTracker() {
     queryClient.invalidateQueries({ queryKey: ["callTracker"] });
   }, [queryClient]);
 
+  // Admin-only, Pending tab. lto_leads.id has ON DELETE CASCADE to
+  // lto_call_tracker_for_leads, lto_enquiry_tracker_for_leads,
+  // lto_lead_contacts, lto_lead_items, and lto_call_tracker_today_assignments
+  // -- so one delete here removes every trace of the lead, from BOTH the
+  // Pending view (call_tracker_pending_view) and History
+  // (call_tracker_history_view), which are built from exactly those tables.
+  const handleDeleteLead = (followUp) => {
+    askConfirm(
+      {
+        title: "Delete this lead?",
+        message: `This permanently deletes "${followUp.companyName || followUp.leadId}" (${followUp.leadId}) and all of its call history, follow-ups, and today's assignment, if any -- it will disappear from both Pending and History. This cannot be undone.`,
+        confirmText: "Delete",
+        destructive: true,
+      },
+      async () => {
+        try {
+          const { error } = await supabase.from("lto_leads").delete().eq("id", followUp.id);
+          if (error) throw error;
+          showNotification(`Lead ${followUp.leadId} deleted.`, "success");
+          fetchFollowUpData();
+        } catch (error) {
+          console.error("Error deleting lead:", error);
+          showNotification(`Error deleting lead: ${error.message}`, "error");
+        }
+      }
+    );
+  };
+
   // Filter-dropdown option lists (SC name, company/person/phone) and the
   // tab/filter-type/date badge counts -- lightweight count-only or
   // narrow-column queries, independent of whatever's on the current page.
@@ -542,10 +638,32 @@ function CallTracker() {
   }, [activeTab, debouncedSearchTerm, scNameFilter, currentUser]);
 
   // Reset to page 1 whenever any filter (including the debounced search
-  // term, once it settles) changes.
+  // term, once it settles) changes. Selection is cleared alongside it since
+  // a filter/tab change swaps out which rows are even visible.
   useEffect(() => {
     setCurrentPage(1);
+    setSelectedLeadIds(new Set());
   }, [activeTab, dateFilter, scNameFilter, filterType, currentUser, debouncedSearchTerm]);
+
+  // Today's assignment overlay (admin AND the owning SC both see it) --
+  // refetched whenever a new pending page loads, so it reflects any
+  // just-made assignment. calledTodayIds is looked up separately (not
+  // derived from pendingFollowUps) so it stays correct for assigned leads
+  // that aren't on the currently-loaded page.
+  useEffect(() => {
+    if (activeTab !== "pending") return;
+    let cancelled = false;
+    fetchTodayAssignments({ isAdmin: isAdmin(), usernamesToFilter }).then(async (rows) => {
+      if (cancelled) return;
+      setTodayAssignments(new Map(rows.map((r) => [r.lead_id, r])));
+      const calledIds = await fetchCalledTodayLeadIds(rows.map((r) => r.lead_id));
+      if (!cancelled) setCalledTodayIds(calledIds);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, pendingQuery.data, currentUser]);
 
   const handleColumnToggle = (columnKey) => {
     setVisibleColumns((prev) => ({
@@ -619,7 +737,7 @@ function CallTracker() {
     switch (columnKey) {
       case "actions":
         return (
-          <td key="actions" className="sticky left-0 z-10 bg-white px-3 sm:px-4 py-3 sm:py-4 text-sm font-medium border-r border-gray-200">
+          <td key="actions" className={`sticky ${isAdmin() ? "left-10" : "left-0"} z-10 bg-card px-3 sm:px-4 py-3 sm:py-4 text-sm font-medium border-r`}>
             <div className="flex flex-col sm:flex-row space-y-1 sm:space-y-0 sm:space-x-2">
               <button
                 onClick={() => setSelectedCallNowRow(followUp)}
@@ -635,6 +753,14 @@ function CallTracker() {
                   Edit
                 </button>
               )}
+              {isAdmin() && (
+                <button
+                  onClick={() => handleDeleteLead(followUp)}
+                  className="w-full sm:w-auto px-2 sm:px-3 py-1 text-xs border border-destructive/30 text-destructive hover:bg-destructive/5 rounded-md transition-colors whitespace-nowrap"
+                >
+                  Delete
+                </button>
+              )}
             </div>
           </td>
         );
@@ -644,6 +770,7 @@ function CallTracker() {
             <button
               onClick={() => handleViewDetails(followUp)}
               title="View Details"
+              aria-label={`View details for ${followUp.leadId}`}
               className="p-1.5 text-primary hover:text-primary hover:bg-primary/5 rounded-full transition-colors inline-flex items-center justify-center"
             >
               <EyeIcon className="h-4 w-4" />
@@ -698,12 +825,7 @@ function CallTracker() {
               />
             ) : (
               <span
-                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${followUp.priority === "High"
-                  ? "bg-destructive/10 text-destructive"
-                  : followUp.priority === "Medium"
-                    ? "bg-primary/10 text-primary"
-                    : "bg-slate-100 text-slate-800"
-                  }`}
+                className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-brand-100 text-brand-700"
               >
                 {followUp.leadSource}
               </span>
@@ -824,7 +946,9 @@ function CallTracker() {
             {followUp.receiverName || <span className="text-gray-300">—</span>}
           </td>
         );
-      case "assignedTo":
+      case "assignedTo": {
+        const todayAssignment = todayAssignments.get(followUp.id);
+        const calledToday = calledTodayIds.has(followUp.id);
         return (
           <td key="assignedTo" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
             {editingRowId === index ? (
@@ -835,10 +959,22 @@ function CallTracker() {
                 className="px-2 py-1 border border-gray-300 rounded text-sm w-full focus:outline-none focus:ring-1 focus:ring-primary bg-white"
               />
             ) : (
-              followUp.assignedTo
+              <div className="flex flex-col items-start gap-1">
+                <span>{followUp.assignedTo}</span>
+                {todayAssignment && (
+                  <span
+                    title={`Assigned by ${todayAssignment.assigned_by}`}
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${calledToday ? "bg-success/10 text-success" : "bg-primary/10 text-primary"
+                      }`}
+                  >
+                    Assigned Today{calledToday ? " · Called" : " · Not Called Yet"}
+                  </span>
+                )}
+              </div>
             )}
           </td>
         );
+      }
       case "lastFollowUpStatus":
         return (
           <td key="lastFollowUpStatus" className="px-3 sm:px-4 py-3 sm:py-4 text-sm text-gray-500 whitespace-nowrap">
@@ -1387,7 +1523,18 @@ function CallTracker() {
   // Row mapping helpers for DataTable
   const renderPendingRow = (followUp, index) => {
     return (
-      <tr key={`${followUp.leadId}-${index}`} className="hover:bg-slate-50 transition-colors">
+      <tr key={`${followUp.leadId}-${index}`} className="">
+        {isAdmin() && (
+          <td key="select" className="sticky left-0 z-10 bg-card px-3 py-3 sm:py-4 text-center border-r">
+            <input
+              type="checkbox"
+              checked={selectedLeadIds.has(followUp.id)}
+              onChange={() => toggleLeadSelected(followUp.id)}
+              aria-label={`Select ${followUp.leadId} for today's assignment`}
+              className="h-4 w-4 cursor-pointer accent-primary"
+            />
+          </td>
+        )}
         {pendingColumnOptions.map(opt => {
           if (!pendingVisibleColumns[opt.key]) return null;
           return renderPendingCell(followUp, opt.key, index);
@@ -1398,7 +1545,7 @@ function CallTracker() {
 
   const renderHistoryRow = (followUp, index) => {
     return (
-      <tr key={`${followUp.id || index}-${index}`} className="hover:bg-slate-50 transition-colors">
+      <tr key={`${followUp.id || index}-${index}`} className="">
         {columnOptions.map(opt => {
           if (!visibleColumns[opt.key]) return null;
           return renderHistoryCell(followUp, opt.key, index);
@@ -1412,21 +1559,16 @@ function CallTracker() {
     return (
       <div
         key={`${followUp.leadId}-${index}`}
-        className="bg-white rounded-xl shadow border border-gray-100 overflow-hidden flex flex-col w-full text-left"
+        className="bg-card rounded-lg border overflow-hidden flex flex-col w-full text-left"
       >
         {/* Header Section */}
-        <div className="bg-primary/5 p-4 border-b border-gray-200">
+        <div className="bg-secondary p-4 border-b">
           <div className="flex justify-between items-center mb-2">
             <h3 className="font-bold text-gray-900 text-lg">
               {followUp.leadId}
             </h3>
             <span
-              className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${followUp.priority === "High"
-                ? "bg-destructive/10 text-destructive"
-                : followUp.priority === "Medium"
-                  ? "bg-primary/10 text-primary"
-                  : "bg-slate-100 text-slate-700"
-                }`}
+              className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-brand-100 text-brand-700"
             >
               {followUp.leadSource}
             </span>
@@ -1526,7 +1668,7 @@ function CallTracker() {
           <Link
             state={followUp.assignedTo}
             to={`/call-tracker/form?leadId=${followUp.leadId}&leadNo=${followUp.leadId}`}
-            className="w-full flex items-center justify-center px-4 py-2.5 brand-gradient text-white rounded-lg shadow hover:opacity-90 transition-all duration-200 font-semibold"
+            className="w-full flex items-center justify-center h-10 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors font-semibold"
           >
             <svg
               className="w-5 h-5 mr-2"
@@ -1553,10 +1695,10 @@ function CallTracker() {
     return (
       <div
         key={index}
-        className="bg-white rounded-xl shadow border border-gray-100 overflow-hidden flex flex-col w-full text-left"
+        className="bg-card rounded-lg border overflow-hidden flex flex-col w-full text-left"
       >
         {/* Header Section */}
-        <div className="bg-gradient-to-r from-gray-50 to-slate-50 p-4 border-b border-gray-200">
+        <div className="bg-secondary p-4 border-b">
           <div className="flex justify-between items-center mb-2">
             <h3 className="font-bold text-gray-900 text-lg">
               {followUp.leadNo}
@@ -1681,9 +1823,24 @@ function CallTracker() {
   // ─── Header builder ───────────────────────────────────────────────────────
   const getHeaders = () => {
     if (activeTab === "pending") {
-      const base = [
-        { label: "Actions", className: "sticky left-0 bg-gray-50 z-30 shadow-[1px_0_0_0_#e5e7eb] border-r border-gray-200" },
-      ];
+      const base = [];
+      if (isAdmin()) {
+        const pageIds = pendingFollowUps.map((f) => f.id);
+        const allSelectedOnPage = pageIds.length > 0 && pageIds.every((id) => selectedLeadIds.has(id));
+        base.push({
+          label: (
+            <input
+              type="checkbox"
+              checked={allSelectedOnPage}
+              onChange={() => toggleSelectAllOnPage(pageIds)}
+              aria-label="Select all pending leads on this page"
+              className="h-4 w-4 cursor-pointer accent-primary"
+            />
+          ),
+          className: "sticky left-0 z-30 bg-secondary border-r border-brand-200 w-10",
+        });
+      }
+      base.push({ label: "Actions", className: `sticky ${isAdmin() ? "left-10" : "left-0"} z-30 bg-secondary border-r border-brand-200` });
       pendingColumnOptions.forEach((opt) => {
         if (opt.key !== "actions" && pendingVisibleColumns[opt.key]) base.push(opt.label);
       });
@@ -1707,7 +1864,7 @@ function CallTracker() {
         // (no `older` key), so History picked its badge counts from the
         // wrong state, showing e.g. "Older Calls (0)" no matter how many
         // actually matched. Pick the tab-correct counts object here instead.
-        dateFilterCounts={activeTab === "history" ? historyCounts : dateFilterCounts}
+        dateFilterCounts={activeTab === "history" ? historyCounts : { ...dateFilterCounts, assignedToday: todayAssignments.size }}
         filterType={filterType}
         setFilterType={setFilterType}
         showColumnDropdown={showColumnDropdown}
@@ -1726,11 +1883,32 @@ function CallTracker() {
         pendingFollowUps={pendingOptionsSource}
       />
 
+      {activeTab === "pending" && (todayAssignments.size > 0 || (isAdmin() && selectedLeadIds.size > 0)) && (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-1 text-xs text-muted-foreground">
+          <span>
+            {todayAssignments.size > 0 && `Today: ${todayAssignments.size} assigned, ${calledTodayIds.size} called`}
+          </span>
+          {isAdmin() && selectedLeadIds.size > 0 && (
+            <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5">
+              <span className="font-medium text-foreground">{selectedLeadIds.size} selected</span>
+              <button
+                type="button"
+                onClick={handleAssignForToday}
+                disabled={isAssigning}
+                className="rounded-md bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+              >
+                {isAssigning ? "Assigning..." : `Assign ${selectedLeadIds.size} for Today`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex-1 flex flex-col min-h-0 mt-1">
         {isLoading ? (
-          <div className="p-8 text-center flex-1 flex flex-col justify-center items-center bg-white rounded-lg border border-gray-200 shadow-sm">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary/30 mb-4"></div>
-            <p className="text-slate-500">Loading follow-up data...</p>
+          <div className="p-8 text-center flex-1 flex flex-col justify-center items-center bg-card rounded-lg border" role="status">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-brand-200 border-t-primary mb-4" aria-hidden="true"></div>
+            <p className="text-muted-foreground text-sm">Loading follow-up data...</p>
           </div>
         ) : (
           <DataTable
@@ -1742,105 +1920,81 @@ function CallTracker() {
             totalPages={totalPages}
             itemsPerPage={itemsPerPage}
             totalResults={totalResults}
-            simpleFooter
+            itemsPerPageOptions={[25, 50, 100]}
+            onPageChange={(p) => setCurrentPage(Math.min(Math.max(1, p), totalPages))}
+            onItemsPerPageChange={(n) => {
+              setItemsPerPage(n);
+              setCurrentPage(1);
+            }}
+            ariaLabel={activeTab === "pending" ? "Pending follow-ups" : "Follow-up history"}
+            emptyTitle={activeTab === "pending" ? "No pending follow-ups" : "No follow-up history yet"}
+            emptyDescription="Try a different search or clear the filters."
           />
         )}
       </div>
 
+      {confirmDialog}
+
       {/* Details Modal */}
       {selectedDetailsRow && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full overflow-hidden border border-gray-100">
-            <div className="brand-gradient px-6 py-4 flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-white">Lead Details</h3>
-                <p className="text-primary/10 text-xs">{selectedDetailsRow.leadId}</p>
-              </div>
-              <button
-                onClick={() => setSelectedDetailsRow(null)}
-                className="text-white/80 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors"
-              >
-                ✕
-              </button>
-            </div>
-            
-            <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto text-sm">
-              <div>
-                <span className="text-xs font-semibold text-gray-400 block uppercase mb-2">Follow-up History</span>
-                {detailsLoading ? (
-                  <p className="text-xs text-gray-400 italic">Loading follow-up history...</p>
-                ) : detailsFollowUps.length === 0 ? (
-                  <p className="text-xs text-gray-400 italic">No follow-up calls logged yet.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {/* Oldest first -- attempt numbers read top-to-bottom the
-                        same way "Total Follow-ups" counts them, and the most
-                        recent call (matching what the table's Last Follow-up
-                        columns show) ends up last, closest to the current plan. */}
-                    {detailsFollowUps.map((attempt, idx) => (
-                      <div key={attempt.id} className="bg-gray-50 p-3 rounded-lg border border-gray-100">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-xs font-semibold text-primary">Follow-up {idx + 1}</span>
-                          <span className="text-xs text-gray-500">
-                            {formatDateToDDMMYYYY(attempt.created_at)}
-                            {attempt.sc_name ? ` · ${attempt.sc_name}` : ""}
-                          </span>
+        <LeadDetailsDialog row={selectedDetailsRow} onClose={() => setSelectedDetailsRow(null)}>
+          <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto text-sm">
+                        <div>
+                          <span className="text-xs font-semibold text-muted-foreground block mb-2">Follow-up History</span>
+                          {detailsLoading ? (
+                            <p className="text-xs text-muted-foreground italic" role="status">Loading follow-up history...</p>
+                          ) : detailsFollowUps.length === 0 ? (
+                            <p className="text-xs text-muted-foreground italic">No follow-up calls logged yet.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {/* Oldest first -- attempt numbers read top-to-bottom the
+                                  same way "Total Follow-ups" counts them, and the most
+                                  recent call (matching what the table's Last Follow-up
+                                  columns show) ends up last, closest to the current plan. */}
+                              {detailsFollowUps.map((attempt, idx) => (
+                                <div key={attempt.id} className="bg-secondary p-3 rounded-lg border">
+                                  <div className="flex items-center justify-between mb-1.5">
+                                    <span className="text-xs font-semibold text-primary">Follow-up {idx + 1}</span>
+                                    <span className="text-xs text-gray-500">
+                                      {formatDateToDDMMYYYY(attempt.created_at)}
+                                      {attempt.sc_name ? ` · ${attempt.sc_name}` : ""}
+                                    </span>
+                                  </div>
+                                  <p className="text-gray-700 text-xs leading-relaxed">
+                                    {attempt.what_did_customer_say || "No notes recorded."}
+                                  </p>
+                                  {(attempt.enquiry_received_status || attempt.next_action || attempt.next_call_date) && (
+                                    <div className="mt-1.5 pt-1.5 border-t border-gray-200 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+                                      {attempt.enquiry_received_status && <span>Status: {attempt.enquiry_received_status}</span>}
+                                      {attempt.next_action && <span>Next Action: {attempt.next_action}</span>}
+                                      {attempt.next_call_date && <span>Next Call: {formatDateToDDMMYYYY(attempt.next_call_date)}</span>}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                        <p className="text-gray-700 text-xs leading-relaxed">
-                          {attempt.what_did_customer_say || "No notes recorded."}
-                        </p>
-                        {(attempt.enquiry_received_status || attempt.next_action || attempt.next_call_date) && (
-                          <div className="mt-1.5 pt-1.5 border-t border-gray-200 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
-                            {attempt.enquiry_received_status && <span>Status: {attempt.enquiry_received_status}</span>}
-                            {attempt.next_action && <span>Next Action: {attempt.next_action}</span>}
-                            {attempt.next_call_date && <span>Next Call: {formatDateToDDMMYYYY(attempt.next_call_date)}</span>}
-                          </div>
-                        )}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-gray-50 px-6 py-3 border-t border-gray-100 flex justify-end">
-              <button
-                onClick={() => setSelectedDetailsRow(null)}
-                className="px-4 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium text-xs rounded-md transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        </LeadDetailsDialog>
       )}
 
       {/* Call Now Form Modal */}
       {selectedCallNowRow && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4 animate-in fade-in duration-200 overflow-y-auto">
-          <div className="relative bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto my-8">
-            <button
-              onClick={() => setSelectedCallNowRow(null)}
-              className="absolute top-3 right-3 z-10 p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-              title="Close"
-            >
-              ✕
-            </button>
-            <NewCallTracker
-              initialLeadId={selectedCallNowRow.leadId}
-              initialLeadNo={selectedCallNowRow.leadId}
-              isModal={true}
-              onClose={(refreshed) => {
-                setSelectedCallNowRow(null);
-                if (refreshed) {
-                  fetchFollowUpData(currentPage, false, searchTerm);
-                }
-              }}
-            />
-          </div>
-        </div>
+        <CallNowDialog onClose={() => setSelectedCallNowRow(null)}>
+          <NewCallTracker
+            initialLeadId={selectedCallNowRow.leadId}
+            initialLeadNo={selectedCallNowRow.leadId}
+            isModal={true}
+            onClose={(refreshed) => {
+              setSelectedCallNowRow(null);
+              if (refreshed) {
+                fetchFollowUpData(currentPage, false, searchTerm);
+              }
+            }}
+          />
+        </CallNowDialog>
       )}
-
 
       {/* Pending tab Edit modal -- admin-only, restricted to exactly
           Enquiry Type + Enquiry Receiver Name (see handlePendingEditSave). */}
@@ -1853,25 +2007,82 @@ function CallTracker() {
       >
         <div className="space-y-4">
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Enquiry Type</label>
+            <label htmlFor="call-edit-enquiry-type" className="block text-sm font-medium text-foreground">Enquiry Type</label>
             <input
+              id="call-edit-enquiry-type"
               type="text"
               value={pendingEditedData.enquiryType || ""}
               onChange={(e) => setPendingEditedData((prev) => ({ ...prev, enquiryType: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">Enquiry Receiver Name</label>
+            <label htmlFor="call-edit-receiver" className="block text-sm font-medium text-foreground">Enquiry Receiver Name</label>
             <input
+              id="call-edit-receiver"
               type="text"
               value={pendingEditedData.receiverName || ""}
               onChange={(e) => setPendingEditedData((prev) => ({ ...prev, receiverName: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             />
           </div>
         </div>
       </ModalForm>
+    </div>
+  );
+}
+
+function LeadDetailsDialog({ row, onClose, children }) {
+  const dialogRef = useDialogBehavior(onClose);
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-200">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Lead details"
+        className="bg-card rounded-lg shadow-lg max-w-md w-full overflow-hidden border"
+      >
+        <div className="px-4 py-3 border-b">
+          <h2 className="text-base font-semibold text-foreground">Lead Details</h2>
+          <p className="text-xs text-muted-foreground">{row.leadId}</p>
+        </div>
+        {children}
+        <div className="px-4 py-3 border-t flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CallNowDialog({ onClose, children }) {
+  const dialogRef = useDialogBehavior(onClose, { autoFocus: false });
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-200 overflow-y-auto">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Log a call"
+        className="relative bg-card rounded-lg shadow-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto my-8 border"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-3 right-3 z-10 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
+        {children}
+      </div>
     </div>
   );
 }

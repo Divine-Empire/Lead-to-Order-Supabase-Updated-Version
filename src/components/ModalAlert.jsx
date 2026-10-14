@@ -1,90 +1,82 @@
 import React from 'react';
 import { CheckCircle2, AlertCircle, HelpCircle } from 'lucide-react';
+import useDialogBehavior from './useDialogBehavior';
 
 /**
- * ModalAlert Component
- * A premium modal for success messages and action confirmations.
- * 
+ * ModalAlert: success / error messages and action confirmations.
+ *
  * @param {boolean} isOpen - Controls visibility.
  * @param {string} type - 'success', 'error', or 'confirm'.
  * @param {string} title - Main heading.
  * @param {string} message - Description text.
- * @param {Function} onConfirm - Action for 'Confirm' button.
- * @param {Function} onClose - Action for 'Cancel/OK' button.
+ * @param {Function} onConfirm - Action for the 'Confirm' button (type 'confirm').
+ * @param {Function} onClose - Action for 'Cancel' / 'OK' (also Esc).
+ * @param {string} confirmText - Label of the confirm button (default 'Confirm').
+ * @param {boolean} destructive - Styles the confirm button as destructive.
  */
-const ModalAlert = ({ 
-  isOpen, 
-  type = 'success', 
-  title, 
-  message, 
-  onConfirm, 
-  onClose 
-}) => {
-  if (!isOpen) return null;
+const TYPES = {
+  success: { icon: CheckCircle2, chip: 'bg-success/10 text-success' },
+  error: { icon: AlertCircle, chip: 'bg-destructive/10 text-destructive' },
+  confirm: { icon: HelpCircle, chip: 'bg-warning/15 text-warning-foreground' },
+};
 
-  const config = {
-    success: {
-      icon: <CheckCircle2 className="text-emerald-500" size={52} />,
-      btnColor: 'bg-emerald-600 hover:bg-emerald-700',
-      iconBg: 'bg-emerald-50',
-      shadow: 'shadow-emerald-200/50'
-    },
-    error: {
-      icon: <AlertCircle className="text-rose-500" size={52} />,
-      btnColor: 'bg-rose-600 hover:bg-rose-700',
-      iconBg: 'bg-rose-50',
-      shadow: 'shadow-rose-200/50'
-    },
-    confirm: {
-      icon: <HelpCircle className="text-amber-500" size={52} />,
-      btnColor: 'bg-amber-600 hover:bg-amber-700',
-      iconBg: 'bg-amber-50',
-      shadow: 'shadow-amber-200/50'
-    }
-  }[type] || {};
+const ModalAlertInner = ({ type = 'success', title, message, onConfirm, onClose, confirmText = 'Confirm', destructive = false }) => {
+  const dialogRef = useDialogBehavior(onClose);
+  const titleId = React.useId();
+  const descId = React.useId();
+  const { icon: Icon, chip } = TYPES[type] || TYPES.success;
+
+  const confirmClass = destructive
+    ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+    : 'bg-primary text-primary-foreground hover:bg-primary/90';
 
   return (
-    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[1000] p-4 animate-in fade-in duration-300">
-      <div 
-        className={`bg-white rounded-[2rem] p-8 w-full max-w-sm shadow-2xl ${config.shadow} animate-in zoom-in-95 duration-300 flex flex-col items-center text-center relative overflow-hidden`}
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4 animate-in fade-in duration-200">
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="bg-card rounded-lg p-6 w-full max-w-sm shadow-lg border animate-in zoom-in-95 duration-200 flex flex-col items-center text-center"
       >
-        {/* Visual Accent */}
-        <div className={`absolute top-0 left-0 right-0 h-2 ${config.btnColor}`} />
+        <span className={`mb-4 flex h-12 w-12 items-center justify-center rounded-lg ${chip}`}>
+          <Icon size={24} aria-hidden="true" />
+        </span>
 
-        <div className={`mb-6 ${config.iconBg} p-6 rounded-[2rem] flex items-center justify-center`}>
-          {config.icon}
-        </div>
-        
-        <h3 className="text-2xl font-black text-slate-800 mb-3 tracking-tight">{title}</h3>
-        <p className="text-slate-500 text-sm font-medium mb-8 leading-relaxed px-2">
+        <h3 id={titleId} className="text-lg font-semibold text-foreground mb-1">{title}</h3>
+        <p id={descId} className="text-sm text-muted-foreground mb-6 max-h-[50vh] w-full overflow-y-auto whitespace-pre-line break-words" tabIndex={0}>
           {message}
         </p>
 
-        <div className="flex gap-4 w-full">
+        <div className="flex gap-3 w-full">
           {type === 'confirm' ? (
             <>
               <button
+                type="button"
+                onClick={onClose}
+                className="h-9 flex-1 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   onConfirm();
                   onClose();
                 }}
-                className={`flex-1 text-white font-bold py-4 rounded-2xl transition-all active:scale-95 shadow-lg shadow-amber-200/50 ${config.btnColor}`}
+                className={`h-9 flex-1 rounded-md text-sm font-medium transition-colors ${confirmClass}`}
               >
-                Confirm
-              </button>
-              <button
-                onClick={onClose}
-                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-4 rounded-2xl transition-all active:scale-95"
-              >
-                Cancel
+                {confirmText}
               </button>
             </>
           ) : (
             <button
+              type="button"
               onClick={onClose}
-              className={`w-full text-white font-bold py-4 rounded-2xl transition-all active:scale-95 shadow-lg ${config.btnColor} ${config.shadow.replace('200', '300')}`}
+              className="h-9 w-full rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              Great, thanks!
+              OK
             </button>
           )}
         </div>
@@ -92,5 +84,7 @@ const ModalAlert = ({
     </div>
   );
 };
+
+const ModalAlert = (props) => (props.isOpen ? <ModalAlertInner {...props} /> : null);
 
 export default ModalAlert;

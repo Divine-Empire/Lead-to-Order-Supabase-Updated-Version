@@ -166,12 +166,12 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
 
   return (
     <div className="space-y-6 border p-4 rounded-md">
-      <h3 className="text-lg font-medium">Quotation Validation</h3>
-      <hr className="border-gray-200" />
+      <h3 className="text-base font-semibold text-foreground">Quotation Validation</h3>
+      <hr className="" />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <label htmlFor="validationQuotationNumber" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="validationQuotationNumber" className="block text-sm font-medium text-foreground">
             Quotation Number
            <span className="text-destructive">*</span></label>
           {isLoadingQuotations ? (
@@ -179,7 +179,7 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
               <input
                 id="validationQuotationNumber"
                 name="validationQuotationNumber"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Loading quotation numbers..."
                 value={formData.validationQuotationNumber || ""}
                 onChange={handleChange}
@@ -192,7 +192,7 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
             <input
               id="validationQuotationNumber"
               name="validationQuotationNumber"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
               placeholder="Enter quotation number"
               value={formData.validationQuotationNumber || ""}
               onChange={handleChange}
@@ -212,13 +212,13 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="validatorName" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="validatorName" className="block text-sm font-medium text-foreground">
             Quotation Validator Name
            <span className="text-destructive">*</span></label>
           <select
             id="validatorName"
             name="validatorName"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             value={formData.validatorName || ""}
             onChange={handleChange}
             required
@@ -232,13 +232,13 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
       </div>
 
       <div className="space-y-2">
-        <label htmlFor="sendStatus" className="block text-sm font-medium text-gray-700">
+        <label htmlFor="sendStatus" className="block text-sm font-medium text-foreground">
           Quotation Send Status
          <span className="text-destructive">*</span></label>
         <select
           id="sendStatus"
           name="sendStatus"
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+          className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
           value={formData.sendStatus || ""}
           onChange={handleChange}
           required
@@ -251,13 +251,13 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
       </div>
 
       <div className="space-y-2">
-        <label htmlFor="validationRemark" className="block text-sm font-medium text-gray-700">
+        <label htmlFor="validationRemark" className="block text-sm font-medium text-foreground">
           Quotation Validation Remark
         </label>
         <textarea
           id="validationRemark"
           name="validationRemark"
-          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+          className="w-full min-h-[72px] rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none"
           placeholder="Enter validation remarks"
           value={formData.validationRemark || ""}
           onChange={handleChange}
@@ -268,8 +268,8 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
         <h4 className="font-medium">Additional Materials Sent</h4>
 
         <div className="space-y-3">
-          <div className="flex flex-col space-y-1">
-            <label className="text-sm font-medium text-gray-700">Send FAQ Video</label>
+          <div role="group" aria-labelledby="grp-qv-1" className="flex flex-col space-y-1">
+            <span id="grp-qv-1" className="text-sm font-medium text-foreground">Send FAQ Video</span>
             <div className="flex">
               <div className="flex items-center space-x-2">
                 <input
@@ -279,9 +279,9 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="yes"
                   checked={formData.faqVideo === "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="faq-yes" className="text-sm text-gray-700">
+                <label htmlFor="faq-yes" className="text-sm text-foreground">
                   Yes
                 </label>
               </div>
@@ -293,17 +293,17 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="no"
                   checked={formData.faqVideo !== "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="faq-no" className="text-sm text-gray-700">
+                <label htmlFor="faq-no" className="text-sm text-foreground">
                   No
                 </label>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-col space-y-1">
-            <label className="text-sm font-medium text-gray-700">Send Product Video</label>
+          <div role="group" aria-labelledby="grp-qv-2" className="flex flex-col space-y-1">
+            <span id="grp-qv-2" className="text-sm font-medium text-foreground">Send Product Video</span>
             <div className="flex">
               <div className="flex items-center space-x-2">
                 <input
@@ -313,9 +313,9 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="yes"
                   checked={formData.productVideo === "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="product-video-yes" className="text-sm text-gray-700">
+                <label htmlFor="product-video-yes" className="text-sm text-foreground">
                   Yes
                 </label>
               </div>
@@ -327,17 +327,17 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="no"
                   checked={formData.productVideo !== "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="product-video-no" className="text-sm text-gray-700">
+                <label htmlFor="product-video-no" className="text-sm text-foreground">
                   No
                 </label>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-col space-y-1">
-            <label className="text-sm font-medium text-gray-700">Send Offer Video</label>
+          <div role="group" aria-labelledby="grp-qv-3" className="flex flex-col space-y-1">
+            <span id="grp-qv-3" className="text-sm font-medium text-foreground">Send Offer Video</span>
             <div className="flex">
               <div className="flex items-center space-x-2">
                 <input
@@ -347,9 +347,9 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="yes"
                   checked={formData.offerVideo === "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="offer-video-yes" className="text-sm text-gray-700">
+                <label htmlFor="offer-video-yes" className="text-sm text-foreground">
                   Yes
                 </label>
               </div>
@@ -361,17 +361,17 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="no"
                   checked={formData.offerVideo !== "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="offer-video-no" className="text-sm text-gray-700">
+                <label htmlFor="offer-video-no" className="text-sm text-foreground">
                   No
                 </label>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-col space-y-1">
-            <label className="text-sm font-medium text-gray-700">Send Product Catalog</label>
+          <div role="group" aria-labelledby="grp-qv-4" className="flex flex-col space-y-1">
+            <span id="grp-qv-4" className="text-sm font-medium text-foreground">Send Product Catalog</span>
             <div className="flex">
               <div className="flex items-center space-x-2">
                 <input
@@ -381,9 +381,9 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="yes"
                   checked={formData.productCatalog === "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="catalog-yes" className="text-sm text-gray-700">
+                <label htmlFor="catalog-yes" className="text-sm text-foreground">
                   Yes
                 </label>
               </div>
@@ -395,17 +395,17 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="no"
                   checked={formData.productCatalog !== "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="catalog-no" className="text-sm text-gray-700">
+                <label htmlFor="catalog-no" className="text-sm text-foreground">
                   No
                 </label>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-col space-y-1">
-            <label className="text-sm font-medium text-gray-700">Send Product Image</label>
+          <div role="group" aria-labelledby="grp-qv-5" className="flex flex-col space-y-1">
+            <span id="grp-qv-5" className="text-sm font-medium text-foreground">Send Product Image</span>
             <div className="flex">
               <div className="flex items-center space-x-2">
                 <input
@@ -415,9 +415,9 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="yes"
                   checked={formData.productImage === "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="image-yes" className="text-sm text-gray-700">
+                <label htmlFor="image-yes" className="text-sm text-foreground">
                   Yes
                 </label>
               </div>
@@ -429,9 +429,9 @@ function QuotationValidationForm({ formData, onFieldChange, enquiryNo }) {
                   value="no"
                   checked={formData.productImage !== "yes"}
                   onChange={handleChange}
-                  className="h-4 w-4 text-primary focus:ring-primary"
+                  className="h-4 w-4 accent-primary"
                 />
-                <label htmlFor="image-no" className="text-sm text-gray-700">
+                <label htmlFor="image-no" className="text-sm text-foreground">
                   No
                 </label>
               </div>

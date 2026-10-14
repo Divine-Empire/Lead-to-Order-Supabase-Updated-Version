@@ -7,6 +7,7 @@ import supabase from "../../utils/supabase";
 import * as XLSX from "xlsx";
 import { resolveScAndCreForNewCompany } from "../../utils/scAssignment";
 import { getStateCodeFromName } from "../../utils/gstStateCodes";
+import useDialogBehavior from "../../components/useDialogBehavior";
 
 // Generate next sequential lead numbers for bulk import
 const generateNextImportLeadNumbers = async (count) => {
@@ -49,11 +50,29 @@ const generateNextImportLeadNumbers = async (count) => {
   }
 };
 
+// Canonicalizes a free-text Sales Type cell to one of the 3 real dropdown
+// values (lto_dropdown, category "sales_type": CRR / NBD / NBD_CRR),
+// tolerating case and space/hyphen variants ("nbd crr", "NBD-CRR", etc.) --
+// mirrors Report.jsx's normalizeCategory exactly, since THAT is what later
+// buckets a lead into the SC Pipeline report's CRR/NBD_CRR/NBD columns; if
+// the two ever drift apart, a value this validator accepts could still fail
+// to classify there. Returns null for blank/unrecognized input, which bulk
+// import treats as a hard validation failure (see handleSave) rather than
+// silently inserting "" the way it used to.
+const normalizeSalesTypeValue = (raw) => {
+  const s = String(raw || "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (s === "NBD_CRR") return "NBD_CRR";
+  if (s === "CRR") return "CRR";
+  if (s === "NBD") return "NBD";
+  return null;
+};
+
 // ─── Excel Import Modal ───────────────────────────────────────────────────────
 function ExcelImportModal({ onClose, onSaved }) {
-  const [step, setStep] = useState("groupName"); // "groupName" | "preview"
-  const [groupName, setGroupName] = useState("");
-  const [groupNameError, setGroupNameError] = useState("");
+  const dialogRef = useDialogBehavior(onClose);
+  // Group Name no longer needs its own upfront step -- it's just a column
+  // on the uploaded Excel now (see COLUMN_MAP_RAW below), so a row can set
+  // its own and the modal goes straight to picking a file.
   const [importedRows, setImportedRows] = useState([]);
   const [fileName, setFileName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -94,6 +113,7 @@ function ExcelImportModal({ onClose, onSaved }) {
     "GST No": "gstNumber",
     "Additional Notes": "additionalNotes",
     "Additional Note": "additionalNotes",
+    "Group Name": "groupName",
   };
 
   const normalizeCol = (str) =>
@@ -130,15 +150,6 @@ function ExcelImportModal({ onClose, onSaved }) {
     { key: "groupName", label: "Group Name" },
   ];
 
-  const handleGroupNameNext = () => {
-    if (!groupName.trim()) {
-      setGroupNameError("Group Name is required");
-      return;
-    }
-    setGroupNameError("");
-    setStep("preview");
-  };
-
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -153,7 +164,7 @@ function ExcelImportModal({ onClose, onSaved }) {
         const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
         const mapped = rawRows.map((row) => {
-          const obj = { groupName: groupName.trim() };
+          const obj = {};
           Object.keys(row).forEach((rawHeader) => {
             const normHeader = normalizeCol(rawHeader);
             if (COLUMN_MAP[normHeader] !== undefined) {
@@ -183,6 +194,31 @@ function ExcelImportModal({ onClose, onSaved }) {
       setSaveError("No data to save. Please upload an Excel file first.");
       return;
     }
+
+    // Sales Type is required on the single-lead form (HTML `required` on
+    // its <select>) but bulk import previously had NO validation at all --
+    // a blank "Sales Type" cell silently inserted as "" (confirmed: 1184 of
+    // 1188 production lto_leads rows ended up this way), which is also why
+    // those leads could never classify into the SC Pipeline report's
+    // CRR/NBD_CRR/NBD columns. Reject the WHOLE file up front (nothing
+    // inserted) rather than a partial/inconsistent import, so the uploader
+    // can fix the file once and re-upload.
+    const invalidRows = [];
+    importedRows.forEach((row, idx) => {
+      if (!normalizeSalesTypeValue(row.salesType)) {
+        invalidRows.push({ excelRow: idx + 2, companyName: row.companyName || "(no company name)" });
+      }
+    });
+    if (invalidRows.length > 0) {
+      const preview = invalidRows.slice(0, 10).map((r) => `row ${r.excelRow} (${r.companyName})`).join(", ");
+      const more = invalidRows.length > 10 ? `, and ${invalidRows.length - 10} more` : "";
+      setSaveError(
+        `Sales Type is required for every row and must be CRR, NBD, or NBD_CRR. ` +
+        `${invalidRows.length} row(s) missing/invalid: ${preview}${more}. Fix the file and re-upload.`
+      );
+      return;
+    }
+
     setIsSaving(true);
     setSaveError("");
     try {
@@ -220,7 +256,7 @@ function ExcelImportModal({ onClose, onSaved }) {
         for (;;) {
           const { data, error: fetchErr } = await supabase
             .from("lto_client_master")
-            .select("uuid, company_name, sc_name, crm_name, company_group_name, state, state_code")
+            .select("uuid, company_name, sc_name, crm_name, company_group_name, state, state_code, sales_type")
             .range(from, from + step - 1);
           if (fetchErr) { console.error("Error fetching client_master for bulk import:", fetchErr); break; }
           if (!data || data.length === 0) break;
@@ -244,7 +280,9 @@ function ExcelImportModal({ onClose, onSaved }) {
         const ownSc = (row.scName || row.handlePerson || "").trim();
         if (ownSc) continue;
         const resolved = await resolveScAndCreForNewCompany({
-          groupName: groupName || row.groupName,
+          // row.groupName is already resolved (its own column, falling back
+          // to the Step 1 default) during the Excel-parse step above.
+          groupName: row.groupName,
           salesType: row.salesType,
           leadSource: row.source,
           nob: row.nob,
@@ -275,13 +313,17 @@ function ExcelImportModal({ onClose, onSaved }) {
           address: row.address || "",
           nob: row.nob || "",
           gst_number: row.gstNumber || "",
-          sales_type: row.salesType || "",
+          // Already validated above -- normalizeSalesTypeValue is guaranteed
+          // non-null for every row here, so this always lands exactly one of
+          // CRR/NBD/NBD_CRR rather than whatever free-text casing/spacing the
+          // uploaded file happened to use.
+          sales_type: normalizeSalesTypeValue(row.salesType),
           additional_notes: row.additionalNotes || "",
           customer_registration_form: "",
           credit_access: "",
           credit_days: null,
           credit_limit: null,
-          company_group_name: groupName || row.groupName || "",
+          company_group_name: row.groupName || "",
         };
       });
 
@@ -314,6 +356,12 @@ function ExcelImportModal({ onClose, onSaved }) {
           if (r.company_group_name && !existing.company_group_name) updatePayload.company_group_name = r.company_group_name;
           if (!existing.sc_name && r.sc_name) updatePayload.sc_name = r.sc_name;
           if (!existing.crm_name && resolved?.crmName) updatePayload.crm_name = resolved.crmName;
+          // Backfill client_master's Sales Type from this lead only when
+          // client_master itself has none yet -- never overwrite a value
+          // that's already there. (The reverse direction -- a blank lead
+          // inheriting client_master's Sales Type -- can't happen here since
+          // every row's sales_type is already validated/non-blank above.)
+          if (!existing.sales_type && r.sales_type) updatePayload.sales_type = r.sales_type;
           return supabase.from("lto_client_master").update(updatePayload).eq("uuid", existing.uuid);
         }
         return supabase.from("lto_client_master").insert([{
@@ -340,7 +388,9 @@ function ExcelImportModal({ onClose, onSaved }) {
       });
 
       showNotification(`${importedRows.length} lead(s) imported successfully!`, "success");
-      onSaved(groupName);
+      // Rows can each carry their own Group Name now, so there's no longer
+      // a single group to hand back to the main form.
+      onSaved();
       onClose();
     } catch (err) {
       console.error(err);
@@ -352,78 +402,46 @@ function ExcelImportModal({ onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true" />
       <div
-        className="relative z-10 bg-white rounded-2xl shadow-2xl w-full mx-4"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lead-import-title"
+        className="relative z-10 bg-card border rounded-lg shadow-lg w-full mx-4"
         style={{
-          maxWidth: step === "preview" ? "95vw" : "480px",
+          maxWidth: "95vw",
           maxHeight: "92vh",
           display: "flex",
           flexDirection: "column",
         }}
       >
-        <div className="px-6 py-4 border-b border-gray-100">
+        <div className="px-4 py-3 border-b">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-success to-emerald-700 flex items-center justify-center flex-shrink-0">
-                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-8 h-8 rounded-md bg-accent text-primary flex items-center justify-center flex-shrink-0">
+                <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
                 </svg>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-gray-900">Import Leads from Excel</h3>
-                {step === "preview" && (
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    Group: <span className="font-semibold text-success">{groupName}</span>
-                  </p>
-                )}
-              </div>
+              <h2 id="lead-import-title" className="text-base font-semibold text-foreground">Import Leads from Excel</h2>
             </div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors p-1 flex-shrink-0">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <button type="button" onClick={onClose} aria-label="Close" className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground flex-shrink-0">
+              <svg aria-hidden="true" className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-0 px-6 py-3 bg-gray-50 border-b border-gray-100">
-          <div className={`flex items-center gap-2 text-xs font-medium ${step === "groupName" ? "text-success" : "text-gray-400"}`}>
-            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold ${step === "groupName" ? "bg-success text-white" : "bg-success/10 text-success"}`}>1</span>
-            Group Name
-          </div>
-          <div className="w-8 h-px bg-gray-200 mx-2" />
-          <div className={`flex items-center gap-2 text-xs font-medium ${step === "preview" ? "text-success" : "text-gray-400"}`}>
-            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold ${step === "preview" ? "bg-success text-white" : "bg-gray-200 text-gray-500"}`}>2</span>
-            Preview & Save
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 min-h-[180px]">
-          {step === "groupName" ? (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-gray-700">Group Name *</label>
-                <input
-                  type="text"
-                  value={groupName}
-                  onChange={(e) => setGroupName(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-success/20 focus:border-success transition-all placeholder-gray-400 text-sm font-medium"
-                  placeholder="e.g. Indiamart Group 1"
-                />
-                {groupNameError && <p className="text-xs font-medium text-destructive">{groupNameError}</p>}
-              </div>
-              <p className="text-xs text-gray-500 leading-relaxed bg-warning/5 border border-warning/20 p-3 rounded-xl">
-                ⚠️ Every imported row will be associated with this Group Name.
-              </p>
-            </div>
-          ) : (
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-[180px]">
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5">
                   <button
+                    type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="px-4 py-2 text-xs font-bold text-white bg-slate-800 hover:bg-slate-700 rounded-lg cursor-pointer transition-colors shadow-sm"
+                    className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Select File
                   </button>
@@ -431,22 +449,23 @@ function ExcelImportModal({ onClose, onSaved }) {
                     ref={fileInputRef}
                     type="file"
                     accept=".xlsx, .xls"
+                    aria-label="Excel file"
                     className="hidden"
                     onChange={handleFileChange}
                   />
-                  <span className="text-xs text-gray-500 truncate max-w-[200px]" title={fileName}>
+                  <span className="text-xs text-muted-foreground truncate max-w-[200px]" title={fileName}>
                     {fileName || "No file chosen"}
                   </span>
                 </div>
               </div>
 
               {importedRows.length > 0 && (
-                <div className="border border-gray-100 rounded-xl overflow-hidden shadow-inner bg-gray-50/50">
+                <div className="border rounded-lg overflow-hidden bg-secondary/50">
                   <div className="overflow-x-auto max-h-[300px]">
                     <table className="w-full text-left border-collapse text-xs">
                       <thead>
-                        <tr className="bg-gray-100/80 text-gray-600 font-semibold border-b border-gray-200">
-                          <th className="px-3 py-2 text-gray-400 font-bold w-10">#</th>
+                        <tr className="bg-secondary text-foreground font-semibold border-b">
+                          <th className="px-3 py-2 text-muted-foreground font-bold w-10">#</th>
                           {DISPLAY_COLUMNS.map((col) => (
                             <th key={col.key} className="px-3 py-2 font-bold whitespace-nowrap">
                               {col.label}
@@ -458,16 +477,16 @@ function ExcelImportModal({ onClose, onSaved }) {
                         {importedRows.map((row, idx) => (
                           <tr
                             key={idx}
-                            className={`border-b border-gray-100 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50/40"} hover:bg-success/10 transition-colors`}
+                            className="border-b bg-card hover:bg-secondary transition-colors"
                           >
-                            <td className="px-3 py-2 text-gray-400 font-medium">{idx + 1}</td>
+                            <td className="px-3 py-2 text-muted-foreground font-medium">{idx + 1}</td>
                             {DISPLAY_COLUMNS.map((col) => (
                               <td
                                 key={col.key}
-                                className={`px-3 py-2 whitespace-nowrap max-w-[140px] truncate ${col.key === "groupName" ? "text-success font-semibold bg-success/10" : "text-gray-700"}`}
+                                className={`px-3 py-2 whitespace-nowrap max-w-[140px] truncate ${col.key === "groupName" ? "text-foreground font-semibold bg-accent" : "text-foreground"}`}
                                 title={row[col.key] || ""}
                               >
-                                {row[col.key] || <span className="text-gray-300">—</span>}
+                                {row[col.key] || <span className="text-muted-foreground">—</span>}
                               </td>
                             ))}
                           </tr>
@@ -479,45 +498,29 @@ function ExcelImportModal({ onClose, onSaved }) {
               )}
 
               {saveError && (
-                <div className="flex items-center gap-2 px-4 py-3 bg-destructive/10 border border-destructive/30 rounded-xl text-sm text-destructive">
+                <div className="flex items-center gap-2 px-4 py-3 bg-destructive/10 border border-destructive/30 rounded-md text-sm text-destructive" role="alert">
                   {saveError}
                 </div>
               )}
             </div>
-          )}
         </div>
 
-        <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl">
+        <div className="flex items-center justify-between px-4 py-3 border-t bg-secondary/50 rounded-b-lg">
           <button
+            type="button"
             onClick={onClose}
-            className="px-5 py-2.5 text-sm font-medium text-gray-600 border border-gray-300 rounded-xl hover:bg-gray-100 hover:border-gray-400 transition-colors"
+            className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
           >
             Cancel
           </button>
-          {step === "groupName" ? (
-            <button
-              onClick={handleGroupNameNext}
-              className="px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-success to-emerald-700 hover:opacity-90 rounded-xl transition-all shadow-md hover:shadow-lg"
-            >
-              Next →
-            </button>
-          ) : (
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setStep("groupName")}
-                className="px-4 py-2.5 text-sm font-medium text-gray-600 border border-gray-300 rounded-xl hover:bg-gray-100 transition-colors"
-              >
-                ← Back
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={isSaving || importedRows.length === 0}
-                className="px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-success to-emerald-700 hover:opacity-90 rounded-xl transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-              >
-                {isSaving ? "Saving..." : `Save ${importedRows.length > 0 ? `(${importedRows.length})` : ""} Leads`}
-              </button>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={isSaving || importedRows.length === 0}
+            className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving ? "Saving..." : `Save ${importedRows.length > 0 ? `(${importedRows.length})` : ""} Leads`}
+          </button>
         </div>
       </div>
     </div>
@@ -873,7 +876,7 @@ function Leads() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!formData.groupName || !formData.groupName.trim()) {
-      alert("Group Name is required.");
+      showNotification("Group Name is required.", "error");
       return;
     }
     setIsSubmitting(true);
@@ -885,13 +888,26 @@ function Leads() {
       //    src/utils/scAssignment.js for the group-copy vs round-robin rule.
       let assignedScName = formData.scName ? formData.scName.trim() : null;
       let assignedCrmName = null;
+      // Mutual backfill between lto_leads and lto_client_master for Sales
+      // Type: whichever side is missing it inherits from the other, neither
+      // overwrites a value that's already present. finalSalesType is what
+      // actually gets written to THIS lead; existingClientSalesType (read
+      // below, for an existing company only) is what client_master's
+      // post-insert update (further down) checks before writing back.
+      let finalSalesType = formData.salesType ? formData.salesType.trim() : "";
+      let existingClientSalesType = null;
       const compNameTrimmed = (formData.companyName || "").trim();
       if (compNameTrimmed) {
         const { data: existingClient, error: clientCheckErr } = await supabase
           .from("lto_client_master")
-          .select("uuid, company_name")
+          .select("uuid, company_name, sales_type")
           .ilike("company_name", compNameTrimmed)
           .maybeSingle();
+
+        if (!clientCheckErr && existingClient) {
+          existingClientSalesType = existingClient.sales_type ? existingClient.sales_type.trim() : "";
+          if (!finalSalesType && existingClientSalesType) finalSalesType = existingClientSalesType;
+        }
 
         if (!clientCheckErr && !existingClient) {
           const resolved = await resolveScAndCreForNewCompany({
@@ -917,7 +933,7 @@ function Leads() {
             crm_name: assignedCrmName,
             credit_days: formData.creditDays ? parseInt(formData.creditDays, 10) : null,
             credit_limit: formData.creditLimit ? parseFloat(formData.creditLimit) : null,
-            sales_type: formData.salesType ? formData.salesType.trim() : null,
+            sales_type: finalSalesType || null,
             "isRelevant": true
           };
 
@@ -972,7 +988,7 @@ function Leads() {
         address: formData.address || "",
         nob: formData.nob || "",
         gst_number: formData.gst || "",
-        sales_type: formData.salesType || "",
+        sales_type: finalSalesType || "",
         additional_notes: formData.notes || "",
         customer_registration_form: formData.customerRegistrationForm || "",
         credit_access: formData.creditAccess || "",
@@ -1011,14 +1027,20 @@ function Leads() {
       }
 
       if (compNameTrimmed) {
+        const clientMasterUpdate = {
+          already_in_tracker: `Call-Tracker (${authoritiveLeadNo})`,
+          // A new lead just came in for this company -- re-engaged,
+          // regardless of what this lead's own outcome later becomes.
+          is_newly_converted: false,
+        };
+        // Backfill client_master's Sales Type from this lead only if
+        // client_master had none yet -- never overwrite an existing value.
+        if (!existingClientSalesType && finalSalesType) {
+          clientMasterUpdate.sales_type = finalSalesType;
+        }
         await supabase
           .from("lto_client_master")
-          .update({
-            already_in_tracker: `Call-Tracker (${authoritiveLeadNo})`,
-            // A new lead just came in for this company -- re-engaged,
-            // regardless of what this lead's own outcome later becomes.
-            is_newly_converted: false,
-          })
+          .update(clientMasterUpdate)
           .ilike("company_name", compNameTrimmed);
       }
 
@@ -1027,7 +1049,7 @@ function Leads() {
       // separate post-hoc rotation step needed here anymore.
 
       showNotification(`Lead created successfully! Lead No: ${authoritiveLeadNo}`, "success");
-      alert(`Lead created successfully!\nLead No: ${authoritiveLeadNo}`);
+      showNotification(`Lead created successfully! Lead No: ${authoritiveLeadNo}`, "success");
       setFormData({
         receiverName: "",
         source: "",
@@ -1065,15 +1087,15 @@ function Leads() {
 
   if (isLoadingData) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
-        <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin"></div>
-        <p className="text-sm font-semibold text-slate-600 animate-pulse">Loading dropdowns and form data...</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3" role="status">
+        <div className="w-10 h-10 border-2 border-brand-200 border-t-primary rounded-full animate-spin" aria-hidden="true"></div>
+        <p className="text-sm text-muted-foreground">Loading dropdowns and form data...</p>
       </div>
     );
   }
 
   return (
-    <div className="container mx-auto py-1 px-2">
+    <div className="mx-auto w-full py-1 px-2">
       {showImportModal && (
         <ExcelImportModal
           onClose={() => setShowImportModal(false)}
@@ -1086,11 +1108,11 @@ function Leads() {
         />
       )}
 
-      <div className="max-w-5xl mx-auto bg-white rounded-lg shadow-sm border border-slate-200">
-        <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
+      <div className="max-w-5xl mx-auto bg-card rounded-lg border">
+        <div className="px-4 py-3 border-b flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h2 className="text-base font-bold text-slate-800">New Lead</h2>
-            <p className="text-[11px] text-slate-500">Fill in the lead information below</p>
+            <h2 className="text-base font-semibold text-foreground">New Lead</h2>
+            <p className="text-xs text-muted-foreground">Fill in the lead information below</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <button
@@ -1101,6 +1123,7 @@ function Leads() {
                   "Lead Receiver Name",
                   "Lead Source*",
                   "SC Name",
+                  "Group Name",
                   "Company Name",
                   "Person Name",
                   "Person Number",
@@ -1127,9 +1150,9 @@ function Leads() {
                 XLSX.utils.book_append_sheet(wb, ws, "Lead Import Template");
                 XLSX.writeFile(wb, "Lead_Import_Template.xlsx");
               }}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-success bg-white border border-success/40 hover:bg-success/5 rounded-md transition-all shadow-xs"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-card px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               Download Template
@@ -1137,9 +1160,9 @@ function Leads() {
             <button
               type="button"
               onClick={() => setShowImportModal(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-white bg-gradient-to-r from-success to-emerald-700 hover:opacity-90 rounded-md shadow-xs transition-all"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
               </svg>
               Import Excel
@@ -1148,19 +1171,19 @@ function Leads() {
         </div>
 
         <form onSubmit={handleSubmit}>
-          <div className="p-2 space-y-2.5">
+          <div className="p-4 space-y-3">
             
             {/* Row 1: 2 Fields */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1">
-                <label htmlFor="receiverName" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="receiverName" className="block text-sm font-medium text-foreground">
                   Lead Receiver Name <span className="text-destructive">*</span>
                 </label>
                 <select
                   id="receiverName"
                   value={formData.receiverName}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   required
                 >
                   <option value="">Select receiver</option>
@@ -1173,14 +1196,14 @@ function Leads() {
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="source" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="source" className="block text-sm font-medium text-foreground">
                   Lead Source <span className="text-destructive">*</span>
                 </label>
                 <select
                   id="source"
                   value={formData.source}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   required
                 >
                   <option value="">Select source</option>
@@ -1198,7 +1221,7 @@ function Leads() {
               
               {/* Group Name (Input search dropdown - select from client_master existing relevant groups) */}
               <div className="space-y-1 relative" ref={groupDropdownRef}>
-                <label htmlFor="groupName" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="groupName" className="block text-sm font-medium text-foreground">
                   Group Name <span className="text-destructive">*</span>
                 </label>
                 <div className="relative">
@@ -1222,17 +1245,17 @@ function Leads() {
                         }
                       }, 200);
                     }}
-                    className="w-full px-3 py-1.5 pr-8 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                    className="h-9 w-full rounded-md border border-input bg-card pl-3 pr-8 text-sm focus:border-primary focus:outline-none"
                     placeholder="Search or select Group"
                   />
-                  <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none text-gray-400">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none text-muted-foreground">
+                    <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
                 </div>
                 {showGroupNameDropdown && (
-                  <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-56 overflow-y-auto">
+                  <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-56 overflow-y-auto">
                     {filteredGroupNames.length > 0 ? (
                       filteredGroupNames.map((name, index) => (
                         <div
@@ -1246,7 +1269,7 @@ function Leads() {
                         </div>
                       ))
                     ) : (
-                      <div className="px-3 py-2 text-xs text-gray-400 italic">No matching relevant group found</div>
+                      <div className="px-3 py-2 text-xs text-muted-foreground italic">No matching relevant group found</div>
                     )}
                   </div>
                 )}
@@ -1254,7 +1277,7 @@ function Leads() {
 
               {/* Company Name (Options matching selected group, allow entering new company) */}
               <div className="space-y-1 relative" ref={companyDropdownRef}>
-                <label htmlFor="companyName" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="companyName" className="block text-sm font-medium text-foreground">
                   Company Name <span className="text-destructive">*</span>
                 </label>
                 <div className="relative">
@@ -1269,18 +1292,18 @@ function Leads() {
                       setShowCompanyDropdown(true);
                     }}
                     onFocus={() => setShowCompanyDropdown(true)}
-                    className="w-full px-3 py-1.5 pr-8 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                    className="h-9 w-full rounded-md border border-input bg-card pl-3 pr-8 text-sm focus:border-primary focus:outline-none"
                     placeholder="Enter or select Company Name"
                     required
                   />
-                  <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none text-gray-400">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none text-muted-foreground">
+                    <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
                 </div>
                 {showCompanyDropdown && (
-                  <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-56 overflow-y-auto">
+                  <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-56 overflow-y-auto">
                     {filteredCompanyNames.length > 0 ? (
                       filteredCompanyNames.map((company, index) => (
                         <div
@@ -1303,14 +1326,14 @@ function Leads() {
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="phoneNumber" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="phoneNumber" className="block text-sm font-medium text-foreground">
                   Person Number <span className="text-destructive">*</span>
                 </label>
                 <input
                   id="phoneNumber"
                   value={formData.phoneNumber}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   placeholder="Enter phone number"
                   required
                 />
@@ -1321,42 +1344,42 @@ function Leads() {
             {/* Row 3: 3 Fields */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1">
-                <label htmlFor="salespersonName" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="salespersonName" className="block text-sm font-medium text-foreground">
                   Person Name <span className="text-destructive">*</span>
                 </label>
                 <input
                   id="salespersonName"
                   value={formData.salespersonName}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   placeholder="Enter person name"
                   required
                 />
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="location" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="location" className="block text-sm font-medium text-foreground">
                   Location
                 </label>
                 <input
                   id="location"
                   value={formData.location}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   placeholder="Enter location"
                 />
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="email" className="block text-xs font-semibold text-gray-700">
-                  Email Address <span className="text-xs text-gray-400">(Optional)</span>
+                <label htmlFor="email" className="block text-sm font-medium text-foreground">
+                  Email Address <span className="text-xs text-muted-foreground">(Optional)</span>
                 </label>
                 <input
                   id="email"
                   type="email"
                   value={formData.email}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   placeholder="Enter email address"
                 />
               </div>
@@ -1365,14 +1388,14 @@ function Leads() {
             {/* Row 4: 3 Fields */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1">
-                <label htmlFor="state" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="state" className="block text-sm font-medium text-foreground">
                   State
                 </label>
                 <select
                   id="state"
                   value={formData.state}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 >
                   <option value="">Select state</option>
                   {stateOptions.map((state, index) => (
@@ -1384,27 +1407,27 @@ function Leads() {
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="gst" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="gst" className="block text-sm font-medium text-foreground">
                   GST Number
                 </label>
                 <input
                   id="gst"
                   value={formData.gst}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   placeholder="GST number"
                 />
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="salesType" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="salesType" className="block text-sm font-medium text-foreground">
                   Sales Type <span className="text-destructive">*</span>
                 </label>
                 <select
                   id="salesType"
                   value={formData.salesType}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   required
                 >
                   <option value="">Select sales type</option>
@@ -1420,14 +1443,14 @@ function Leads() {
             {/* Row 5: 3 Fields */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1">
-                <label htmlFor="nob" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="nob" className="block text-sm font-medium text-foreground">
                   Nature of Business (NOB) <span className="text-destructive">*</span>
                 </label>
                 <select
                   id="nob"
                   value={formData.nob}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   required
                 >
                   <option value="">Select nature of business</option>
@@ -1440,14 +1463,14 @@ function Leads() {
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="creditDays" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="creditDays" className="block text-sm font-medium text-foreground">
                   Credit Days
                 </label>
                 <select
                   id="creditDays"
                   value={formData.creditDays}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 >
                   <option value="">Select credit days</option>
                   {creditDaysOptions.map((option, index) => (
@@ -1459,7 +1482,7 @@ function Leads() {
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="creditLimit" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="creditLimit" className="block text-sm font-medium text-foreground">
                   Credit Limit
                 </label>
                 <input
@@ -1474,7 +1497,7 @@ function Leads() {
                       handleChange({ target: { id: "creditLimit", value: val } });
                     }
                   }}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white text-sm"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   placeholder="Enter whole number"
                 />
               </div>
@@ -1483,28 +1506,28 @@ function Leads() {
             {/* Row 6: Address & Additional Notes */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1">
-                <label htmlFor="address" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="address" className="block text-sm font-medium text-foreground">
                   Address
                 </label>
                 <textarea
                   id="address"
                   value={formData.address}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white resize-none text-sm"
+                  className="w-full resize-none rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none"
                   placeholder="Enter complete address"
                   rows="2"
                 />
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="notes" className="block text-xs font-semibold text-gray-700">
+                <label htmlFor="notes" className="block text-sm font-medium text-foreground">
                   Additional Notes
                 </label>
                 <textarea
                   id="notes"
                   value={formData.notes}
                   onChange={handleChange}
-                  className="w-full px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary bg-white resize-none text-sm"
+                  className="w-full resize-none rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none"
                   placeholder="Enter any additional information"
                   rows="2"
                 />
@@ -1513,13 +1536,13 @@ function Leads() {
 
             {/* Contact Person Details Section */}
             <div className="space-y-3 pt-2">
-              <div className="flex justify-between items-center border-b border-slate-100 pb-1.5">
-                <h3 className="text-sm font-semibold text-slate-800">Contact Person Details</h3>
+              <div className="flex justify-between items-center border-b pb-1.5">
+                <h3 className="text-sm font-semibold text-foreground">Contact Person Details</h3>
                 {formData.contactPersons.length < 3 && (
                   <button
                     type="button"
                     onClick={addContactPerson}
-                    className="px-2.5 py-1 bg-primary text-white rounded-md text-xs font-semibold hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-primary transition-colors"
+                    className="inline-flex h-8 items-center rounded-md border border-primary/30 px-3 text-xs font-medium text-primary transition-colors hover:bg-accent hover:text-accent-foreground"
                   >
                     Add Person
                   </button>
@@ -1527,14 +1550,14 @@ function Leads() {
               </div>
 
               {formData.contactPersons.map((person, index) => (
-                <div key={index} className="border border-slate-100 rounded-lg p-3 bg-slate-50/50">
+                <div key={index} className="border rounded-lg p-3 bg-secondary/50">
                   <div className="flex justify-between items-center mb-2">
-                    <h4 className="text-xs font-semibold text-slate-700">Person {index + 1}</h4>
+                    <h4 className="text-xs font-semibold text-foreground">Person {index + 1}</h4>
                     {index > 0 && (
                       <button
                         type="button"
                         onClick={() => removeContactPerson(index)}
-                        className="text-destructive hover:text-destructive text-xs font-semibold"
+                        className="rounded-md px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
                       >
                         Remove
                       </button>
@@ -1542,20 +1565,22 @@ function Leads() {
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div className="space-y-1">
-                      <label className="block text-xs font-semibold text-gray-500">Name</label>
+                      <label htmlFor={`person-${index}-name`} className="block text-sm font-medium text-foreground">Name</label>
                       <input
+                        id={`person-${index}-name`}
                         value={person.name}
                         onChange={(e) => handleContactPersonChange(index, "name", e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary text-xs"
+                        className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                         placeholder="Contact name"
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="block text-xs font-semibold text-gray-500">Designation</label>
+                      <label htmlFor={`person-${index}-designation`} className="block text-sm font-medium text-foreground">Designation</label>
                       <select
+                        id={`person-${index}-designation`}
                         value={person.designation}
                         onChange={(e) => handleContactPersonChange(index, "designation", e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary text-xs"
+                        className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       >
                         <option value="">Select designation</option>
                         {designationOptions.map((designation, idx) => (
@@ -1566,11 +1591,12 @@ function Leads() {
                       </select>
                     </div>
                     <div className="space-y-1">
-                      <label className="block text-xs font-semibold text-gray-500">Phone Number</label>
+                      <label htmlFor={`person-${index}-number`} className="block text-sm font-medium text-foreground">Phone Number</label>
                       <input
+                        id={`person-${index}-number`}
                         value={person.number}
                         onChange={(e) => handleContactPersonChange(index, "number", e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary text-xs"
+                        className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                         placeholder="Contact number"
                       />
                     </div>
@@ -1580,11 +1606,11 @@ function Leads() {
             </div>
 
           </div>
-          <div className="p-4 border-t border-slate-100 flex justify-end">
+          <div className="p-4 border-t flex justify-end">
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-5 py-2 brand-gradient hover:opacity-90 text-white font-bold text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-all shadow hover:shadow-md"
+              className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting ? "Saving..." : "Save Lead"}
             </button>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Building2, Users, UserCheck, Layers, MapPin, Package, Clock, Database, ChevronRight, UserCog } from "lucide-react";
+import { Building2, Users, UserCheck, Layers, MapPin, Package, Clock, Database, UserCog } from "lucide-react";
 import supabase from "../../utils/supabase";
 import { AuthContext } from "../../App";
 
@@ -175,65 +175,58 @@ export default function Master() {
   };
 
   return (
-    <div className="flex flex-col md:flex-row min-h-[calc(100vh-3.5rem)] bg-slate-50/50">
-      {/* Master Data Vertical Sub-Sidebar */}
-      <div className="w-full md:w-48 lg:w-52 bg-white border-b md:border-b-0 md:border-r border-slate-200 p-1 shrink-0 shadow-sm z-10">
-        <div className="mb-1.5 px-2 py-1">
-          <h2 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-            <Database className="w-3.5 h-3.5 text-primary" />
-            Master Data
-          </h2>
-        </div>
+    <div className="flex flex-col md:flex-row flex-1 h-full min-h-0 gap-3 md:gap-4">
+      {/* Master Data sub-navigation: horizontal strip on mobile, vertical list from md up */}
+      <nav
+        aria-label="Master data"
+        className="shrink-0 rounded-lg border bg-card p-1.5 md:w-52 md:overflow-y-auto"
+      >
+        <h2 className="hidden items-center gap-1.5 px-2 pb-1.5 pt-1 text-xs font-semibold text-muted-foreground md:flex">
+          <Database className="h-3.5 w-3.5" aria-hidden="true" />
+          Master Data
+        </h2>
 
-        <nav className="space-y-1">
+        <ul className="flex gap-1 overflow-x-auto md:flex-col md:overflow-visible">
           {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentTab === item.id || (currentTab === "tat-config" && item.id === "tat-config" && substage === "tat");
             const count = counts[item.id];
 
             return (
-              <button
-                key={item.id}
-                onClick={() => navigate(`/master/${item.id}`)}
-                className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 group ${
-                  isActive
-                    ? "bg-gradient-to-r from-primary/5 to-primary/10 text-primary font-bold border border-primary/75 shadow-sm"
-                    : "text-slate-600 hover:bg-primary/5 hover:text-primary border border-transparent"
-                }`}
-              >
-                <div className="flex items-center gap-2 truncate pr-1">
-                  <Icon className={`w-4 h-4 shrink-0 transition-colors ${
-                    isActive ? "text-primary" : "text-slate-400 group-hover:text-primary"
-                  }`} />
-                  <span className="truncate">{item.label}</span>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {count !== undefined ? (
-                    <span className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                      isActive
-                        ? "bg-primary text-white shadow-sm"
-                        : "text-slate-600 bg-slate-100 group-hover:bg-primary/10 group-hover:text-primary"
-                    }`}>
+              <li key={item.id} className="shrink-0 md:shrink">
+                <button
+                  type="button"
+                  onClick={() => navigate(`/master/${item.id}`)}
+                  aria-current={isActive ? "page" : undefined}
+                  title={item.description}
+                  className={`relative flex h-9 w-full items-center justify-between gap-2 rounded-md px-2.5 text-sm transition-colors ${
+                    isActive
+                      ? "bg-accent font-medium text-brand-800"
+                      : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                  }`}
+                >
+                  {isActive && (
+                    <span className="absolute left-0 top-1.5 bottom-1.5 hidden w-0.5 rounded-full bg-brand-lime md:block" aria-hidden="true" />
+                  )}
+                  <span className="flex items-center gap-2 truncate">
+                    <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{item.label}</span>
+                  </span>
+                  {count !== undefined && (
+                    <span className="rounded bg-secondary px-1.5 text-xs font-medium tabular-nums text-foreground">
                       {count}
                     </span>
-                  ) : (
-                    <span className="text-[11px] text-slate-300 animate-pulse">...</span>
                   )}
-                  <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-150 ${
-                    isActive ? "text-primary translate-x-0.5" : "text-slate-300 group-hover:text-primary"
-                  }`} />
-                </div>
-              </button>
+                </button>
+              </li>
             );
           })}
-        </nav>
-      </div>
+        </ul>
+      </nav>
 
-      {/* Main Right Area Renders Sub-Master Component */}
-      <div className="flex-1 min-w-0 overflow-x-hidden">
-        <div className="w-full">
-          {renderActiveComponent()}
-        </div>
+      {/* Active sub-master. Table masters fill this pane (h-full); long forms scroll inside it. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+        {renderActiveComponent()}
       </div>
     </div>
   );

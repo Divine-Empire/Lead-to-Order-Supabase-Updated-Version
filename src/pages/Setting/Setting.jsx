@@ -1,10 +1,12 @@
 "use client"
 
 import { useState, useEffect, useContext } from "react"
-import { Shield, User, ShieldAlert, Plus, Pencil, Trash2, X, CheckSquare, Square, MapPin, RefreshCw, Eye, EyeOff } from "lucide-react"
+import { Shield, User, ShieldAlert, Plus, Pencil, Trash2, CheckSquare, Square, MapPin, RefreshCw, Eye, EyeOff } from "lucide-react"
 import { AuthContext } from "../../App"
 import supabase from "../../utils/supabase"
 import LoadingSpinner from "../../components/LoadingSpinner"
+import MasterDialog from "../../components/MasterDialog"
+import useConfirmDialog from "../../components/useConfirmDialog"
 
 function Setting() {
   const authContext = useContext(AuthContext) || {}
@@ -13,6 +15,7 @@ function Setting() {
     isAdmin = () => false,
     showNotification = () => {}
   } = authContext
+  const { askConfirm, confirmDialog } = useConfirmDialog()
   const [users, setUsers] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [isUpdating, setIsUpdating] = useState(false)
@@ -109,26 +112,28 @@ function Setting() {
       return
     }
 
-    if (!window.confirm(`Are you sure you want to delete user '${username}'?`)) {
-      return
-    }
+    askConfirm({
+      title: "Delete user?",
+      message: `Are you sure you want to delete user '${username}'?`,
+      confirmText: "Delete",
+    }, async () => {
+      setIsUpdating(true)
+      try {
+        const { error } = await supabase
+          .from('login')
+          .delete()
+          .eq('username', username)
 
-    setIsUpdating(true)
-    try {
-      const { error } = await supabase
-        .from('login')
-        .delete()
-        .eq('username', username)
-
-      if (error) throw error
-      showNotification(`Deleted user ${username}`, "success")
-      await fetchUsers()
-    } catch (error) {
-      console.error("Error deleting user:", error)
-      showNotification("Failed to delete user", "error")
-    } finally {
-      setIsUpdating(false)
-    }
+        if (error) throw error
+        showNotification(`Deleted user ${username}`, "success")
+        await fetchUsers()
+      } catch (error) {
+        console.error("Error deleting user:", error)
+        showNotification("Failed to delete user", "error")
+      } finally {
+        setIsUpdating(false)
+      }
+    })
   }
 
   const handleRefresh = () => {
@@ -238,13 +243,13 @@ function Setting() {
 
   if (!isAdmin()) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center h-full p-8 bg-slate-50">
-        <div className="bg-white p-8 rounded-xl shadow-sm text-center max-w-md w-full border border-destructive/10">
+      <div className="flex-1 flex flex-col items-center justify-center h-full p-8">
+        <div className="bg-card p-8 rounded-lg text-center max-w-md w-full border">
           <div className="mx-auto w-16 h-16 bg-destructive/10 rounded-full flex items-center justify-center mb-4">
-            <ShieldAlert className="w-8 h-8 text-destructive" />
+            <ShieldAlert className="w-8 h-8 text-destructive" aria-hidden="true" />
           </div>
-          <h2 className="text-2xl font-bold text-gray-800 mb-2">Access Denied</h2>
-          <p className="text-gray-600">
+          <h2 className="text-lg font-semibold text-foreground mb-2">Access Denied</h2>
+          <p className="text-sm text-muted-foreground">
             You do not have permission to view or manage settings. Only administrators can access this page.
           </p>
         </div>
@@ -253,301 +258,299 @@ function Setting() {
   }
 
   return (
-    <div className="flex-1 bg-slate-50 overflow-auto h-full">
-      <div className="max-w-8xl mx-auto space-y-6">
-
-        {/* Header */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-100 text-slate-900 font-semibold text-sm">
-            <Shield className="w-4 h-4" />
+    <div className="flex flex-col gap-3 h-full min-h-0">
+      {/* Header */}
+      <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
+            <Shield className="h-4 w-4 text-primary" aria-hidden="true" />
             User Management
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleRefresh}
-              disabled={isLoading}
-              className="flex items-center gap-2 border border-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} />
-              Refresh
-            </button>
-            <button
-              onClick={openAddModal}
-              className="flex items-center gap-2 bg-primary hover:opacity-90 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-            >
-              <Plus size={16} />
-              Add User
-            </button>
-          </div>
+          </h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">Manage user accounts, credentials, and lead-source data access.</p>
         </div>
-
-        {/* User Management Section */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-            <p className="text-sm text-gray-500">Manage user accounts, credentials, and lead-source data access.</p>
-            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-              {users.length} Active Users
-            </span>
-          </div>
-
-          <div className="p-0">
-            {isLoading ? (
-              <div className="p-12">
-                <LoadingSpinner fullScreen={false} text="Loading users..." />
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-medium">
-                    <tr>
-                      <th className="px-6 py-4">Actions</th>
-                      <th className="px-6 py-4">Full Name</th>
-                      <th className="px-6 py-4">Username</th>
-                      <th className="px-6 py-4">Password</th>
-                      <th className="px-6 py-4">Role</th>
-                      <th className="px-6 py-4">Data Access</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {users.map((user) => {
-                      const isSelf = user.username === currentUser.username
-                      const isPasswordVisible = visiblePasswords.has(user.username)
-                      return (
-                        <tr key={user.username} className="hover:bg-primary/5 transition-colors">
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-3">
-                              <button
-                                onClick={() => openEditModal(user)}
-                                className="text-info hover:text-info transition-colors p-1"
-                                title="Edit User"
-                              >
-                                <Pencil size={16} />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteUser(user.username)}
-                                disabled={isSelf}
-                                className="text-destructive hover:text-destructive transition-colors p-1 disabled:opacity-30 disabled:cursor-not-allowed"
-                                title={isSelf ? "You cannot delete your own account" : "Delete User"}
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">
-                            {user.fullName || <span className="text-slate-400 font-normal">No Full Name set</span>}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-gray-700 font-mono text-xs">
-                            {user.username}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-slate-600">
-                                {isPasswordVisible ? (user.password || "") : "•".repeat(Math.max(6, (user.password || "").length))}
-                              </span>
-                              <button
-                                onClick={() => togglePasswordVisibility(user.username)}
-                                className="text-slate-400 hover:text-slate-600 transition-colors"
-                                title={isPasswordVisible ? "Hide password" : "Show password"}
-                              >
-                                {isPasswordVisible ? <EyeOff size={14} /> : <Eye size={14} />}
-                              </button>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            {user.userType === 'admin' ? (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-primary text-white">
-                                <Shield className="w-3.5 h-3.5" />
-                                Admin
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-800 border border-slate-200">
-                                <User className="w-3.5 h-3.5" />
-                                User
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4">
-                            {user.userType === 'admin' ? (
-                              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                All Records (Full Access)
-                              </span>
-                            ) : user.restrictedLeadSources && user.restrictedLeadSources.length > 0 ? (
-                              <div className="flex flex-wrap gap-1 max-w-xs">
-                                {user.restrictedLeadSources.map((src) => (
-                                  <span key={src} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
-                                    <MapPin className="w-3 h-3" />
-                                    {src}
-                                  </span>
-                                ))}
-                              </div>
-                            ) : (
-                              <span className="text-xs text-slate-400">Own records (by name)</span>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                    {users.length === 0 && (
-                      <tr>
-                        <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
-                          No users found.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-7 items-center rounded-full border bg-secondary px-3 text-xs font-medium text-foreground tabular-nums">
+            {users.length} Active Users
+          </span>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} aria-hidden="true" />
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={openAddModal}
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <Plus size={16} aria-hidden="true" />
+            Add User
+          </button>
         </div>
+      </div>
 
+      {/* User Management Section */}
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
+        {isLoading ? (
+          <div className="p-12">
+            <LoadingSpinner fullScreen={false} text="Loading users..." />
+          </div>
+        ) : (
+          <table className="w-full border-separate border-spacing-0 text-left text-sm" aria-label="Users">
+            <thead className="sticky top-0 z-10 bg-secondary">
+              <tr className="text-xs font-semibold text-brand-800">
+                <th scope="col" className="border-b bg-secondary px-4 py-2.5">Actions</th>
+                <th scope="col" className="border-b bg-secondary px-4 py-2.5">Full Name</th>
+                <th scope="col" className="border-b bg-secondary px-4 py-2.5">Username</th>
+                <th scope="col" className="border-b bg-secondary px-4 py-2.5">Password</th>
+                <th scope="col" className="border-b bg-secondary px-4 py-2.5">Role</th>
+                <th scope="col" className="border-b bg-secondary px-4 py-2.5">Data Access</th>
+              </tr>
+            </thead>
+            <tbody className="bg-card">
+              {users.map((user) => {
+                const isSelf = user.username === currentUser.username
+                const isPasswordVisible = visiblePasswords.has(user.username)
+                return (
+                  <tr key={user.username} className="hover:bg-secondary/60 transition-colors">
+                    <td className="whitespace-nowrap border-b px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(user)}
+                          className="flex h-8 w-8 items-center justify-center rounded-md transition-colors text-info hover:bg-accent"
+                          aria-label={`Edit ${user.username}`}
+                          title="Edit User"
+                        >
+                          <Pencil size={16} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteUser(user.username)}
+                          disabled={isSelf}
+                          className="flex h-8 w-8 items-center justify-center rounded-md transition-colors text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          aria-label={`Delete ${user.username}`}
+                          title={isSelf ? "You cannot delete your own account" : "Delete User"}
+                        >
+                          <Trash2 size={16} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap border-b px-4 py-3 font-medium text-foreground">
+                      {user.fullName || <span className="font-normal text-muted-foreground">No Full Name set</span>}
+                    </td>
+                    <td className="whitespace-nowrap border-b px-4 py-3 font-mono text-xs text-foreground">
+                      {user.username}
+                    </td>
+                    <td className="whitespace-nowrap border-b px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono text-muted-foreground">
+                          {isPasswordVisible ? (user.password || "") : "•".repeat(Math.max(6, (user.password || "").length))}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => togglePasswordVisibility(user.username)}
+                          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                          aria-label={isPasswordVisible ? `Hide password for ${user.username}` : `Show password for ${user.username}`}
+                          aria-pressed={isPasswordVisible}
+                          title={isPasswordVisible ? "Hide password" : "Show password"}
+                        >
+                          {isPasswordVisible ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap border-b px-4 py-3">
+                      {user.userType === 'admin' ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground">
+                          <Shield className="h-3.5 w-3.5" aria-hidden="true" />
+                          Admin
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border bg-secondary px-2.5 py-1 text-xs font-medium text-foreground">
+                          <User className="h-3.5 w-3.5" aria-hidden="true" />
+                          User
+                        </span>
+                      )}
+                    </td>
+                    <td className="border-b px-4 py-3">
+                      {user.userType === 'admin' ? (
+                        <span className="inline-flex items-center rounded-full border border-success/30 bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
+                          All Records (Full Access)
+                        </span>
+                      ) : user.restrictedLeadSources && user.restrictedLeadSources.length > 0 ? (
+                        <div className="flex max-w-xs flex-wrap gap-1">
+                          {user.restrictedLeadSources.map((src) => (
+                            <span key={src} className="inline-flex items-center gap-1 rounded-full border border-warning/40 bg-warning/15 px-2 py-0.5 text-xs font-medium text-foreground">
+                              <MapPin className="h-3 w-3" aria-hidden="true" />
+                              {src}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Own records (by name)</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan="6" className="px-6 py-8 text-center text-muted-foreground">
+                    No users found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* Add/Edit User Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-xl overflow-hidden animate-in fade-in zoom-in duration-200">
-                <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                    <h3 className="text-lg font-bold text-slate-800">
-                        {modalMode === 'add' ? 'Add New User' : 'Edit User'}
-                    </h3>
-                    <button 
-                        onClick={() => setIsModalOpen(false)}
-                        className="text-slate-400 hover:text-slate-600 transition-colors rounded-full p-1 hover:bg-slate-200"
-                    >
-                        <X size={20} />
-                    </button>
-                </div>
-                
-                <form onSubmit={handleFormSubmit} className="p-6 space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
-                            <input
-                                type="text"
-                                value={formData.username}
-                                onChange={(e) => setFormData({...formData, username: e.target.value})}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-shadow"
-                                placeholder="e.g. jdoe"
-                                required
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
-                            <select
-                                value={formData.fullName}
-                                onChange={(e) => setFormData({...formData, fullName: e.target.value})}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-shadow bg-white"
-                                required
-                            >
-                                <option value="" disabled>Select employee</option>
-                                {employeeOptions.map((name) => (
-                                    <option key={name} value={name}>{name}</option>
-                                ))}
-                            </select>
-                        </div>
-                    </div>
-                    <p className="text-xs text-slate-400 -mt-2">
-                        Full Name must match the "SC Assigned" name on leads/enquiries so this user only sees records assigned to them.
-                    </p>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">
-                                Password
-                                {modalMode === 'edit' && <span className="text-slate-400 font-normal ml-1">(optional)</span>}
-                            </label>
-                            <div className="relative">
-                                <input
-                                    type={showFormPassword ? "text" : "password"}
-                                    value={formData.password}
-                                    onChange={(e) => setFormData({...formData, password: e.target.value})}
-                                    className="w-full px-3 py-2 pr-9 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-shadow"
-                                    placeholder={modalMode === 'edit' ? "Enter new password" : "Enter password"}
-                                    required={modalMode === 'add'}
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setShowFormPassword(v => !v)}
-                                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                                    title={showFormPassword ? "Hide password" : "Show password"}
-                                >
-                                    {showFormPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                </button>
-                            </div>
-                            {modalMode === 'edit' && (
-                                <p className="text-xs text-slate-400 mt-1">Leave blank to keep the current password.</p>
-                            )}
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
-                            <select
-                                value={formData.userType}
-                                onChange={(e) => setFormData({...formData, userType: e.target.value})}
-                                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary outline-none transition-shadow bg-white"
-                            >
-                                <option value="user">User (Assigned Access Only)</option>
-                                <option value="admin">Admin</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    {formData.userType !== 'admin' && (
-                        <div>
-                            <div className="flex items-center justify-between mb-1">
-                                <label className="block text-sm font-medium text-slate-700">
-                                    Restrict to Lead Source(s)
-                                </label>
-                                <span className="text-xs text-slate-400">Optional</span>
-                            </div>
-                            <p className="text-xs text-slate-400 mb-2">
-                                Leave unchecked to use the normal "own name" access above. If you check
-                                any source(s) here, this user will instead see EVERY record tagged with
-                                that source, regardless of who it's assigned to.
-                            </p>
-                            <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-200 max-h-40 overflow-y-auto">
-                                {leadSourceOptions.length === 0 ? (
-                                    <span className="text-xs text-slate-400 col-span-2">No lead sources configured yet.</span>
-                                ) : leadSourceOptions.map((opt) => {
-                                    const checked = (formData.restrictedLeadSources || []).includes(opt);
-                                    return (
-                                        <label
-                                            key={opt}
-                                            onClick={() => handleLeadSourceToggle(opt)}
-                                            className={`flex items-center gap-2 p-2 rounded-md cursor-pointer border text-xs font-medium transition-all ${
-                                                checked
-                                                    ? "bg-white text-slate-900 border-slate-300 shadow-sm font-bold"
-                                                    : "bg-transparent text-slate-500 border-transparent hover:bg-white/50"
-                                            }`}
-                                        >
-                                            {checked ? <CheckSquare className="w-4 h-4 text-primary shrink-0" /> : <Square className="w-4 h-4 text-slate-300 shrink-0" />}
-                                            <span className="truncate">{opt}</span>
-                                        </label>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="pt-4 mt-6 border-t border-slate-100 flex justify-end gap-3">
-                        <button 
-                            type="button"
-                            onClick={() => setIsModalOpen(false)}
-                            className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-                        >
-                            Cancel
-                        </button>
-                        <button 
-                            type="submit"
-                            disabled={isUpdating}
-                            className="px-4 py-2 text-sm font-medium text-white bg-primary hover:opacity-90 rounded-lg transition-colors shadow-sm disabled:opacity-50 flex items-center"
-                        >
-                            {isUpdating ? 'Saving...' : 'Save User'}
-                        </button>
-                    </div>
-                </form>
+        <MasterDialog
+          title={modalMode === 'add' ? 'Add New User' : 'Edit User'}
+          onClose={() => setIsModalOpen(false)}
+          maxWidth="max-w-xl"
+        >
+          <form onSubmit={handleFormSubmit} className="p-4 space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="user-username" className="mb-1 block text-sm font-medium text-foreground">Username</label>
+                <input
+                  id="user-username"
+                  type="text"
+                  value={formData.username}
+                  onChange={(e) => setFormData({...formData, username: e.target.value})}
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                  placeholder="e.g. jdoe"
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="user-fullname" className="mb-1 block text-sm font-medium text-foreground">Full Name</label>
+                <select
+                  id="user-fullname"
+                  value={formData.fullName}
+                  onChange={(e) => setFormData({...formData, fullName: e.target.value})}
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                  required
+                >
+                  <option value="" disabled>Select employee</option>
+                  {employeeOptions.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
-        </div>
+            <p className="-mt-2 text-xs text-muted-foreground">
+              Full Name must match the "SC Assigned" name on leads/enquiries so this user only sees records assigned to them.
+            </p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="user-password" className="mb-1 block text-sm font-medium text-foreground">
+                  Password
+                  {modalMode === 'edit' && <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}
+                </label>
+                <div className="relative">
+                  <input
+                    id="user-password"
+                    type={showFormPassword ? "text" : "password"}
+                    value={formData.password}
+                    onChange={(e) => setFormData({...formData, password: e.target.value})}
+                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none pr-10"
+                    placeholder={modalMode === 'edit' ? "Enter new password" : "Enter password"}
+                    required={modalMode === 'add'}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowFormPassword(v => !v)}
+                    className="absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    aria-label={showFormPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showFormPassword}
+                    title={showFormPassword ? "Hide password" : "Show password"}
+                  >
+                    {showFormPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+                  </button>
+                </div>
+                {modalMode === 'edit' && (
+                  <p className="mt-1 text-xs text-muted-foreground">Leave blank to keep the current password.</p>
+                )}
+              </div>
+              <div>
+                <label htmlFor="user-role" className="mb-1 block text-sm font-medium text-foreground">Role</label>
+                <select
+                  id="user-role"
+                  value={formData.userType}
+                  onChange={(e) => setFormData({...formData, userType: e.target.value})}
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                >
+                  <option value="user">User (Assigned Access Only)</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            </div>
+
+            {formData.userType !== 'admin' && (
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="text-sm font-medium text-foreground">Restrict to Lead Source(s)</p>
+                  <span className="text-xs text-muted-foreground">Optional</span>
+                </div>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Leave unchecked to use the normal "own name" access above. If you check
+                  any source(s) here, this user will instead see EVERY record tagged with
+                  that source, regardless of who it's assigned to.
+                </p>
+                <div className="grid max-h-40 grid-cols-2 gap-2 overflow-y-auto rounded-lg border bg-secondary/50 p-3">
+                  {leadSourceOptions.length === 0 ? (
+                    <span className="col-span-2 text-xs text-muted-foreground">No lead sources configured yet.</span>
+                  ) : leadSourceOptions.map((opt) => {
+                    const checked = (formData.restrictedLeadSources || []).includes(opt);
+                    return (
+                      <button
+                        key={opt}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={checked}
+                        onClick={() => handleLeadSourceToggle(opt)}
+                        className={`flex w-full items-center gap-2 rounded-md border p-2 text-left text-xs font-medium transition-colors ${
+                          checked
+                            ? "border-primary/40 bg-card font-semibold text-foreground"
+                            : "border-transparent bg-transparent text-muted-foreground hover:bg-card"
+                        }`}
+                      >
+                        {checked ? <CheckSquare className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" /> : <Square className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                        <span className="truncate">{opt}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 border-t pt-4">
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isUpdating}
+                className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isUpdating ? 'Saving...' : 'Save User'}
+              </button>
+            </div>
+          </form>
+        </MasterDialog>
       )}
+      {confirmDialog}
     </div>
   )
 }

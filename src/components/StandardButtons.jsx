@@ -1,36 +1,21 @@
 import React from 'react';
-import { XCircle, Save, Check } from 'lucide-react';
+import { XCircle, Save } from 'lucide-react';
+import StatusTabs from './StatusTabs';
 
 /**
- * TabSwitcher Component - Standardized Tabs for Pending/History
+ * TabSwitcher: Pending/History switch. Delegates to the shared StatusTabs.
  */
-export const TabSwitcher = ({ activeTab, onTabChange, tabs }) => {
-  return (
-    <div className="flex justify-start gap-3 px-2 sm:px-0 flex-wrap w-full sm:w-auto">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => onTabChange(tab.id)}
-          className={`flex-1 sm:flex-initial h-[32px] md:h-[38px] flex items-center justify-center px-3 sm:px-5 whitespace-nowrap text-xs font-black rounded-lg transition-all duration-200 border shadow-sm ${
-            activeTab === tab.id
-              ? 'brand-gradient text-white border-transparent shadow-primary/20'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-primary/5 hover:text-primary hover:border-primary/20'
-          }`}
-        >
-          {tab.label}
-        </button>
-      ))}
-    </div>
-  );
-};
+export const TabSwitcher = ({ activeTab, onTabChange, tabs }) => (
+  <StatusTabs tabs={tabs} activeTab={activeTab} onChange={onTabChange} variant="segmented" />
+);
 
 /**
- * FormActionButtons Component - Standardized Save/Cancel Buttons
+ * FormActionButtons: standard Cancel (secondary) + Save (primary) pair.
  */
-export const FormActionButtons = ({ 
-  onCancel, 
-  onSubmit, 
-  cancelText = 'Cancel', 
+export const FormActionButtons = ({
+  onCancel,
+  onSubmit,
+  cancelText = 'Cancel',
   submitText = 'Save Changes',
   loading = false,
   className = "",
@@ -42,10 +27,10 @@ export const FormActionButtons = ({
       <button
         type="button"
         onClick={onCancel}
-        className="flex-1 px-2 md:px-4 py-2 border border-gray-200 rounded-lg text-gray-500 font-bold hover:bg-gray-50 transition-all active:scale-95 text-xs uppercase tracking-widest flex items-center justify-center gap-2"
+        className="flex h-9 flex-1 items-center justify-center gap-2 rounded-md border border-input bg-card px-2 text-sm font-medium text-foreground transition-colors hover:bg-accent md:px-4"
         title={cancelText}
       >
-        <XCircle size={18} />
+        <XCircle size={16} aria-hidden="true" />
         <span className="hidden sm:inline">{cancelText}</span>
       </button>
 
@@ -60,17 +45,17 @@ export const FormActionButtons = ({
         form={formId}
         onClick={onSubmit}
         disabled={loading}
-        className="flex-[1.5] brand-gradient hover:opacity-90 text-white font-bold py-2 rounded-lg transition-all active:scale-95 shadow-md shadow-primary/20 text-xs uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        className="flex h-9 flex-[1.5] items-center justify-center gap-2 rounded-md bg-primary px-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         title={submitText}
       >
         {loading ? (
           <>
-            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-hidden="true" />
             <span className="hidden sm:inline">Processing...</span>
           </>
         ) : (
           <>
-            <Save size={18} />
+            <Save size={16} aria-hidden="true" />
             <span className="hidden sm:inline">{submitText}</span>
           </>
         )}

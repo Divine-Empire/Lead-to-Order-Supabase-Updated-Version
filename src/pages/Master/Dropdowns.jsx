@@ -1,8 +1,13 @@
-﻿import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect, useContext } from "react";
+import { AuthContext } from "../../App";
+import useConfirmDialog from "../../components/useConfirmDialog";
 import supabase from "../../utils/supabase";
 import { PlusIcon, PencilIcon, TrashIcon } from "../../components/Icons";
+import MasterDialog from "../../components/MasterDialog";
 
 const Dropdowns = () => {
+  const { showNotification = () => {} } = useContext(AuthContext) || {};
+  const { askConfirm, confirmDialog } = useConfirmDialog();
   const [data, setData] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -48,7 +53,7 @@ const Dropdowns = () => {
       setCategories(uniqueCategories);
     } catch (error) {
       console.error("Error fetching dropdowns:", error);
-      alert("Error fetching data");
+      showNotification("Error fetching data", "error");
     } finally {
       setLoading(false);
     }
@@ -76,11 +81,11 @@ const Dropdowns = () => {
     e.preventDefault();
     try {
       if (!formData.category || !formData.value) {
-        alert("Please provide both Category and Value.");
+        showNotification("Please provide both Category and Value.", "error");
         return;
       }
       if (isEditing && !currentId) {
-        alert("Cannot save: this value has no id. Please refresh and try again.");
+        showNotification("Cannot save: this value has no id. Please refresh and try again.", "error");
         return;
       }
 
@@ -117,25 +122,26 @@ const Dropdowns = () => {
       fetchData();
     } catch (error) {
       console.error("Error saving data:", error);
-      alert("Error saving data: " + error.message);
+      showNotification("Error saving data: " + error.message, "error");
     }
   };
 
   const handleDelete = async (id) => {
     if (!id) {
-      alert("Cannot delete: this value has no id.");
+      showNotification("Cannot delete: this value has no id.", "error");
       return;
     }
-    if (!window.confirm("Are you sure you want to delete this value?")) return;
-    try {
-      const { data, error } = await supabase.from("lto_dropdown").delete().eq("id", id).select().maybeSingle();
-      if (error) throw error;
-      if (!data) throw new Error("This value was already removed (no matching id found).");
-      fetchData();
-    } catch (error) {
-      console.error("Error deleting data:", error);
-      alert("Error deleting data: " + (error.message || error));
-    }
+    askConfirm({ title: "Delete value?", message: "Are you sure you want to delete this value?", confirmText: "Delete" }, async () => {
+      try {
+        const { data, error } = await supabase.from("lto_dropdown").delete().eq("id", id).select().maybeSingle();
+        if (error) throw error;
+        if (!data) throw new Error("This value was already removed (no matching id found).");
+        fetchData();
+      } catch (error) {
+        console.error("Error deleting data:", error);
+        showNotification("Error deleting data: " + (error.message || error), "error");
+      }
+    });
   };
 
   const groupedData = categories.reduce((acc, cat) => {
@@ -146,126 +152,136 @@ const Dropdowns = () => {
   const maxRows = Math.max(0, ...categories.map((cat) => groupedData[cat].length));
 
   if (loading) {
-    return <div className="p-8 text-center text-slate-500">Loading dropdowns...</div>;
+    return (
+      <div className="p-8 text-center text-sm text-muted-foreground" role="status">
+        Loading dropdowns...
+      </div>
+    );
   }
 
   return (
-    <div className="flex flex-col h-full bg-slate-50/50">
-      <div className="flex-none bg-white border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
-          <div className="flex justify-between items-center">
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">Dropdown Master</h1>
-              <p className="mt-1 text-sm text-slate-500">Manage values for various dropdown categories</p>
-            </div>
-            <button
-              onClick={() => handleOpenModal()}
-              className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary hover:opacity-90"
-            >
-              <PlusIcon className="h-4 w-4 mr-2" />
-              Add Value
-            </button>
-          </div>
+    <div className="flex flex-col gap-3 h-full min-h-0">
+      <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">Dropdown Master</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">Manage values for various dropdown categories</p>
         </div>
+        <button
+          type="button"
+          onClick={() => handleOpenModal()}
+          className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          <PlusIcon className="h-4 w-4" aria-hidden="true" />
+          Add Value
+        </button>
       </div>
 
-      <div className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8 max-w-[100vw]">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200">
-            <thead className="bg-slate-50">
-              <tr>
-                {categories.map((cat, idx) => (
-                  <th key={idx} className="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider border-r border-slate-200 last:border-0 min-w-[200px]">
-                    {cat.replace(/_/g, " ")}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-slate-200">
-              {Array.from({ length: maxRows }).map((_, rowIndex) => (
-                <tr key={rowIndex} className="hover:bg-slate-50/50 transition-colors">
-                  {categories.map((cat, colIndex) => {
-                    const item = groupedData[cat][rowIndex];
-                    return (
-                      <td key={colIndex} className="px-6 py-4 text-sm text-slate-700 border-r border-slate-200 last:border-0 align-top">
-                        {item ? (
-                          <div className="flex items-center justify-between group">
-                            <span>{item.value}</span>
-                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex space-x-2">
-                              <button onClick={() => handleOpenModal(item)} className="text-primary hover:text-primary p-1 rounded-full hover:bg-primary/5">
-                                <PencilIcon className="h-4 w-4" />
-                              </button>
-                              <button onClick={() => handleDelete(item.id)} className="text-destructive hover:text-destructive p-1 rounded-full hover:bg-destructive/10">
-                                <TrashIcon className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <span className="text-slate-300">-</span>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
+        <table className="min-w-full border-separate border-spacing-0" aria-label="Dropdown values by category">
+          <thead className="sticky top-0 z-10 bg-secondary">
+            <tr>
+              {categories.map((cat, idx) => (
+                <th
+                  key={idx}
+                  scope="col"
+                  className="min-w-[200px] border-b border-r bg-secondary px-4 py-2.5 text-left text-xs font-semibold capitalize text-brand-800 last:border-r-0"
+                >
+                  {cat.replace(/_/g, " ")}
+                </th>
               ))}
-              {maxRows === 0 && (
-                <tr>
-                  <td colSpan={categories.length || 1} className="px-6 py-8 text-center text-sm text-slate-500">
-                    No data found
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            </tr>
+          </thead>
+          <tbody className="bg-card">
+            {Array.from({ length: maxRows }).map((_, rowIndex) => (
+              <tr key={rowIndex} className="hover:bg-secondary/60 transition-colors">
+                {categories.map((cat, colIndex) => {
+                  const item = groupedData[cat][rowIndex];
+                  return (
+                    <td key={colIndex} className="border-b border-r px-4 py-2 align-top text-sm text-foreground last:border-r-0">
+                      {item ? (
+                        <div className="group flex items-center justify-between gap-2">
+                          <span>{item.value}</span>
+                          <div className="flex gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenModal(item)}
+                              aria-label={`Edit ${item.value}`}
+                              className="flex h-7 w-7 items-center justify-center rounded-md text-info transition-colors hover:bg-accent"
+                            >
+                              <PencilIcon className="h-4 w-4" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(item.id)}
+                              aria-label={`Delete ${item.value}`}
+                              className="flex h-7 w-7 items-center justify-center rounded-md text-destructive transition-colors hover:bg-destructive/10"
+                            >
+                              <TrashIcon className="h-4 w-4" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground" aria-label="empty">-</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            {maxRows === 0 && (
+              <tr>
+                <td colSpan={categories.length || 1} className="px-6 py-8 text-center text-sm text-muted-foreground">
+                  No data found
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="text-lg font-bold text-slate-800">{isEditing ? "Edit Value" : "Add New Value"}</h3>
-              <button onClick={handleCloseModal} className="text-slate-400 hover:text-slate-600">&times;</button>
+        <MasterDialog title={isEditing ? "Edit Value" : "Add New Value"} onClose={handleCloseModal}>
+          <form onSubmit={handleSave} className="p-4 space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="dropdown-category" className="block text-sm font-medium text-foreground">Category</label>
+              <select
+                id="dropdown-category"
+                required
+                disabled={isEditing}
+                value={formData.category}
+                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none disabled:bg-secondary disabled:text-muted-foreground"
+              >
+                <option value="" disabled>Select a category</option>
+                {categories.map((cat, idx) => (
+                  <option key={idx} value={cat}>{cat.replace(/_/g, " ")}</option>
+                ))}
+              </select>
             </div>
-            <form onSubmit={handleSave} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
-                <select
-                  required
-                  disabled={isEditing}
-                  value={formData.category}
-                  onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                  className="w-full rounded-md border-slate-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm p-2 border disabled:bg-slate-100"
-                >
-                  <option value="" disabled>Select a category</option>
-                  {categories.map((cat, idx) => (
-                    <option key={idx} value={cat}>{cat.replace(/_/g, " ")}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Value</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.value}
-                  onChange={(e) => setFormData({ ...formData, value: e.target.value })}
-                  className="w-full rounded-md border-slate-300 shadow-sm focus:border-primary focus:ring-primary sm:text-sm p-2 border"
-                  placeholder="Enter dropdown value"
-                />
-              </div>
-              <div className="pt-4 flex justify-end space-x-3">
-                <button type="button" onClick={handleCloseModal} className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md shadow-sm hover:bg-slate-50">
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-primary border border-transparent rounded-md shadow-sm hover:opacity-90">
-                  Save
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+            <div className="space-y-1.5">
+              <label htmlFor="dropdown-value" className="block text-sm font-medium text-foreground">Value</label>
+              <input
+                id="dropdown-value"
+                type="text"
+                required
+                value={formData.value}
+                onChange={(e) => setFormData({ ...formData, value: e.target.value })}
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                placeholder="Enter dropdown value"
+              />
+            </div>
+            <div className="flex justify-end gap-3 border-t pt-4">
+              <button type="button" onClick={handleCloseModal} className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent">
+                Cancel
+              </button>
+              <button type="submit" className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50">
+                Save
+              </button>
+            </div>
+          </form>
+        </MasterDialog>
       )}
+      {confirmDialog}
     </div>
   );
 };

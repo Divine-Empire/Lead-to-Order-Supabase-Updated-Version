@@ -1,17 +1,16 @@
 import React from 'react';
 import { FormActionButtons } from './StandardButtons';
+import useDialogBehavior from './useDialogBehavior';
 
 /**
- * ModalForm Component - Ultra Compact Edition
- * 
- * Final Refinements:
- * - Removed Cross (X) icon as requested.
- * - Reduced vertical gaps (space-y-2) for maximum density.
- * - Compacted padding in Header and Body.
- * - Maintains fixed dimensions and invisible scrollbar.
+ * ModalForm: standard form dialog (header, scrolling body, Cancel/Save footer).
+ *
+ * - Esc closes, Tab stays inside, focus returns to the opener on close.
+ * - The first field is focused on open (as before).
+ * - The overlay leaves the sidebar visible on large screens; its offset matches the
+ *   sidebar widths (w-56, 2xl:w-60).
  */
-const ModalForm = ({
-  isOpen,
+const ModalFormInner = ({
   onClose,
   title,
   children,
@@ -22,72 +21,44 @@ const ModalForm = ({
   maxHeight = '60vh',
   zIndex = 'z-[100]'
 }) => {
-  if (!isOpen) return null;
-
+  const dialogRef = useDialogBehavior(onClose, { autoFocus: false });
   const formRef = React.useRef(null);
+  const titleId = React.useId();
 
   React.useEffect(() => {
-    if (formRef.current) {
-      const focusable = formRef.current.querySelectorAll(
-        'input:not([disabled]), button:not([disabled]), [tabindex="0"]:not([disabled])'
-      );
-      const firstField = Array.from(focusable).find(() => true);
-      if (firstField) {
-        const timer = setTimeout(() => {
-          firstField.focus();
-        }, 150);
-        return () => clearTimeout(timer);
-      }
-    }
+    if (!formRef.current) return undefined;
+    const focusable = formRef.current.querySelectorAll(
+      'input:not([disabled]), button:not([disabled]), [tabindex="0"]:not([disabled])'
+    );
+    const firstField = focusable[0];
+    if (!firstField) return undefined;
+    const timer = setTimeout(() => firstField.focus(), 150);
+    return () => clearTimeout(timer);
   }, []);
 
   return (
-    <div className={`fixed inset-0 lg:left-56 2xl:left-60 bg-black/60 backdrop-blur-[1px] flex items-center justify-center ${zIndex} p-3 md:p-4 animate-in fade-in duration-200`}>
-      <style dangerouslySetInnerHTML={{
-        __html: `
-        @media (max-width: 767px) {
-          .responsive-modal-height {
-            max-height: 55vh !important;
-          }
-        }
-        .modal-scrollbar::-webkit-scrollbar {
-          width: 4px;
-        }
-        .modal-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .modal-scrollbar::-webkit-scrollbar-thumb {
-          background-color: #d1d5db;
-          border-radius: 4px;
-        }
-      `}} />
+    <div className={`fixed inset-0 lg:left-56 2xl:left-60 bg-black/50 flex items-center justify-center ${zIndex} p-3 md:p-4 animate-in fade-in duration-200`}>
       <div
-        className={`bg-white rounded-xl shadow-2xl w-full ${maxWidth} flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border border-gray-200 responsive-modal-height`}
-        style={{ scale: 1, maxHeight }}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={`bg-card rounded-lg shadow-lg w-full ${maxWidth} flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 border max-md:max-h-[55vh]!`}
+        style={{ maxHeight }}
       >
-        {/* Ultra-Compact Header - No Cross Icon */}
-        <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-center bg-white flex-shrink-0 z-20">
-          <h2 className="text-[10px] md:text-sm font-black text-gray-800 uppercase tracking-widest text-center">{title}</h2>
+        <div className="px-4 py-3 border-b flex items-center flex-shrink-0">
+          <h2 id={titleId} className="text-base font-semibold text-foreground">{title}</h2>
         </div>
 
-        {/* Minimal Scrollable Body */}
-        <div
-          className="flex-1 overflow-y-auto bg-white min-h-0 z-10 modal-scrollbar"
-          style={{
-            scrollbarWidth: 'thin',
-            scrollbarColor: '#d1d5db transparent'
-          }}
-        >
-
-          <div className="px-3 py-2 md:px-4 md:py-3 modal-scrollbar">
+        <div className="flex-1 overflow-y-auto bg-card min-h-0 modal-scrollbar">
+          <div className="px-3 py-3 md:px-4">
             <form ref={formRef} id="ultra-compact-form" onSubmit={onSubmit} autoComplete="off" className="space-y-1.5 md:space-y-2 text-left">
               {children}
             </form>
           </div>
         </div>
 
-        {/* Standardized Footer Buttons */}
-        <div className="px-4 py-2 border-t border-gray-100 bg-white flex-shrink-0 z-20">
+        <div className="px-4 py-3 border-t bg-card flex-shrink-0">
           <FormActionButtons
             onCancel={onClose}
             cancelText={cancelText}
@@ -100,5 +71,8 @@ const ModalForm = ({
     </div>
   );
 };
+
+// The early return lives out here so hooks inside ModalFormInner always run in the same order.
+const ModalForm = (props) => (props.isOpen ? <ModalFormInner {...props} /> : null);
 
 export default ModalForm;

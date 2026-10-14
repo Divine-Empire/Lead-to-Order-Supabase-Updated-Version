@@ -1,11 +1,23 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useContext } from "react"
+import { AuthContext } from "../../App"
+import useConfirmDialog from "../../components/useConfirmDialog"
+import useDialogBehavior from "../../components/useDialogBehavior"
 import supabase from "../../utils/supabase"
 import { TABLES, COLUMNS } from "../../constants/dbSchema"
 import { resolveScAndCreForNewCompany } from "../../utils/scAssignment"
 
 const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = null }) => {
+  const { showNotification = () => {} } = useContext(AuthContext) || {}
+  const { confirmAsync, confirmDialog } = useConfirmDialog()
+  const dialogRef = useDialogBehavior(() => {
+    try {
+      onClose()
+    } catch (error) {
+      console.error("Error closing form:", error)
+    }
+  }, { autoFocus: false })
   const [leadSources, setLeadSources] = useState([])
   const [enquiryStates, setEnquiryStates] = useState([])
   const [nobOptions, setNobOptions] = useState([])
@@ -348,21 +360,21 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
   // Function to handle form submission
   const handleSubmit = async () => {
     if (!newCallTrackerData.groupName || !newCallTrackerData.groupName.trim()) {
-      alert("Group Name is mandatory.");
+      showNotification("Group Name is mandatory.", "error");
       return;
     }
     if (!newCallTrackerData.stateCode || !newCallTrackerData.stateCode.trim()) {
-      alert("State Code is mandatory.");
+      showNotification("State Code is mandatory.", "error");
       return;
     }
     // Validate that all items have a name and quantity
     for (const item of items) {
       if (!item.name || !item.name.trim()) {
-        alert("Item Name is mandatory for all items.");
+        showNotification("Item Name is mandatory for all items.", "error");
         return;
       }
       if (!item.quantity || !item.quantity.toString().trim()) {
-        alert("Quantity is mandatory for all items.");
+        showNotification("Quantity is mandatory for all items.", "error");
         return;
       }
     }
@@ -395,12 +407,16 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             const when = new Date(e.created_at).toLocaleString("en-IN");
             return `• ${e.enquiry_no} (${when}, by ${e.enquiry_receiver_name || "-"}): ${items || "no items"}`;
           });
-          const proceed = window.confirm(
+          const proceed = await confirmAsync({
+            title: "Possible duplicate enquiry",
+            confirmText: "Create anyway",
+            destructive: false,
+            message:
             `"${companyName}" already has ${recent.length} enquir${recent.length === 1 ? "y" : "ies"} in the last 7 days:\n\n` +
             `${lines.join("\n")}\n\n` +
             `If this is the same requirement, cancel and continue on the existing enquiry instead.\n\n` +
-            `Create a new enquiry anyway?`
-          );
+            `Create a new enquiry anyway?`,
+          });
           if (!proceed) return;
         }
       }
@@ -496,7 +512,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
 
       if (enquiryError) {
         console.error("Error inserting enquiry:", enquiryError.message);
-        alert("Error saving enquiry: " + enquiryError.message);
+        showNotification("Error saving enquiry: " + enquiryError.message, "error");
         return;
       }
 
@@ -572,22 +588,28 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
         }
       }
 
-      alert(`Call tracker updated successfully. Enquiry No: ${assignedEnquiryNo || 'Generated'}`);
+      showNotification(`Call tracker updated successfully. Enquiry No: ${assignedEnquiryNo || 'Generated'}`, "success");
       onClose(true);
     } catch (err) {
       console.error("Unexpected error:", err);
-      alert("Error saving data: " + err.message);
+      showNotification("Error saving data: " + err.message, "error");
     } finally {
       setIsSubmitting(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100] p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="direct-enquiry-title"
+        className="bg-card rounded-lg shadow-lg border max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+      >
+        <div className="p-4 border-b">
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold">New Call Tracker</h2>
+            <h2 id="direct-enquiry-title" className="text-base font-semibold text-foreground">Direct Enquiry</h2>
             <button
               type="button"
               onClick={() => {
@@ -601,11 +623,13 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
                   }
                 }
               }}
-              className="text-gray-500 hover:text-gray-700"
+              aria-label="Close"
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <svg
+                aria-hidden="true"
                 xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
+                className="h-5 w-5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -616,15 +640,15 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
           </div>
         </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-4 space-y-6">
           <div className="space-y-4">
             <div className="space-y-2">
-              <label htmlFor="leadSource" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="leadSource" className="block text-sm font-medium text-foreground">
                 Enquiry Source
                <span className="text-destructive">*</span></label>
               <select
                 id="leadSource"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={newCallTrackerData.leadSource}
                 onChange={(e) => setNewCallTrackerData(prev => ({ ...prev, leadSource: e.target.value }))}
                 required
@@ -640,12 +664,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
 
             {/* Group Name dropdown */}
             <div className="space-y-2">
-              <label htmlFor="groupName" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="groupName" className="block text-sm font-medium text-foreground">
                 Group Name
                <span className="text-destructive">*</span></label>
               <select
                 id="groupName"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={newCallTrackerData.groupName || ""}
                 onChange={(e) => {
                   const val = e.target.value;
@@ -664,14 +688,14 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
 
             {/* Searchable Company Name dropdown */}
             <div className="space-y-2 relative">
-              <label htmlFor="companyName" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="companyName" className="block text-sm font-medium text-foreground">
                 Company Name
                <span className="text-destructive">*</span></label>
               <div className="relative">
                 <input
                   type="text"
                   id="companyName"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   value={newCallTrackerData.companyName}
                   onChange={(e) => {
                     setNewCallTrackerData(prev => ({
@@ -686,11 +710,11 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
                   required
                 />
                 {showCompanyDropdown && filteredCompanies.length > 0 && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                  <div className="absolute z-10 w-full mt-1 bg-card border border-input rounded-md shadow-lg max-h-60 overflow-y-auto">
                     {filteredCompanies.map((company, index) => (
                       <div
                         key={index}
-                        className="px-4 py-2 cursor-pointer hover:bg-gray-100"
+                        className="px-4 py-2 text-sm cursor-pointer hover:bg-accent"
                         onClick={() => handleCompanyChange(company)}
                       >
                         {company}
@@ -702,12 +726,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="phoneNumber" className="block text-sm font-medium text-foreground">
                 Phone Number
                <span className="text-destructive">*</span></label>
               <input
                 id="phoneNumber"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter phone number"
                 value={newCallTrackerData.phoneNumber}
                 onChange={(e) => setNewCallTrackerData(prev => ({ ...prev, phoneNumber: e.target.value, isCompanyAutoFilled: false }))}
@@ -716,12 +740,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="salesPersonName" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="salesPersonName" className="block text-sm font-medium text-foreground">
                 Person Name
                <span className="text-destructive">*</span></label>
               <input
                 id="salesPersonName"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter person name"
                 value={newCallTrackerData.salesPersonName}
                 onChange={(e) => setNewCallTrackerData(prev => ({ ...prev, salesPersonName: e.target.value, isCompanyAutoFilled: false }))}
@@ -730,12 +754,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="location" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="location" className="block text-sm font-medium text-foreground">
                 Billing Address
                <span className="text-destructive">*</span></label>
               <input
                 id="location"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter billing address"
                 value={newCallTrackerData.location}
                 onChange={(e) => setNewCallTrackerData(prev => ({ ...prev, location: e.target.value, isCompanyAutoFilled: false }))}
@@ -744,13 +768,13 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="emailAddress" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="emailAddress" className="block text-sm font-medium text-foreground">
                 Email Address
               </label>
               <input
                 id="emailAddress"
                 type="email"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter email address"
                 value={newCallTrackerData.emailAddress}
                 onChange={(e) => setNewCallTrackerData(prev => ({ ...prev, emailAddress: e.target.value, isCompanyAutoFilled: false }))}
@@ -758,12 +782,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="shippingAddress" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="shippingAddress" className="block text-sm font-medium text-foreground">
                 Shipping Address
                <span className="text-destructive">*</span></label>
               <input
                 id="shippingAddress"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter shipping address"
                 value={newCallTrackerData.shippingAddress}
                 onChange={(e) => setNewCallTrackerData(prev => ({
@@ -776,12 +800,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="enquiryReceiverName" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="enquiryReceiverName" className="block text-sm font-medium text-foreground">
                 Enquiry Receiver Name
                <span className="text-destructive">*</span></label>
               <select
                 id="enquiryReceiverName"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={newCallTrackerData.enquiryReceiverName}
                 onChange={(e) => setNewCallTrackerData(prev => ({
                   ...prev,
@@ -800,12 +824,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="enquiryAssignToProject" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="enquiryAssignToProject" className="block text-sm font-medium text-foreground">
                 Enquiry Assign to Person
                <span className="text-destructive">*</span></label>
               <select
                 id="enquiryAssignToProject"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 value={newCallTrackerData.enquiryAssignToProject}
                 onChange={(e) => setNewCallTrackerData(prev => ({
                   ...prev,
@@ -824,12 +848,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="gstNumber" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="gstNumber" className="block text-sm font-medium text-foreground">
                 GST Number
                <span className="text-destructive">*</span></label>
               <input
                 id="gstNumber"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter GST number"
                 value={newCallTrackerData.gstNumber}
                 onChange={(e) => setNewCallTrackerData(prev => ({
@@ -842,12 +866,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="stateCode" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="stateCode" className="block text-sm font-medium text-foreground">
                 State Code
                <span className="text-destructive">*</span></label>
               <input
                 id="stateCode"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                 placeholder="Enter State Code"
                 value={newCallTrackerData.stateCode}
                 onChange={(e) => setNewCallTrackerData(prev => ({
@@ -863,18 +887,18 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
 
           {/* Enquiry Details section */}
           <div className="space-y-6 border p-4 rounded-md mt-4">
-            <h3 className="text-lg font-medium">Enquiry Details</h3>
-            <hr className="border-gray-200" />
+            <h3 className="text-base font-semibold text-foreground">Enquiry Details</h3>
+            <hr className="" />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label htmlFor="enquiryDate" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="enquiryDate" className="block text-sm font-medium text-foreground">
                   Enquiry Received Date
                  <span className="text-destructive">*</span></label>
                 <input
                   id="enquiryDate"
                   type="date"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   value={enquiryFormData.enquiryDate}
                   onChange={(e) => setEnquiryFormData({ ...enquiryFormData, enquiryDate: e.target.value })}
                   required
@@ -882,12 +906,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="enquiryState" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="enquiryState" className="block text-sm font-medium text-foreground">
                   Enquiry for State
                  <span className="text-destructive">*</span></label>
                 <select
                   id="enquiryState"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   value={enquiryFormData.enquiryState}
                   onChange={(e) => setEnquiryFormData({ ...enquiryFormData, enquiryState: e.target.value })}
                   required
@@ -902,12 +926,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="nob" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="nob" className="block text-sm font-medium text-foreground">
                   NOB
                  <span className="text-destructive">*</span></label>
                 <select
                   id="nob"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   value={enquiryFormData.nob}
                   onChange={(e) => setEnquiryFormData({ ...enquiryFormData, nob: e.target.value })}
                   required
@@ -922,12 +946,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="salesType" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="salesType" className="block text-sm font-medium text-foreground">
                   Enquiry Type
                  <span className="text-destructive">*</span></label>
                 <select
                   id="salesType"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   value={enquiryFormData.salesType}
                   onChange={(e) => setEnquiryFormData({ ...enquiryFormData, salesType: e.target.value })}
                   required
@@ -942,12 +966,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="enquiryApproach" className="block text-sm font-medium text-gray-700">
+                <label htmlFor="enquiryApproach" className="block text-sm font-medium text-foreground">
                   Enquiry Approach
                  <span className="text-destructive">*</span></label>
                 <select
                   id="enquiryApproach"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   value={enquiryFormData.enquiryApproach}
                   onChange={(e) => setEnquiryFormData({ ...enquiryFormData, enquiryApproach: e.target.value })}
                   required
@@ -964,7 +988,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
 
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h4 className="font-medium">Items</h4>
+                <h4 className="text-sm font-semibold text-foreground">Items</h4>
                 <button
                   type="button"
                   onClick={addItem}
@@ -978,13 +1002,13 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
               {items.map((item) => (
                 <div key={item.id} className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
                   <div className="md:col-span-5 space-y-2">
-                    <label htmlFor={`itemName-${item.id}`} className="block text-sm font-medium text-gray-700">
+                    <label htmlFor={`itemName-${item.id}`} className="block text-sm font-medium text-foreground">
                       Item Name <span className="text-destructive">*</span>
                     </label>
                     <input
                       list={`item-options-${item.id}`}
                       id={`itemName-${item.id}`}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       value={item.name}
                       onChange={(e) => updateItem(item.id, "name", e.target.value)}
                       required
@@ -997,12 +1021,12 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
                   </div>
 
                   <div className="md:col-span-5 space-y-2">
-                    <label htmlFor={`quantity-${item.id}`} className="block text-sm font-medium text-gray-700">
+                    <label htmlFor={`quantity-${item.id}`} className="block text-sm font-medium text-foreground">
                       Quantity <span className="text-destructive">*</span>
                     </label>
                     <input
                       id={`quantity-${item.id}`}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                       placeholder="Enter quantity"
                       value={item.quantity}
                       onChange={(e) => updateItem(item.id, "quantity", e.target.value)}
@@ -1015,9 +1039,11 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
                       type="button"
                       onClick={() => removeItem(item.id)}
                       disabled={items.length === 1}
-                      className="p-2 text-slate-500 hover:text-slate-700 disabled:opacity-50"
+                      aria-label={`Remove item ${items.indexOf(item) + 1}`}
+                      className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <svg
+                        aria-hidden="true"
                         xmlns="http://www.w3.org/2000/svg"
                         width="16"
                         height="16"
@@ -1041,7 +1067,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
           </div>
         </div>
 
-        <div className="p-6 border-t flex justify-between">
+        <div className="p-4 border-t flex justify-between">
           <button
             type="button"
             onClick={() => {
@@ -1055,7 +1081,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
                 }
               }
             }}
-            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+            className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
           >
             Cancel
           </button>
@@ -1063,12 +1089,13 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             type="button"
             onClick={handleSubmit}
             disabled={isSubmitting}
-            className="px-4 py-2 brand-gradient hover:opacity-90 text-white font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+            className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? "Submitting..." : "Submit"}
           </button>
         </div>
       </div>
+      {confirmDialog}
     </div>
   )
 }

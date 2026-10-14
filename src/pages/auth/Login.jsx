@@ -2,10 +2,9 @@
 
 import React, { useState, useContext } from "react"
 import { useNavigate } from "react-router-dom"
-import { User, Lock, Eye, EyeOff } from "lucide-react"
+import { User, Lock, Eye, EyeOff, Loader2 } from "lucide-react"
 import { AuthContext } from "../../App"
 import Footer from "../../components/Footer"
-import logoPng from "../../assests/logo.jpeg"
 
 function Login() {
   const [username, setUsername] = useState("")
@@ -48,114 +47,90 @@ function Login() {
   }
 
   return (
-    <div className="h-[100dvh] w-full flex flex-col bg-white overflow-hidden">
-      {/* Center Content */}
-      <div className="flex-1 flex items-center justify-center p-2 sm:p-4 pb-14 sm:pb-16">
-        <div className="w-[92%] sm:w-full max-w-[340px] sm:max-w-md bg-white border border-gray-100 rounded-2xl shadow-xl p-4 sm:p-8 space-y-3.5 sm:space-y-6 relative overflow-hidden">
-          <div className="absolute top-0 left-0 right-0 h-1.5 brand-gradient" />
+    <div className="flex min-h-dvh flex-col bg-background">
+      <main className="flex flex-1 items-center justify-center p-4">
+        <div className="relative w-full max-w-sm overflow-hidden rounded-lg border bg-card p-6 shadow-sm sm:p-8">
+          <div className="absolute inset-x-0 top-0 h-1 bg-brand-lime" aria-hidden="true" />
 
-          {/* Logo Section */}
-          <div className="flex flex-col items-center space-y-2.5 sm:space-y-4">
-            <div className="w-16 h-16 sm:w-24 sm:h-24 flex items-center justify-center">
-              <img src={logoPng} alt="Logo" className="max-w-full max-h-full object-contain" />
-            </div>
-            <div className="text-center space-y-0.5">
-              <h1 className="text-xl sm:text-3xl font-bold brand-gradient-text">Lead To Order System</h1>
+          <div className="mb-6 flex flex-col items-center gap-3 text-center">
+            <img src="/divine-logo.svg" alt="Divine" className="h-16 w-auto" />
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight text-foreground">Lead To Order System</h1>
+              <p className="text-sm text-muted-foreground">Sign in to continue</p>
             </div>
           </div>
 
-          {/* Error Alert */}
           {error && (
-            <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs sm:text-sm text-center font-medium">
+            <div role="alert" className="mb-4 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
             </div>
           )}
 
-          {/* Form */}
-          <form className="space-y-2.5 sm:space-y-4" onSubmit={handleSubmit}>
-            {/* User ID Input */}
-            <div className="space-y-1">
-              <label htmlFor="username" className="text-[11px] sm:text-sm font-semibold text-gray-700">
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <div className="space-y-1.5">
+              <label htmlFor="username" className="text-sm font-medium text-foreground">
                 User ID
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <User className="h-3.5 w-3.5 sm:h-5 sm:w-5 text-gray-400" />
-                </div>
+                <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
                 <input
                   id="username"
                   name="username"
                   type="text"
+                  autoComplete="username"
                   required
                   disabled={isLoading}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="block w-full pl-9 pr-4 py-1.5 sm:py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:bg-white transition-all text-xs sm:text-sm"
+                  className="block h-9 w-full rounded-md border border-input bg-card pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-60"
                   placeholder="Enter user ID"
                 />
               </div>
             </div>
 
-            {/* Password Input */}
-            <div className="space-y-1">
-              <label htmlFor="password" className="text-[11px] sm:text-sm font-semibold text-gray-700">
+            <div className="space-y-1.5">
+              <label htmlFor="password" className="text-sm font-medium text-foreground">
                 Password
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-3.5 w-3.5 sm:h-5 sm:w-5 text-gray-400" />
-                </div>
+                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
                 <input
                   id="password"
                   name="password"
                   type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
                   required
                   disabled={isLoading}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full pl-9 pr-12 py-1.5 sm:py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary focus:bg-white transition-all text-xs sm:text-sm"
+                  className="block h-9 w-full rounded-md border border-input bg-card pl-9 pr-10 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-60"
                   placeholder="Enter password"
                 />
                 <button
                   type="button"
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 cursor-pointer"
+                  className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-md text-muted-foreground transition-colors hover:text-foreground"
                   onClick={togglePasswordVisibility}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
                 >
-                  {showPassword ? (
-                    <EyeOff className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
-                  ) : (
-                    <Eye className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
-                  )}
+                  {showPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
                 </button>
               </div>
             </div>
 
-            {/* Light Green Sign In Button */}
             <button
               type="submit"
               disabled={isLoading}
-              className={`w-full py-1.5 sm:py-2.5 px-4 text-xs sm:text-base font-bold text-white rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 brand-gradient hover:opacity-90 shadow-md shadow-primary/20 transition-all ${
-                isLoading ? 'opacity-70 cursor-not-allowed' : ''
-              }`}
+              className="flex h-9 w-full items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {isLoading ? (
-                <div className="flex items-center justify-center gap-2">
-                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Signing in...</span>
-                </div>
-              ) : (
-                'Sign In'
-              )}
+              {isLoading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              {isLoading ? "Signing in..." : "Sign in"}
             </button>
           </form>
-
         </div>
-      </div>
+      </main>
 
-      {/* Footer at Bottom */}
-      <div className="w-full fixed bottom-0 left-0 right-0 z-50">
-        <Footer />
-      </div>
+      <Footer />
     </div>
   )
 }

@@ -1,11 +1,15 @@
 import { useState, useEffect, useRef, useContext } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Pencil, Trash2, RefreshCw, Eye } from "lucide-react";
+import { Plus, Pencil, Trash2, RefreshCw, SlidersHorizontal } from "lucide-react";
+import ColumnSelector from "../../components/ColumnSelector";
+import StatusTabs from "../../components/StatusTabs";
+import { FilterSearch, filterControlClass } from "../../components/FilterBar";
 import DataTable from "../../components/DataTable";
 import supabase from "../../utils/supabase";
 import ModalForm from "../../components/ModalForm";
 import { TABLES, COLUMNS } from "../../constants/dbSchema";
 import { AuthContext } from "../../App";
+import useConfirmDialog from "../../components/useConfirmDialog";
 import { getStateCodeFromName } from "../../utils/gstStateCodes";
 
 // Read-only view (Database/04_client_master_open_work_view.sql) adding
@@ -16,6 +20,8 @@ const CLIENT_MASTER_READ_VIEW = "lto_client_master_with_status";
 
 function ClientMaster() {
   const authContext = useContext(AuthContext) || {};
+  const { showNotification = () => {} } = authContext;
+  const { askConfirm, confirmAsync, confirmDialog } = useConfirmDialog();
   const {
     isAdmin = () => false,
     getUsernamesToFilter = () => [],
@@ -286,7 +292,7 @@ function ClientMaster() {
     if (!isAdmin()) return; // USER role cannot add/edit clients
 
     if (modalMode === "edit" && !currentClient?.uuid) {
-      alert("Cannot save: this client has no uuid. Please refresh and try again.");
+      showNotification("Cannot save: this client has no uuid. Please refresh and try again.", "error");
       return;
     }
 
@@ -316,12 +322,16 @@ function ClientMaster() {
           .limit(1);
         const sibling = groupSiblings && groupSiblings[0];
         if (sibling?.sc_name && (sibling.sc_name !== scNameToSave || sibling.crm_name !== crmNameToSave)) {
-          const applyToo = window.confirm(
+          const applyToo = await confirmAsync({
+            title: "Apply group's SC/CRM?",
+            confirmText: "Apply SC/CRM",
+            destructive: false,
+            message:
             `Group "${newGroup}" is currently handled by SC: ${sibling.sc_name}` +
             (sibling.crm_name ? `, CRM: ${sibling.crm_name}` : "") +
             `.\n\nApply the same SC/CRM to this client too? (Client Code will NOT change.)\n\n` +
-            `Click Cancel to keep this client's current SC/CRM.`
-          );
+            `Click Cancel to keep this client's current SC/CRM.`,
+          });
           if (applyToo) {
             scNameToSave = sibling.sc_name;
             crmNameToSave = sibling.crm_name || null;
@@ -384,7 +394,7 @@ function ClientMaster() {
       handleCloseModal();
     } catch (err) {
       console.error("Error saving client:", err);
-      alert("Failed to save client: " + (err.message || err));
+      showNotification("Failed to save client: " + (err.message || err), "error");
       setIsLoading(false);
     }
   };
@@ -392,10 +402,10 @@ function ClientMaster() {
   const handleDelete = async (client) => {
     if (!isAdmin()) return; // USER role cannot delete clients
     if (!client?.uuid) {
-      alert("Cannot delete: this client has no uuid.");
+      showNotification("Cannot delete: this client has no uuid.", "error");
       return;
     }
-    if (window.confirm(`Are you sure you want to delete ${client.companyName}?`)) {
+    askConfirm({ title: "Delete client?", message: `Are you sure you want to delete ${client.companyName}?`, confirmText: "Delete" }, async () => {
       setIsLoading(true);
       try {
         const { data, error } = await supabase
@@ -409,10 +419,10 @@ function ClientMaster() {
         await fetchClients();
       } catch (err) {
         console.error("Error deleting client:", err);
-        alert("Failed to delete client: " + (err.message || err));
+        showNotification("Failed to delete client: " + (err.message || err), "error");
         setIsLoading(false);
       }
-    }
+    });
   };
   
   const allHeaders = [
@@ -459,29 +469,31 @@ function ClientMaster() {
 
     const columnCells = {
       actions: (
-        <td key="actions" className="px-6 py-4 whitespace-nowrap text-sm text-center">
+        <td key="actions" className="px-4 py-3 whitespace-nowrap text-sm text-center">
           <div className="flex items-center justify-center gap-3">
-            <button onClick={() => handleOpenModal("edit", row)} className="text-info hover:text-info transition-colors" title="Edit">
-              <Pencil size={16} />
+            <button type="button" onClick={() => handleOpenModal("edit", row)} className="flex h-8 w-8 items-center justify-center rounded-md transition-colors text-info hover:bg-accent" aria-label={`Edit ${row.companyName}`} title="Edit">
+              <Pencil size={16} aria-hidden="true" />
             </button>
-            <button onClick={() => handleDelete(row)} className="text-destructive hover:text-destructive transition-colors" title="Delete">
-              <Trash2 size={16} />
+            <button type="button" onClick={() => handleDelete(row)} className="flex h-8 w-8 items-center justify-center rounded-md transition-colors text-destructive hover:bg-destructive/10" aria-label={`Delete ${row.companyName}`} title="Delete">
+              <Trash2 size={16} aria-hidden="true" />
             </button>
           </div>
         </td>
       ),
       action2: (
-        <td key="action2" className="px-6 py-4 whitespace-nowrap text-sm text-center">
+        <td key="action2" className="px-4 py-3 whitespace-nowrap text-sm text-center">
           <div className="flex items-center justify-center gap-2">
-            <button 
+            <button
+              type="button"
               onClick={() => navigate(`/leads?${urlParams}`)}
-              className="px-3 py-1 bg-info/10 text-info hover:bg-info/20 rounded-md text-xs font-medium transition-colors"
+              className="inline-flex h-7 items-center rounded-md border border-primary/30 px-2.5 text-xs font-medium text-primary transition-colors hover:bg-accent hover:text-accent-foreground"
             >
               Lead
             </button>
-            <button 
+            <button
+              type="button"
               onClick={() => navigate(`/enquiry-tracker?action=new-enquiry&${urlParams}`)}
-              className="px-3 py-1 bg-success/10 text-success hover:bg-success/20 rounded-md text-xs font-medium transition-colors"
+              className="inline-flex h-7 items-center rounded-md border border-input bg-card px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
             >
               Enquiry
             </button>
@@ -489,10 +501,10 @@ function ClientMaster() {
         </td>
       ),
       companyName: (
-        <td key="companyName" className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 text-center">{row.companyName}</td>
+        <td key="companyName" className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 text-center">{row.companyName}</td>
       ),
       clientCode: (
-        <td key="clientCode" className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-primary text-center">
+        <td key="clientCode" className="px-4 py-3 whitespace-nowrap text-sm font-semibold text-primary text-center">
           {row.clientCode ? (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary text-xs font-semibold">
               {row.clientCode}
@@ -503,7 +515,7 @@ function ClientMaster() {
         </td>
       ),
       salesType: (
-        <td key="salesType" className="px-6 py-4 whitespace-nowrap text-sm text-center">
+        <td key="salesType" className="px-4 py-3 whitespace-nowrap text-sm text-center">
           {row.salesType ? (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded text-xs font-medium bg-primary/5 text-primary border border-primary/20">
               {row.salesType}
@@ -514,9 +526,9 @@ function ClientMaster() {
         </td>
       ),
       trackerStatus: (
-        <td key="trackerStatus" className="px-6 py-4 whitespace-nowrap text-sm text-center">
+        <td key="trackerStatus" className="px-4 py-3 whitespace-nowrap text-sm text-center">
           {row.trackerStatus && row.trackerStatus !== "-" ? (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-warning/30 bg-warning/5 text-warning-foreground text-xs font-medium shadow-sm">
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-warning/30 bg-warning/5 text-warning-foreground text-xs font-medium ">
               {row.trackerStatus}
             </span>
           ) : (
@@ -525,9 +537,9 @@ function ClientMaster() {
         </td>
       ),
       newStatus: (
-        <td key="newStatus" className="px-6 py-4 whitespace-nowrap text-sm text-center">
+        <td key="newStatus" className="px-4 py-3 whitespace-nowrap text-sm text-center">
           {row.isNewlyConverted ? (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-medium shadow-sm">
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-medium">
               New - No Follow-up Yet
             </span>
           ) : (
@@ -536,16 +548,16 @@ function ClientMaster() {
         </td>
       ),
       clientName: (
-        <td key="clientName" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.clientName || "-"}</td>
+        <td key="clientName" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">{row.clientName || "-"}</td>
       ),
       clientMobileNumber: (
-        <td key="clientMobileNumber" className="px-6 py-4 whitespace-nowrap text-sm text-primary font-medium text-center">{row.clientMobileNumber || "-"}</td>
+        <td key="clientMobileNumber" className="px-4 py-3 whitespace-nowrap text-sm text-primary font-medium text-center">{row.clientMobileNumber || "-"}</td>
       ),
       companyGroupName: (
-        <td key="companyGroupName" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.companyGroupName || "-"}</td>
+        <td key="companyGroupName" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">{row.companyGroupName || "-"}</td>
       ),
       scName: (
-        <td key="scName" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">
+        <td key="scName" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">
           {row.scName ? (
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary/5 text-primary">
               {row.scName}
@@ -556,30 +568,30 @@ function ClientMaster() {
         </td>
       ),
       crmName: (
-        <td key="crmName" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.crmName || "-"}</td>
+        <td key="crmName" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">{row.crmName || "-"}</td>
       ),
       state: (
-        <td key="state" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.state || "-"}</td>
+        <td key="state" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">{row.state || "-"}</td>
       ),
       stateCode: (
-        <td key="stateCode" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.stateCode || "-"}</td>
+        <td key="stateCode" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">{row.stateCode || "-"}</td>
       ),
       gstNumber: (
-        <td key="gstNumber" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.gstNumber || "-"}</td>
+        <td key="gstNumber" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">{row.gstNumber || "-"}</td>
       ),
       billingAddress: (
-        <td key="billingAddress" className="px-6 py-4 text-sm text-gray-600 min-w-[200px] truncate max-w-xs text-center" title={row.billingAddress}>{row.billingAddress || "-"}</td>
+        <td key="billingAddress" className="px-4 py-3 text-sm text-gray-600 min-w-[200px] truncate max-w-xs text-center" title={row.billingAddress}>{row.billingAddress || "-"}</td>
       ),
       creditDays: (
-        <td key="creditDays" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.creditDays !== "" ? row.creditDays : "-"}</td>
+        <td key="creditDays" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">{row.creditDays !== "" ? row.creditDays : "-"}</td>
       ),
       creditLimit: (
-        <td key="creditLimit" className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">{row.creditLimit !== "" ? row.creditLimit : "-"}</td>
+        <td key="creditLimit" className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 text-center">{row.creditLimit !== "" ? row.creditLimit : "-"}</td>
       )
     };
 
     return (
-      <tr key={row.uuid || index} className="hover:bg-primary/30 transition-colors border-b border-gray-100 last:border-0">
+      <tr key={row.uuid || index}>
         {visibleHeaders.map(col => columnCells[col.key])}
       </tr>
     );
@@ -587,7 +599,7 @@ function ClientMaster() {
 
   const renderCard = (item, index) => {
     return (
-      <div key={item.uuid || index} className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+      <div key={item.uuid || index} className="bg-card p-4 rounded-lg border">
         <div className="flex justify-between items-start mb-2">
           <div className="flex flex-col">
             <span className="font-semibold text-gray-800">{item.companyName}</span>
@@ -626,113 +638,73 @@ function ClientMaster() {
         <div className="text-sm text-gray-600 mb-4">
           <span className="font-medium text-gray-800">GST:</span> {item.gstNumber || "-"}
         </div>
-        <div className="flex justify-end gap-4 mt-2 pt-2 border-t border-gray-100">
-          <button onClick={() => handleOpenModal("edit", item)} className="text-info" title="Edit"><Pencil size={16} /></button>
-          <button onClick={() => handleDelete(item)} className="text-destructive" title="Delete"><Trash2 size={16} /></button>
+        <div className="flex justify-end gap-2 mt-2 pt-2 border-t">
+          <button type="button" onClick={() => handleOpenModal("edit", item)} className="flex h-8 w-8 items-center justify-center rounded-md transition-colors text-info hover:bg-accent" aria-label={`Edit ${item.companyName}`}><Pencil size={16} aria-hidden="true" /></button>
+          <button type="button" onClick={() => handleDelete(item)} className="flex h-8 w-8 items-center justify-center rounded-md transition-colors text-destructive hover:bg-destructive/10" aria-label={`Delete ${item.companyName}`}><Trash2 size={16} aria-hidden="true" /></button>
         </div>
       </div>
     );
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full min-h-0">
-        
+    <div className="flex-1 flex flex-col h-full min-h-0 gap-3">
         {/* Top Tab Switcher & Controls Section */}
-        <div className="flex flex-col gap-3 mb-3 bg-white shrink-0 p-1">
-          {/* Tabs */}
-          <div className="flex items-center gap-2 border-b border-gray-200 pb-2 px-1">
-            <button
-              onClick={() => { setActiveTab("converted"); setCurrentPage(1); }}
-              className={`px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${
-                activeTab === "converted"
-                  ? "border-primary text-primary bg-primary/50 font-bold"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-              }`}
-            >
-              Converted Clients
-              <span className={`px-2 py-0.5 rounded-full text-xs ${activeTab === "converted" ? "bg-primary/10 text-primary" : "bg-gray-100 text-gray-600"}`}>
-                {convertedCount}
-              </span>
-            </button>
-            <button
-              onClick={() => { setActiveTab("unconverted"); setCurrentPage(1); }}
-              className={`px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${
-                activeTab === "unconverted"
-                  ? "border-warning/40 text-warning-foreground bg-warning/50 font-bold"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-              }`}
-            >
-              Unconverted Clients
-              <span className={`px-2 py-0.5 rounded-full text-xs ${activeTab === "unconverted" ? "bg-warning/15 text-warning-foreground" : "bg-gray-100 text-gray-600"}`}>
-                {unconvertedCount}
-              </span>
-            </button>
-            <button
-              onClick={() => { setActiveTab("new"); setCurrentPage(1); }}
-              className={`px-4 py-2 font-medium text-sm rounded-t-lg border-b-2 transition-all flex items-center gap-2 ${
-                activeTab === "new"
-                  ? "border-success/40 text-success bg-success/10 font-bold"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-              }`}
-              title="No client_code yet, and nothing currently open -- safe to re-contact"
-            >
-              Lost Clients
-              <span className={`px-2 py-0.5 rounded-full text-xs ${activeTab === "new" ? "bg-success/15 text-success" : "bg-gray-100 text-gray-600"}`}>
-                {newCount}
-              </span>
-            </button>
-          </div>
+        <div className="flex flex-col gap-3 shrink-0">
+          <StatusTabs
+            variant="underline"
+            label="Client lists"
+            activeTab={activeTab}
+            onChange={(id) => { setActiveTab(id); setCurrentPage(1); }}
+            tabs={[
+              { id: "converted", label: "Converted Clients", count: convertedCount },
+              { id: "unconverted", label: "Unconverted Clients", count: unconvertedCount },
+              { id: "new", label: "Lost Clients", count: newCount },
+            ]}
+          />
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0 pb-1 w-full">
-            
-            {/* Title / Label */}
-            <div className="text-lg font-bold text-gray-800 shrink-0 mr-2 border-r border-gray-200 pr-4">
-              {activeTab === "converted" ? "Converted Clients" : activeTab === "unconverted" ? "Unconverted Clients" : "Lost Clients"}
-            </div>
-
+          <div className="flex flex-wrap items-center gap-2 shrink-0 w-full">
             {/* Search Bar -- also matches company_name/state/GST/SC/CRM/etc
                 (see applyCommonFilters), so there's no separate Company/State
                 dropdown duplicating it. */}
-            <div className="relative flex-1 min-w-[200px] max-w-[360px]">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Search className="h-4 w-4 text-gray-400" />
-              </div>
-              <input
-                type="text"
-                placeholder="Search by company, state, GST, SC, CRM..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary block pl-10 h-9"
-              />
-            </div>
+            <FilterSearch
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Search by company, state, GST, SC, CRM..."
+              className="max-w-[360px]"
+            />
 
-            {/* Relevance / Already In Tracker / Status, grouped into one
-                popover -- as three separate <select>s this row ran out of
-                room and the longer labels ("Already In Tracker: All") just
-                clipped. Same ref + click-outside pattern as the Columns
-                toggle below, so it reads as the same kind of control. */}
+            {/* Relevance / Already In Tracker / Status, grouped into one popover */}
             <div className="relative shrink-0" ref={filtersPopoverRef}>
               <button
                 type="button"
+                aria-haspopup="true"
+                aria-expanded={showFiltersPopover}
                 onClick={() => setShowFiltersPopover(prev => !prev)}
-                className="px-3 h-9 bg-white border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors flex items-center gap-2"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm text-foreground transition-colors hover:bg-accent"
               >
+                <SlidersHorizontal size={16} aria-hidden="true" />
                 <span>Filters</span>
                 {moreFiltersActiveCount > 0 && (
-                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[11px] font-semibold">
+                  <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground">
                     {moreFiltersActiveCount}
                   </span>
                 )}
               </button>
 
               {showFiltersPopover && (
-                <div className="absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-xl z-50 p-4 space-y-4">
+                <div
+                  role="group"
+                  aria-label="More filters"
+                  onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setShowFiltersPopover(false); } }}
+                  className="absolute left-0 top-full z-50 mt-1 w-72 space-y-4 rounded-md border bg-popover p-4 shadow-lg"
+                >
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1.5">Already In Tracker</label>
+                    <label htmlFor="client-filter-tracker" className="block text-xs font-medium text-muted-foreground mb-1.5">Already In Tracker</label>
                     <select
+                      id="client-filter-tracker"
                       value={trackerStatusFilter}
                       onChange={(e) => { setTrackerStatusFilter(e.target.value); setCurrentPage(1); }}
-                      className="w-full h-9 px-3 bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className={filterControlClass}
                     >
                       <option value="all">All</option>
                       <option value="safe">Safe to re-engage (none / order received)</option>
@@ -743,11 +715,12 @@ function ClientMaster() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1.5">Status</label>
+                    <label htmlFor="client-filter-status" className="block text-xs font-medium text-muted-foreground mb-1.5">Status</label>
                     <select
+                      id="client-filter-status"
                       value={newStatusFilter}
                       onChange={(e) => { setNewStatusFilter(e.target.value); setCurrentPage(1); }}
-                      className="w-full h-9 px-3 bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                      className={filterControlClass}
                     >
                       <option value="all">All</option>
                       <option value="new">New - no follow-up yet</option>
@@ -757,12 +730,13 @@ function ClientMaster() {
 
                   {moreFiltersActiveCount > 0 && (
                     <button
+                      type="button"
                       onClick={() => {
                         setTrackerStatusFilter("all")
                         setNewStatusFilter("all")
                         setCurrentPage(1)
                       }}
-                      className="w-full text-center text-sm text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-md h-8 transition-colors"
+                      className="h-8 w-full rounded-md border border-destructive/30 text-center text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
                     >
                       Reset these filters
                     </button>
@@ -775,7 +749,8 @@ function ClientMaster() {
             <div className="flex items-center gap-2 shrink-0 ml-auto">
               {(moreFiltersActiveCount > 0 || searchQuery) && (
                 <button
-                  className="px-3 h-9 text-sm text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-md transition-colors shrink-0"
+                  type="button"
+                  className="h-9 px-3 text-sm font-medium text-destructive hover:bg-destructive/10 border border-destructive/30 rounded-md transition-colors shrink-0"
                   onClick={() => {
                     setTrackerStatusFilter("all")
                     setNewStatusFilter("all")
@@ -786,58 +761,41 @@ function ClientMaster() {
                   Clear Filters
                 </button>
               )}
-              <button onClick={fetchClients} className="px-3 h-9 bg-white border border-gray-300 rounded-md shadow-sm text-gray-600 hover:bg-gray-50 hover:text-primary transition-colors" title="Refresh">
-                <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} />
+              <button
+                type="button"
+                onClick={fetchClients}
+                className="flex h-9 w-9 items-center justify-center rounded-md border border-input bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="Refresh clients"
+                title="Refresh"
+              >
+                <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} aria-hidden="true" />
               </button>
 
-              {/* Column Visibility Toggle Button & Popover */}
-              <div className="relative" ref={columnToggleRef}>
-                <button
-                  type="button"
-                  onClick={() => setShowColumnToggle(prev => !prev)}
-                  className="px-3 h-9 bg-white border border-gray-300 rounded-md shadow-sm text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors flex items-center gap-2"
-                  title="Toggle Column Visibility"
-                >
-                  <Eye size={16} />
-                  <span>Columns</span>
-                </button>
-
-                {showColumnToggle && (
-                  <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded-lg shadow-xl z-50 p-2 max-h-80 overflow-y-auto">
-                    <div className="text-xs font-bold text-gray-500 uppercase px-2 py-1 border-b border-gray-100 flex justify-between items-center mb-1">
-                      <span>Visible Columns</span>
-                      <button 
-                        onClick={() => setHiddenColumns([])}
-                        className="text-[11px] text-primary hover:underline capitalize font-normal"
-                      >
-                        Show All
-                      </button>
-                    </div>
-                    {allHeaders.filter(col => isAdmin() || col.key !== "actions").map(col => (
-                      <label key={col.key} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded text-xs font-medium text-gray-700 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={!hiddenColumns.includes(col.key)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setHiddenColumns(hiddenColumns.filter(k => k !== col.key));
-                            } else {
-                              setHiddenColumns([...hiddenColumns, col.key]);
-                            }
-                          }}
-                          className="rounded text-primary focus:ring-primary h-3.5 w-3.5"
-                        />
-                        {col.label}
-                      </label>
-                    ))}
-                  </div>
-                )}
+              {/* Column visibility */}
+              <div ref={columnToggleRef}>
+                <ColumnSelector
+                  idPrefix="client-col"
+                  options={allHeaders.filter(col => isAdmin() || col.key !== "actions")}
+                  visible={Object.fromEntries(allHeaders.map((col) => [col.key, !hiddenColumns.includes(col.key)]))}
+                  onToggle={(key) =>
+                    setHiddenColumns((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
+                  }
+                  onSelectAll={() =>
+                    setHiddenColumns(hiddenColumns.length === 0 ? allHeaders.map((col) => col.key) : [])
+                  }
+                  open={showColumnToggle}
+                  onOpenChange={setShowColumnToggle}
+                />
               </div>
 
               {isAdmin() && (
-                <button onClick={() => handleOpenModal("add")} className="px-3 h-9 bg-primary hover:opacity-90 text-white rounded-md shadow-sm transition-colors flex items-center gap-2">
-                  <Plus size={16} />
-                  <span className="font-medium text-sm">Add Client</span>
+                <button
+                  type="button"
+                  onClick={() => handleOpenModal("add")}
+                  className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  Add Client
                 </button>
               )}
             </div>
@@ -847,6 +805,9 @@ function ClientMaster() {
         {/* Main Table Area */}
         <div className="flex-1 min-h-0 overflow-hidden relative">
           <DataTable
+            ariaLabel="Clients"
+            emptyTitle="No clients found"
+            emptyDescription="Try a different tab, search or filter."
             headers={headers}
             data={clientData}
             renderRow={renderRow}
@@ -870,52 +831,52 @@ function ClientMaster() {
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Company Name *</label>
-              <input required value={formData.companyName} onChange={e => setFormData({...formData, companyName: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-1" className="block text-sm font-medium text-foreground">Company Name *</label>
+              <input id="client-field-1" required value={formData.companyName} onChange={e => setFormData({...formData, companyName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Client Name</label>
-              <input value={formData.clientName} onChange={e => setFormData({...formData, clientName: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-2" className="block text-sm font-medium text-foreground">Client Name</label>
+              <input id="client-field-2" value={formData.clientName} onChange={e => setFormData({...formData, clientName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Client Mobile Number</label>
-              <input value={formData.clientMobileNumber} onChange={e => setFormData({...formData, clientMobileNumber: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-3" className="block text-sm font-medium text-foreground">Client Mobile Number</label>
+              <input id="client-field-3" value={formData.clientMobileNumber} onChange={e => setFormData({...formData, clientMobileNumber: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Company Group Name</label>
-              <input value={formData.companyGroupName} onChange={e => setFormData({...formData, companyGroupName: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-4" className="block text-sm font-medium text-foreground">Company Group Name</label>
+              <input id="client-field-4" value={formData.companyGroupName} onChange={e => setFormData({...formData, companyGroupName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">SC Name</label>
-              <input value={formData.scName} onChange={e => setFormData({...formData, scName: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-5" className="block text-sm font-medium text-foreground">SC Name</label>
+              <input id="client-field-5" value={formData.scName} onChange={e => setFormData({...formData, scName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">CRM Name</label>
-              <input value={formData.crmName} onChange={e => setFormData({...formData, crmName: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-6" className="block text-sm font-medium text-foreground">CRM Name</label>
+              <input id="client-field-6" value={formData.crmName} onChange={e => setFormData({...formData, crmName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">State</label>
-              <input value={formData.state} onChange={e => setFormData({...formData, state: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-7" className="block text-sm font-medium text-foreground">State</label>
+              <input id="client-field-7" value={formData.state} onChange={e => setFormData({...formData, state: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">State Code</label>
-              <input value={formData.stateCode} onChange={e => setFormData({...formData, stateCode: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-8" className="block text-sm font-medium text-foreground">State Code</label>
+              <input id="client-field-8" value={formData.stateCode} onChange={e => setFormData({...formData, stateCode: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">GST Number</label>
-              <input value={formData.gstNumber} onChange={e => setFormData({...formData, gstNumber: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-9" className="block text-sm font-medium text-foreground">GST Number</label>
+              <input id="client-field-9" value={formData.gstNumber} onChange={e => setFormData({...formData, gstNumber: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Credit Days</label>
-              <input type="number" value={formData.creditDays} onChange={e => setFormData({...formData, creditDays: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-10" className="block text-sm font-medium text-foreground">Credit Days</label>
+              <input id="client-field-10" type="number" value={formData.creditDays} onChange={e => setFormData({...formData, creditDays: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Credit Limit</label>
-              <input type="number" step="0.01" value={formData.creditLimit} onChange={e => setFormData({...formData, creditLimit: e.target.value})} className="w-full px-3 py-2 border rounded-md" />
+              <label htmlFor="client-field-11" className="block text-sm font-medium text-foreground">Credit Limit</label>
+              <input id="client-field-11" type="number" step="0.01" value={formData.creditLimit} onChange={e => setFormData({...formData, creditLimit: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
             </div>
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-gray-700">Sales Type</label>
-              <select value={formData.salesType} onChange={e => setFormData({...formData, salesType: e.target.value})} className="w-full px-3 py-2 border rounded-md bg-white">
+              <label htmlFor="client-field-12" className="block text-sm font-medium text-foreground">Sales Type</label>
+              <select id="client-field-12" value={formData.salesType} onChange={e => setFormData({...formData, salesType: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none">
                 <option value="">Select Sales Type</option>
                 <option value="NBD">NBD</option>
                 <option value="NBD_CRR">NBD_CRR</option>
@@ -923,11 +884,12 @@ function ClientMaster() {
               </select>
             </div>
             <div className="space-y-2 md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700">Billing Address</label>
-              <textarea value={formData.billingAddress} onChange={e => setFormData({...formData, billingAddress: e.target.value})} className="w-full px-3 py-2 border rounded-md" rows="2" />
+              <label htmlFor="client-field-13" className="block text-sm font-medium text-foreground">Billing Address</label>
+              <textarea id="client-field-13" value={formData.billingAddress} onChange={e => setFormData({...formData, billingAddress: e.target.value})} className="w-full rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none" rows="2" />
             </div>
           </div>
         </ModalForm>
+      {confirmDialog}
     </div>
   );
 }

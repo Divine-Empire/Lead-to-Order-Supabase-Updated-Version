@@ -6,7 +6,7 @@ import supabase from "../../utils/supabase";
 // (IST, +5:30) local midnight becomes the previous day's evening in UTC,
 // silently shifting every "today" cutoff (Today/Overdue/Upcoming/First Call
 // Pending) back by a day.
-function getLocalTodayStr() {
+export function getLocalTodayStr() {
   const today = new Date();
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 }
@@ -80,6 +80,15 @@ export function usePendingCallTracker({
         if (dateFilter.includes("overdue")) clauses.push(`and(pending_group.eq.existing,next_call_date.lt.${todayStr})`);
         if (dateFilter.includes("first-call-pending")) clauses.push(`pending_group.eq.new`);
         if (dateFilter.includes("upcoming")) clauses.push(`and(pending_group.eq.existing,next_call_date.gt.${todayStr})`);
+        // "Assigned Today" isn't a column on the view -- it comes from the
+        // separate (nightly-wiped) lto_call_tracker_today_assignments table,
+        // so resolve it to a list of lead ids first. An empty list still adds
+        // a never-matching clause rather than silently no-op'ing the filter.
+        if (dateFilter.includes("assigned-today")) {
+          const { data: assignedRows } = await supabase.from("lto_call_tracker_today_assignments").select("lead_id");
+          const ids = (assignedRows || []).map((r) => r.lead_id);
+          clauses.push(ids.length > 0 ? `record_id.in.(${ids.join(",")})` : `record_id.eq.00000000-0000-0000-0000-000000000000`);
+        }
         if (clauses.length > 0) query = query.or(clauses.join(","));
       }
 
@@ -140,6 +149,8 @@ export function useHistoryCallTracker({
         query = query.or('status.is.null,status.eq."",status.eq."New"');
       } else if (filterType === "multi") {
         query = query.ilike("status", "%expected%");
+      } else if (filterType === "lost") {
+        query = query.eq("status", "not-interested");
       }
       // History matches on Timestamp (created_at), not next_call_date --
       // and, same as Pending above, dateFilter is an array so the selected
@@ -311,5 +322,69 @@ export async function fetchPendingFilterOptionsSource() {
     console.error("Error fetching pending filter options source:", error);
   }
   return rows;
+}
+
+// Admin-only bulk "assign for today" overlay. Each lead is always assigned
+// to ITS OWN existing assigned_to/sc_name (passed in per-row, never picked
+// in the UI) -- so this never changes RBAC scoping, only adds a same-day
+// tag. The whole table is wiped every night by a pg_cron job (see
+// Database/08_call_tracker_today_assignments.sql), so there's no history to
+// manage here -- a row existing in it always means "assigned for today".
+// `lead_id` is UNIQUE, so re-assigning the same lead the same day upserts
+// (refreshes assigned_by/assigned_at) instead of erroring or duplicating.
+export async function assignLeadsForToday(rows, assignedBy) {
+  const payload = rows.map((r) => ({
+    lead_id: r.id,
+    assigned_to: r.assignedTo,
+    assigned_by: assignedBy,
+    assigned_at: new Date().toISOString(),
+  }));
+  const { error } = await supabase
+    .from("lto_call_tracker_today_assignments")
+    .upsert(payload, { onConflict: "lead_id" });
+  if (error) throw error;
+}
+
+// The whole table is tiny (wiped nightly), so fetching it in full is cheap
+// -- an admin sees every SC's assignments, a non-admin SC sees only her own
+// (scoped the same way as every other query here, by assigned_to).
+export async function fetchTodayAssignments({ isAdmin, usernamesToFilter }) {
+  try {
+    let q = supabase.from("lto_call_tracker_today_assignments").select("*");
+    if (!isAdmin && usernamesToFilter && usernamesToFilter.length > 0) {
+      q = q.in("assigned_to", usernamesToFilter);
+    }
+    const { data, error } = await q;
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error("Error fetching today's assignments:", error);
+    return [];
+  }
+}
+
+// "Called today" for the assigned-today summary -- deliberately a direct
+// created_at >= todayStr string comparison against the SAME local date
+// string used everywhere else in this file (getLocalTodayStr), matching the
+// existing (not timezone-perfect, but consistent) convention already used
+// for the History tab's Today/Older split rather than introducing a
+// different comparison method just for this feature. Only ever called with
+// the small set of today's assigned lead_ids, so this is cheap regardless of
+// how big lto_call_tracker_for_leads itself is.
+export async function fetchCalledTodayLeadIds(leadIds) {
+  if (!leadIds || leadIds.length === 0) return new Set();
+  try {
+    const todayStr = getLocalTodayStr();
+    const { data, error } = await supabase
+      .from("lto_call_tracker_for_leads")
+      .select("lead_id")
+      .in("lead_id", leadIds)
+      .gte("created_at", todayStr);
+    if (error) throw error;
+    return new Set((data || []).map((r) => r.lead_id));
+  } catch (error) {
+    console.error("Error fetching called-today lead ids:", error);
+    return new Set();
+  }
 }
 

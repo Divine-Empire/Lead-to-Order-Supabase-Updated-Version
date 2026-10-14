@@ -1,8 +1,15 @@
-﻿import React, { useState, useEffect } from "react";
-import { Search, Plus, Pencil, Trash2, RefreshCw, Users, ShieldCheck, ArrowRight, CheckSquare, Square } from "lucide-react";
+﻿import React, { useState, useEffect, useContext } from "react";
+import { AuthContext } from "../../App";
+import useConfirmDialog from "../../components/useConfirmDialog";
+import { Plus, Pencil, Trash2, RefreshCw, Users, ShieldCheck, ArrowRight, CheckSquare, Square } from "lucide-react";
 import supabase from "../../utils/supabase";
+import PaginationBar from "../../components/PaginationBar";
+import MasterDialog from "../../components/MasterDialog";
+import { FilterSearch } from "../../components/FilterBar";
 
 export default function ScDistributionMaster() {
+  const { showNotification = () => {} } = useContext(AuthContext) || {};
+  const { askConfirm, confirmDialog } = useConfirmDialog();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -215,7 +222,7 @@ export default function ScDistributionMaster() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!formData.sc_name.trim()) {
-      alert("Please select or enter an SC Name.");
+      showNotification("Please select or enter an SC Name.", "error");
       return;
     }
 
@@ -264,30 +271,31 @@ export default function ScDistributionMaster() {
       handleCloseModal();
       fetchData();
     } catch (err) {
-      alert("Error saving SC distribution rule: " + err.message);
+      showNotification("Error saving SC distribution rule: " + err.message, "error");
       console.error(err);
     }
   };
 
   const handleDelete = async (id) => {
     if (!id) {
-      alert("Cannot delete: this rule has no id.");
+      showNotification("Cannot delete: this rule has no id.", "error");
       return;
     }
-    if (!window.confirm("Are you sure you want to delete this SC distribution rule?")) return;
-    try {
-      const { data, error } = await supabase.from("lto_sc_distribution").delete().eq("id", id).select().maybeSingle();
-      if (error) throw error;
-      if (!data) throw new Error("This rule was already removed (no matching id found).");
-      fetchData();
-    } catch (err) {
-      alert("Error deleting record: " + (err.message || err));
-    }
+    askConfirm({ title: "Delete rule?", message: "Are you sure you want to delete this SC distribution rule?", confirmText: "Delete" }, async () => {
+      try {
+        const { data, error } = await supabase.from("lto_sc_distribution").delete().eq("id", id).select().maybeSingle();
+        if (error) throw error;
+        if (!data) throw new Error("This rule was already removed (no matching id found).");
+        fetchData();
+      } catch (err) {
+        showNotification("Error deleting record: " + (err.message || err), "error");
+      }
+    });
   };
 
   const handleToggleNextInLine = async (row) => {
     if (!row?.id) {
-      alert("Cannot update: this rule has no id.");
+      showNotification("Cannot update: this rule has no id.", "error");
       return;
     }
     try {
@@ -302,7 +310,7 @@ export default function ScDistributionMaster() {
       if (!data) throw new Error("This rule no longer exists (no matching id found).");
       fetchData();
     } catch (err) {
-      alert("Error updating Next in Line status: " + (err.message || err));
+      showNotification("Error updating Next in Line status: " + (err.message || err), "error");
     }
   };
 
@@ -310,127 +318,125 @@ export default function ScDistributionMaster() {
   const totalPages = Math.ceil(totalResults / itemsPerPage) || 1;
 
   return (
-    <div className="min-h-screen bg-gray-50/50 p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="flex flex-col gap-3 h-full min-h-0">
+      <div className="flex flex-col gap-3 flex-1 min-h-0">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-              <Users className="w-7 h-7 text-primary" />
+            <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
+              <Users className="h-4 w-4 text-primary" aria-hidden="true" />
               SC Distribution Master
-            </h1>
-            <p className="text-sm text-gray-500 mt-1">
+            </h2>
+            <p className="mt-0.5 text-sm text-muted-foreground">
               Configure dynamic SC assignments based on multi-select checkboxes for Sales Type, Lead Source, and NOB.
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => {
                 fetchData();
                 fetchDropdownOptions();
               }}
-              className="p-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition duration-150"
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-input bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              aria-label="Refresh SC rules"
               title="Refresh"
             >
-              <RefreshCw className={`w-5 h-5 ${loading ? "animate-spin text-primary" : ""}`} />
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin text-primary" : ""}`} aria-hidden="true" />
             </button>
             <button
+              type="button"
               onClick={() => handleOpenModal("add")}
-              className="flex items-center gap-2 px-4 py-2 bg-primary hover:opacity-90 text-white font-medium rounded-lg shadow-sm transition duration-150"
+              className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              <Plus className="w-5 h-5" />
+              <Plus className="h-4 w-4" aria-hidden="true" />
               Add SC Rule
             </button>
           </div>
         </div>
 
         {/* Search & Instructions */}
-        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-5 h-5 absolute left-3 top-2.5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by SC name..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-            />
-          </div>
-          <div className="text-xs text-gray-600 max-w-xl">
-            <span className="flex items-center gap-1.5 font-medium text-primary bg-primary/5 px-3 py-2 rounded-lg border border-primary/20">
-              <ShieldCheck className="w-4 h-4 text-primary shrink-0" />
-              Rules are evaluated dynamically. Upon Order conversion (NBD &rarr; NBD_CRR), the system matches candidates with NBD_CRR and the company's NOB without hardcoded restrictions.
-            </span>
-          </div>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <FilterSearch
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder="Search by SC name..."
+            className="max-w-md"
+          />
+          <p className="flex max-w-xl items-start gap-1.5 rounded-md border border-primary/20 bg-accent px-3 py-2 text-xs font-medium text-brand-800">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            <span>Rules are evaluated dynamically. Upon Order conversion (NBD &rarr; NBD_CRR), the system matches candidates with NBD_CRR and the company's NOB without hardcoded restrictions.</span>
+          </p>
         </div>
 
         {/* Table */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                <th className="py-3.5 px-4">Seq</th>
-                <th className="py-3.5 px-6">SC Name</th>
-                <th className="py-3.5 px-5">Sales Types</th>
-                <th className="py-3.5 px-5">Lead Sources</th>
-                <th className="py-3.5 px-5">NOB Rules</th>
-                <th className="py-3.5 px-5">Last Lead No.</th>
-                <th className="py-3.5 px-5 text-center">Next Turn</th>
-                <th className="py-3.5 px-6 text-right">Actions</th>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full text-left border-collapse" aria-label="SC distribution rules">
+            <thead className="sticky top-0 z-10 bg-secondary">
+              <tr className="bg-secondary border-b text-xs font-semibold text-brand-800">
+                <th scope="col" className="py-2.5 px-4">Seq</th>
+                <th scope="col" className="py-2.5 px-4">SC Name</th>
+                <th scope="col" className="py-2.5 px-4">Sales Types</th>
+                <th scope="col" className="py-2.5 px-4">Lead Sources</th>
+                <th scope="col" className="py-2.5 px-4">NOB Rules</th>
+                <th scope="col" className="py-2.5 px-4">Last Lead No.</th>
+                <th scope="col" className="py-2.5 px-4 text-center">Next Turn</th>
+                <th scope="col" className="py-2.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 text-sm">
+            <tbody className="divide-y text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan="8" className="text-center py-10 text-gray-400">
+                  <td colSpan="8" className="text-center py-10 text-muted-foreground">
                     Loading SC distribution rules...
                   </td>
                 </tr>
               ) : filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="text-center py-12 text-gray-500">
+                  <td colSpan="8" className="text-center py-12 text-muted-foreground">
                     No SC distribution rules configured. Click "Add SC Rule" to create your pool.
                   </td>
                 </tr>
               ) : (
                 filteredRows.map((row, index) => (
-                  <tr key={row.id} className="hover:bg-gray-50/70 transition duration-150">
-                    <td className="py-4 px-4 font-medium text-gray-500">
+                  <tr key={row.id} className="hover:bg-secondary/60 transition-colors">
+                    <td className="py-3 px-4 font-medium text-muted-foreground">
                       #{row.sequence_order || index + 1}
                     </td>
-                    <td className="py-4 px-6 font-bold text-gray-900 whitespace-nowrap">
+                    <td className="py-3 px-4 font-semibold text-foreground whitespace-nowrap">
                       <div className="flex items-center gap-2">
-                        <span className="w-8 h-8 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs">
+                        <span className="w-8 h-8 rounded-full bg-accent text-brand-800 font-semibold flex items-center justify-center text-xs" aria-hidden="true">
                           {row.sc_name?.slice(0, 2)?.toUpperCase()}
                         </span>
                         {row.sc_name}
                       </div>
                     </td>
-                    <td className="py-4 px-5 max-w-[200px]">
+                    <td className="py-3 px-4 max-w-[200px]">
                       <div className="flex flex-wrap gap-1">
                         {(row.sales_types || []).map((t) => (
-                          <span key={t} className="px-2 py-0.5 text-xs font-bold bg-primary/5 text-primary border border-primary/20 rounded-md">
+                          <span key={t} className="px-2 py-0.5 text-xs font-semibold bg-accent text-brand-800 border border-primary/20 rounded-md">
                             {t}
                           </span>
                         ))}
                       </div>
                     </td>
-                    <td className="py-4 px-5 max-w-[200px]">
+                    <td className="py-3 px-4 max-w-[200px]">
                       <div className="flex flex-wrap gap-1">
                         {(row.lead_sources || []).map((s) => (
-                          <span key={s} className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 border border-gray-300 rounded-md">
+                          <span key={s} className="px-2 py-0.5 text-xs font-medium bg-secondary text-foreground border rounded-md">
                             {s}
                           </span>
                         ))}
                       </div>
                     </td>
-                    <td className="py-4 px-5 max-w-[240px]">
+                    <td className="py-3 px-4 max-w-[240px]">
                       <div className="flex flex-wrap gap-1">
                         {(row.nobs || []).map((n) => {
                           const isSpecial = n.includes("EXCEPT") || n === "ALL NOBS";
                           return (
-                            <span key={n} className={`px-2 py-0.5 text-xs font-bold border rounded-md ${
-                              isSpecial ? "bg-warning/5 text-warning-foreground border-warning/30" : "bg-success/5 text-success border-success/20"
+                            <span key={n} className={`px-2 py-0.5 text-xs font-semibold border rounded-md ${
+                              isSpecial ? "bg-warning/15 text-foreground border-warning/40" : "bg-secondary text-foreground"
                             }`}>
                               {n}
                             </span>
@@ -438,49 +444,55 @@ export default function ScDistributionMaster() {
                         })}
                       </div>
                     </td>
-                    <td className="py-4 px-5 font-medium whitespace-nowrap">
+                    <td className="py-3 px-4 font-medium whitespace-nowrap">
                       {row.last_assigned_lead && row.last_assigned_lead !== "—" ? (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary/5 border border-primary/20 text-primary text-xs font-semibold shadow-sm">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-accent border border-primary/20 text-brand-800 text-xs font-semibold">
                           {row.last_assigned_lead}
                         </span>
                       ) : (
-                        <span className="text-gray-400 font-normal">—</span>
+                        <span className="text-muted-foreground font-normal">—</span>
                       )}
                     </td>
-                    <td className="py-4 px-5 text-center whitespace-nowrap">
+                    <td className="py-3 px-4 text-center whitespace-nowrap">
                       <button
+                        type="button"
+                        aria-pressed={!!row.is_next_in_line}
                         onClick={() => handleToggleNextInLine(row)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+                        className={`inline-flex h-7 items-center gap-1.5 px-3 rounded-full text-xs font-semibold transition-colors ${
                           row.is_next_in_line
-                            ? "bg-primary/10 text-primary border border-primary/30 shadow-sm"
-                            : "bg-gray-50 text-gray-500 border border-gray-200 hover:bg-gray-100"
+                            ? "bg-accent text-brand-800 border border-primary/30"
+                            : "bg-card text-muted-foreground border hover:bg-accent"
                         }`}
                         title="Click to toggle Next in Line turn for this rule"
                       >
                         {row.is_next_in_line ? (
                           <>
-                            <ArrowRight className="w-3.5 h-3.5 text-primary animate-pulse" /> Next Turn
+                            <ArrowRight className="w-3.5 h-3.5 text-primary" aria-hidden="true" /> Next Turn
                           </>
                         ) : (
                           "Set Next"
                         )}
                       </button>
                     </td>
-                    <td className="py-4 px-6 text-right whitespace-nowrap">
+                    <td className="py-3 px-4 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-2">
                         <button
+                          type="button"
                           onClick={() => handleOpenModal("edit", row)}
-                          className="p-1.5 text-gray-500 hover:text-primary hover:bg-primary/5 rounded-lg transition duration-150"
+                          className="flex h-8 w-8 items-center justify-center rounded-md transition-colors text-info hover:bg-accent"
+                          aria-label={`Edit rule for ${row.sc_name}`}
                           title="Edit rule"
                         >
-                          <Pencil className="w-4 h-4" />
+                          <Pencil className="w-4 h-4" aria-hidden="true" />
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleDelete(row.id)}
-                          className="p-1.5 text-gray-500 hover:text-destructive hover:bg-destructive/10 rounded-lg transition duration-150"
+                          className="flex h-8 w-8 items-center justify-center rounded-md transition-colors text-destructive hover:bg-destructive/10"
+                          aria-label={`Delete rule for ${row.sc_name}`}
                           title="Delete rule"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-4 h-4" aria-hidden="true" />
                         </button>
                       </div>
                     </td>
@@ -491,69 +503,36 @@ export default function ScDistributionMaster() {
           </table>
         </div>
 
-        {/* Pager */}
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-          <div className="flex items-center gap-2 text-sm text-gray-600">
-            <span>Rows per page:</span>
-            <select
-              value={itemsPerPage}
-              onChange={(e) => { setItemsPerPage(Number(e.target.value)); setCurrentPage(1); }}
-              className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary"
-            >
-              {[10, 20, 50].map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-            <span className="ml-2">{totalResults} total</span>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <button
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage <= 1}
-              className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
-            >
-              Prev
-            </button>
-            <span className="text-gray-600">Page {currentPage} of {totalPages}</span>
-            <button
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage >= totalPages}
-              className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
-            >
-              Next
-            </button>
-          </div>
+        <PaginationBar
+          currentPage={currentPage}
+          totalPages={totalPages}
+          itemsPerPage={itemsPerPage}
+          totalResults={totalResults}
+          onPageChange={(p) => setCurrentPage(Math.min(Math.max(1, p), totalPages))}
+          onItemsPerPageChange={(n) => { setItemsPerPage(n); setCurrentPage(1); }}
+        />
         </div>
       </div>
 
       {/* Add / Edit Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-200">
-            <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center shrink-0">
-              <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                <Users className="w-5 h-5 text-primary" />
-                {modalMode === "add" ? "Add SC Distribution Rule" : "Edit SC Distribution Rule"}
-              </h3>
-              <button
-                onClick={handleCloseModal}
-                className="text-gray-400 hover:text-gray-600 font-bold text-xl"
-              >
-                &times;
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-6 flex-1">
+        <MasterDialog
+          title={modalMode === "add" ? "Add SC Distribution Rule" : "Edit SC Distribution Rule"}
+          onClose={handleCloseModal}
+          maxWidth="max-w-3xl"
+        >
+            <form onSubmit={handleSubmit} className="p-4 space-y-5">
               {/* Top Details (SC Name, Sequence, Next in Line) */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-4 border-b border-gray-100 items-end">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-4 border-b items-end">
                 <div className="md:col-span-1 space-y-1.5">
-                  <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <label htmlFor="sc-field-1" className="block text-sm font-medium text-foreground">
                     SC Name <span className="text-destructive">*</span>
                   </label>
                   <select
+                    id="sc-field-1"
                     value={formData.sc_name}
                     onChange={(e) => setFormData({ ...formData, sc_name: e.target.value })}
-                    className="w-full px-3 py-2 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:outline-none text-sm font-semibold text-gray-900"
+                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                     required
                   >
                     <option value="" disabled>Select SC Representative...</option>
@@ -566,27 +545,28 @@ export default function ScDistributionMaster() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <label htmlFor="sc-field-2" className="block text-sm font-medium text-foreground">
                     Sequence Order
                   </label>
                   <input
+                    id="sc-field-2"
                     type="number"
                     min="1"
                     value={formData.sequence_order}
                     onChange={(e) => setFormData({ ...formData, sequence_order: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
                   />
                 </div>
 
                 <div className="pb-1.5">
-                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-primary/75 border border-primary/20 cursor-pointer hover:bg-primary/60 transition-colors">
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-accent border border-primary/20 cursor-pointer hover:bg-accent/80 transition-colors">
                     <input
                       type="checkbox"
                       checked={formData.is_next_in_line}
                       onChange={(e) => setFormData({ ...formData, is_next_in_line: e.target.checked })}
-                      className="w-4 h-4 text-primary border-gray-300 rounded focus:ring-primary"
+                      className="w-4 h-4 rounded accent-primary"
                     />
-                    <span className="text-sm font-bold text-primary">Next Turn in Round-Robin</span>
+                    <span className="text-sm font-semibold text-brand-800">Next Turn in Round-Robin</span>
                   </label>
                 </div>
               </div>
@@ -594,27 +574,30 @@ export default function ScDistributionMaster() {
               {/* Checkbox Section: Sales Types */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-bold text-primary uppercase tracking-wider">
+                  <p className="text-sm font-semibold text-foreground">
                     1. Sales Types Checkboxes (NBD / NBD_CRR / CRR)
-                  </label>
-                  <span className="text-xs text-gray-400">Select all sales types this SC handles</span>
+                  </p>
+                  <span className="text-xs text-muted-foreground">Select all sales types this SC handles</span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-primary/50 p-3 rounded-xl border border-primary/20">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-secondary/50 p-3 rounded-lg border">
                   {salesTypeOptions.map((opt) => {
                     const checked = (formData.sales_types || []).includes(opt);
                     return (
-                      <label
+                      <button
                         key={opt}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={checked}
                         onClick={() => handleCheckboxToggle("sales_types", opt)}
-                        className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer border text-xs font-bold transition-all ${
+                        className={`w-full text-left flex items-center gap-2 p-2 rounded-lg cursor-pointer border text-xs font-bold transition-all ${
                           checked
-                            ? "bg-white text-primary border-primary/30 shadow-sm"
-                            : "bg-transparent text-gray-600 border-transparent hover:bg-white/50"
+                            ? "bg-card text-foreground border-primary/40 font-semibold"
+                            : "bg-transparent text-muted-foreground border-transparent hover:bg-card"
                         }`}
                       >
-                        {checked ? <CheckSquare className="w-4 h-4 text-primary shrink-0" /> : <Square className="w-4 h-4 text-gray-300 shrink-0" />}
+                        {checked ? <CheckSquare className="w-4 h-4 text-primary shrink-0" aria-hidden="true" /> : <Square className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />}
                         <span className="truncate">{opt}</span>
-                      </label>
+                      </button>
                     );
                   })}
                 </div>
@@ -623,28 +606,31 @@ export default function ScDistributionMaster() {
               {/* Checkbox Section: NOB */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-bold text-warning-foreground uppercase tracking-wider">
+                  <p className="text-sm font-semibold text-foreground">
                     2. NOB Rules Checkboxes
-                  </label>
-                  <span className="text-xs text-gray-400">Use shortcut option to cover non-Reseller leads</span>
+                  </p>
+                  <span className="text-xs text-muted-foreground">Use shortcut option to cover non-Reseller leads</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-warning/50 p-3 rounded-xl border border-warning/30 max-h-48 overflow-y-auto">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-secondary/50 p-3 rounded-lg border max-h-48 overflow-y-auto">
                   {nobOptions.map((opt) => {
                     const checked = (formData.nobs || []).includes(opt);
                     const isShortcut = opt.includes("EXCEPT") || opt === "ALL NOBS";
                     return (
-                      <label
+                      <button
                         key={opt}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={checked}
                         onClick={() => handleCheckboxToggle("nobs", opt)}
-                        className={`flex items-center gap-2 p-2.5 rounded-lg cursor-pointer border text-xs font-semibold transition-all ${
+                        className={`w-full text-left flex items-center gap-2 p-2.5 rounded-lg cursor-pointer border text-xs font-semibold transition-all ${
                           checked
-                            ? isShortcut ? "bg-warning/15 text-warning-foreground border-warning/40 shadow-sm" : "bg-white text-gray-900 border-warning/30 shadow-sm"
-                            : "bg-transparent text-gray-600 border-transparent hover:bg-white/60"
+                            ? isShortcut ? "bg-warning/15 text-foreground border-warning/40 font-semibold" : "bg-card text-foreground border-primary/40 font-semibold"
+                            : "bg-transparent text-muted-foreground border-transparent hover:bg-card"
                         }`}
                       >
-                        {checked ? <CheckSquare className="w-4 h-4 text-warning-foreground shrink-0" /> : <Square className="w-4 h-4 text-gray-300 shrink-0" />}
+                        {checked ? <CheckSquare className="w-4 h-4 text-primary shrink-0" aria-hidden="true" /> : <Square className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />}
                         <span className={isShortcut ? "font-bold text-warning-foreground" : ""}>{opt}</span>
-                      </label>
+                      </button>
                     );
                   })}
                 </div>
@@ -656,50 +642,53 @@ export default function ScDistributionMaster() {
                   <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
                     3. Lead Sources Checkboxes
                   </label>
-                  <span className="text-xs text-gray-400">Select sources or check "ALL SOURCES"</span>
+                  <span className="text-xs text-muted-foreground">Select sources or check "ALL SOURCES"</span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-gray-50 p-3 rounded-xl border border-gray-200 max-h-40 overflow-y-auto">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-secondary/50 p-3 rounded-lg border max-h-40 overflow-y-auto">
                   {sourceOptions.map((opt) => {
                     const checked = (formData.lead_sources || []).includes(opt);
                     return (
-                      <label
+                      <button
                         key={opt}
+                        type="button"
+                        role="checkbox"
+                        aria-checked={checked}
                         onClick={() => handleCheckboxToggle("lead_sources", opt)}
-                        className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer border text-xs font-medium transition-all ${
+                        className={`w-full text-left flex items-center gap-2 p-2 rounded-lg cursor-pointer border text-xs font-medium transition-all ${
                           checked
-                            ? "bg-white text-gray-900 border-gray-300 shadow-sm font-bold"
-                            : "bg-transparent text-gray-500 border-transparent hover:bg-white/50"
+                            ? "bg-card text-foreground border-primary/40 font-semibold"
+                            : "bg-transparent text-muted-foreground border-transparent hover:bg-card"
                         }`}
                       >
-                        {checked ? <CheckSquare className="w-4 h-4 text-gray-800 shrink-0" /> : <Square className="w-4 h-4 text-gray-300 shrink-0" />}
+                        {checked ? <CheckSquare className="w-4 h-4 text-primary shrink-0" aria-hidden="true" /> : <Square className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden="true" />}
                         <span className="truncate">{opt}</span>
-                      </label>
+                      </button>
                     );
                   })}
                 </div>
               </div>
 
               {/* Footer Actions */}
-              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 shrink-0">
+              <div className="flex justify-end gap-3 pt-4 border-t shrink-0">
                 <button
                   type="button"
                   onClick={handleCloseModal}
-                  className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition duration-150"
+                  className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-sm font-medium text-white bg-primary hover:opacity-90 rounded-lg shadow-sm transition duration-150"
+                  className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={formData.sales_types.length === 0 || formData.nobs.length === 0}
                 >
                   {modalMode === "add" ? "Save SC Rule" : "Update SC Rule"}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
+        </MasterDialog>
       )}
+      {confirmDialog}
     </div>
   );
 }

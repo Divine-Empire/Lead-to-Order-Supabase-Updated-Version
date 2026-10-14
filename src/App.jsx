@@ -1,24 +1,37 @@
 "use client"
 
-import { useState, useEffect, createContext } from "react"
+import { useState, useEffect, createContext, lazy, Suspense } from "react"
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom"
 import Login from "./pages/auth/Login"
-import Dashboard from "./pages/dashboard/Dashboard"
-import Leads from "./pages/leads/Leads"
-import CallTracker from "./pages/call-tracker/CallTracker"
-import CallTrackerForm from "./pages/call-tracker/CallTrackerForm"
-import EnquiryTracker from "./pages/enquiry-tracker/EnquiryTracker"
-import EnquiryTrackerForm from "./pages/enquiry-tracker/EnquiryTrackerForm"
-import Quotation from "./pages/Quotation/Quotation"
-import Report from "./pages/report/Report"
 import MainNav from "./components/MainNav"
 import Footer from "./components/Footer"
 import Notification from "./components/Notification"
 import Sidebar from "./components/Sidebar"
 import UpdateBanner from "./components/UpdateBanner"
-import Master from "./pages/Master/Master"
-import Setting from "./pages/Setting/Setting"
+import LoadingSpinner from "./components/LoadingSpinner"
 import supabase from "./utils/supabase"
+
+// Lazy-loaded so each page's own code (and its heavy deps, e.g. recharts on
+// Dashboard/Report) only downloads when that route is actually visited,
+// instead of all of them bundled into the one JS file loaded at login --
+// that one file was 3.4MB before this (per `vite build`'s own chunk-size
+// warning).
+const Dashboard = lazy(() => import("./pages/dashboard/Dashboard"))
+const Leads = lazy(() => import("./pages/leads/Leads"))
+const CallTracker = lazy(() => import("./pages/call-tracker/CallTracker"))
+const CallTrackerForm = lazy(() => import("./pages/call-tracker/CallTrackerForm"))
+const EnquiryTracker = lazy(() => import("./pages/enquiry-tracker/EnquiryTracker"))
+const EnquiryTrackerForm = lazy(() => import("./pages/enquiry-tracker/EnquiryTrackerForm"))
+const Quotation = lazy(() => import("./pages/Quotation/Quotation"))
+const Report = lazy(() => import("./pages/report/Report"))
+const Master = lazy(() => import("./pages/Master/Master"))
+const Setting = lazy(() => import("./pages/Setting/Setting"))
+
+const RouteFallback = () => (
+  <div className="flex h-full w-full items-center justify-center py-16">
+    <LoadingSpinner />
+  </div>
+)
 
 // Create auth context
 export const AuthContext = createContext(null)
@@ -385,7 +398,7 @@ function App() {
         <Router>
           <div className="flex flex-col h-screen">
             <UpdateBanner />
-          <div className="flex flex-1 bg-slate-50 text-gray-900 overflow-hidden">
+          <div className="flex flex-1 bg-background text-foreground overflow-hidden">
             {isAuthenticated && (
               <Sidebar
                 mobileMenuOpen={mobileMenuOpen}
@@ -402,6 +415,7 @@ function App() {
               )}
 
               <main className={`flex-1 overflow-auto ${isAuthenticated ? 'p-4 md:p-6' : ''}`}>
+                <Suspense fallback={<RouteFallback />}>
                 <Routes>
                   <Route path="/login" element={!isAuthenticated ? <Login /> : <Navigate to="/" />} />
                   <Route
@@ -518,8 +532,9 @@ function App() {
                   />
                   <Route path="*" element={<Navigate to="/" />} />
                 </Routes>
+                </Suspense>
               </main>
-              {isAuthenticated && <div className="bg-white border-t"><Footer /></div>}
+              {isAuthenticated && <Footer />}
             </div>
 
             <Notification notifications={notifications} />

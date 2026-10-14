@@ -37,12 +37,12 @@ function OrderExpectedForm({ formData, onFieldChange }) {
 
   return (
     <div className="space-y-4 border p-4 rounded-md">
-      <h3 className="text-lg font-medium">Order Expected</h3>
-      <hr className="border-gray-200 mb-4" />
+      <h3 className="text-base font-semibold text-foreground">Order Expected</h3>
+      <hr className="mb-4" />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="space-y-2">
-          <label htmlFor="followupStatus" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="followupStatus" className="block text-sm font-medium text-foreground">
             Followup Status
            <span className="text-destructive">*</span></label>
           <select
@@ -50,7 +50,7 @@ function OrderExpectedForm({ formData, onFieldChange }) {
             name="followupStatus"
             value={formData.followupStatus || ""}
             onChange={handleChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             required
             disabled={isLoading}
           >
@@ -64,14 +64,14 @@ function OrderExpectedForm({ formData, onFieldChange }) {
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="nextCallDate" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="nextCallDate" className="block text-sm font-medium text-foreground">
             Next Call Date
            <span className="text-destructive">*</span></label>
           <input
             id="nextCallDate"
             name="nextCallDate"
             type="date"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             value={formData.nextCallDate || ""}
             onChange={handleChange}
             required
@@ -79,14 +79,14 @@ function OrderExpectedForm({ formData, onFieldChange }) {
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="nextCallTime" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="nextCallTime" className="block text-sm font-medium text-foreground">
             Next Call Time
            <span className="text-destructive">*</span></label>
           <input
             id="nextCallTime"
             name="nextCallTime"
             type="time"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             value={formData.nextCallTime || ""}
             onChange={handleChange}
             required
