@@ -1,4 +1,4 @@
-﻿import { Link, useLocation } from "react-router-dom"
+import { Link, useLocation } from "react-router-dom"
 import { HomeIcon, UsersIcon, PhoneCallIcon, BarChartIcon, FileTextIcon, ShieldIcon, LogoutIcon, DatabaseIcon, SettingsIcon } from "./Icons"
 import { useContext, useState, useEffect } from "react"
 import { AuthContext } from "../App"
@@ -158,28 +158,47 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         return () => document.removeEventListener("keydown", onKey)
     }, [mobileMenuOpen, setMobileMenuOpen])
 
+    const isMasterRoute = location.pathname.startsWith("/master");
+    const [masterExpanded, setMasterExpanded] = useState(() => isMasterRoute);
+
+    useEffect(() => {
+        if (location.pathname.startsWith("/master")) {
+            setMasterExpanded(true);
+        }
+    }, [location.pathname]);
+
+    const MASTER_SUB_STAGES = [
+        { href: "/master/client", label: "Client Master", id: "client" },
+        { href: "/master/sc-distribution", label: "SC Distribution", id: "sc-distribution", adminOnly: true },
+        { href: "/master/crm-distribution", label: "CRM Distribution", id: "crm-distribution", adminOnly: true },
+        { href: "/master/dropdowns", label: "Dropdowns", id: "dropdowns", adminOnly: true },
+        { href: "/master/consignors", label: "Consignor Details", id: "consignors", adminOnly: true },
+        { href: "/master/items", label: "Items", id: "items", adminOnly: true },
+        { href: "/master/tat-config", label: "TAT Configuration", id: "tat-config", adminOnly: true },
+        { href: "/master/report-persons", label: "Report Persons", id: "report-persons", adminOnly: true },
+    ];
+
+    const visibleMasterSubStages = MASTER_SUB_STAGES.filter(
+        (sub) => !sub.adminOnly || (isAdmin && isAdmin())
+    );
+
     const isActive = (item) => (item.href === "/" ? location.pathname === "/" : location.pathname.startsWith(item.match || item.href))
     const countFor = (href) =>
         href === "/call-tracker" ? counts.callTracker : href === "/enquiry-tracker" ? counts.enquiryTracker : null
 
-    // Grouped navigation. Visibility rules are unchanged: Report is for everyone
-    // (admins see system-wide data, others their own SC's), Settings is admin-only.
-    const groups = [
-        { name: "Overview", items: [{ href: "/", label: "Dashboard", icon: HomeIcon }] },
-        {
-            name: "Sales pipeline",
-            items: [
-                { href: "/leads", label: "Leads", icon: UsersIcon },
-                { href: "/call-tracker", label: "Call Tracker", icon: PhoneCallIcon },
-                { href: "/enquiry-tracker", label: "Enquiry Tracker", icon: BarChartIcon },
-                { href: "/quotation", label: "Quotation", icon: FileTextIcon },
-            ],
-        },
-        { name: "Insights", items: [{ href: "/report", label: "Report", icon: ShieldIcon }] },
-        { name: "Data", items: [{ href: "/master/client", match: "/master", label: "Master Data", icon: DatabaseIcon }] },
-    ]
+    // Flat stage-wise navigation. Visibility rules: Report is for everyone,
+    // Settings is admin-only, Master Data sub-stages are restricted to Client Master for User role.
+    const navItems = [
+        { href: "/", label: "Dashboard", icon: HomeIcon },
+        { href: "/leads", label: "Leads", icon: UsersIcon },
+        { href: "/call-tracker", label: "Call Tracker", icon: PhoneCallIcon },
+        { href: "/enquiry-tracker", label: "Enquiry Tracker", icon: BarChartIcon },
+        { href: "/quotation", label: "Quotation", icon: FileTextIcon },
+        { href: "/report", label: "Report", icon: ShieldIcon },
+        { isMaster: true, label: "Master Data", icon: DatabaseIcon },
+    ];
     if (isAdmin && isAdmin()) {
-        groups.push({ name: "Admin", items: [{ href: "/setting", label: "Settings", icon: SettingsIcon }] })
+        navItems.push({ href: "/setting", label: "Settings", icon: SettingsIcon });
     }
 
     return (
@@ -207,40 +226,107 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                     </Link>
                 </div>
 
-                <nav aria-label="Main" className="flex flex-1 flex-col gap-4 overflow-y-auto px-2 py-3">
-                    {groups.map((group) => (
-                        <div key={group.name} className="flex flex-col gap-0.5">
-                            <p className="px-3 pb-1 text-xs font-medium text-muted-foreground">{group.name}</p>
-                            {group.items.map((item) => {
-                                const active = isActive(item)
-                                const Icon = item.icon
-                                const count = countFor(item.href)
-                                return (
-                                    <Link
-                                        key={item.href}
-                                        to={item.href}
-                                        onClick={() => setMobileMenuOpen(false)}
-                                        aria-current={active ? "page" : undefined}
-                                        className={`relative flex h-9 items-center justify-between rounded-md px-3 text-sm transition-colors ${
-                                            active
+                <nav aria-label="Main" className="flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-3">
+                    {navItems.map((item) => {
+                        if (item.isMaster) {
+                            const isMasterActive = location.pathname.startsWith("/master");
+                            const Icon = item.icon;
+                            return (
+                                <div key="master-data-collapsible" className="flex flex-col">
+                                    <button
+                                        type="button"
+                                        onClick={() => setMasterExpanded((prev) => !prev)}
+                                        aria-expanded={masterExpanded}
+                                        className={`relative flex h-9 w-full items-center justify-between rounded-md px-3 text-sm transition-colors ${
+                                            isMasterActive
                                                 ? "bg-accent font-medium text-foreground before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-brand-lime"
                                                 : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                                         }`}
                                     >
                                         <span className="flex min-w-0 items-center gap-3">
-                                            <Icon className={`h-4 w-4 shrink-0 ${active ? "text-primary" : ""}`} />
+                                            <Icon className={`h-4 w-4 shrink-0 ${isMasterActive ? "text-primary" : ""}`} />
                                             <span className="truncate">{item.label}</span>
                                         </span>
-                                        {count !== null && (
-                                            <span className="ml-2 shrink-0 rounded bg-primary/10 px-1.5 text-xs font-semibold tabular-nums text-brand-700">
-                                                {count}
-                                            </span>
-                                        )}
-                                    </Link>
-                                )
-                            })}
-                        </div>
-                    ))}
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="2"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${masterExpanded ? "rotate-180" : ""}`}
+                                            aria-hidden="true"
+                                        >
+                                            <polyline points="6 9 12 15 18 9"></polyline>
+                                        </svg>
+                                    </button>
+
+                                    {masterExpanded && (
+                                        <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
+                                            {visibleMasterSubStages.map((sub) => {
+                                                const isSubActive = location.pathname === sub.href || 
+                                                    (sub.id === "tat-config" && location.pathname === "/master/tat");
+                                                const subCount = sub.id === "client" ? counts.clientMaster : sub.id === "items" ? counts.itemsMaster : null;
+                                                return (
+                                                    <Link
+                                                        key={sub.href}
+                                                        to={sub.href}
+                                                        onClick={() => setMobileMenuOpen(false)}
+                                                        aria-current={isSubActive ? "page" : undefined}
+                                                        className={`relative flex h-8 items-center justify-between rounded-md px-2.5 text-xs transition-colors ${
+                                                            isSubActive
+                                                                ? "bg-accent font-medium text-brand-800"
+                                                                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                                                        }`}
+                                                    >
+                                                        <span className="flex items-center gap-2 truncate">
+                                                            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${isSubActive ? "bg-brand-lime" : "bg-muted-foreground/40"}`} />
+                                                            <span className="truncate">{sub.label}</span>
+                                                        </span>
+                                                        {subCount !== null && (
+                                                            <span className="ml-1.5 shrink-0 rounded bg-primary/10 px-1.5 text-[10px] font-semibold tabular-nums text-brand-700">
+                                                                {subCount}
+                                                            </span>
+                                                        )}
+                                                    </Link>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }
+
+                        const active = isActive(item);
+                        const Icon = item.icon;
+                        const count = countFor(item.href);
+                        return (
+                            <Link
+                                key={item.href}
+                                to={item.href}
+                                onClick={() => setMobileMenuOpen(false)}
+                                aria-current={active ? "page" : undefined}
+                                className={`relative flex h-9 items-center justify-between rounded-md px-3 text-sm transition-colors ${
+                                    active
+                                        ? "bg-accent font-medium text-foreground before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-brand-lime"
+                                        : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                                }`}
+                            >
+                                <span className="flex min-w-0 items-center gap-3">
+                                    <Icon className={`h-4 w-4 shrink-0 ${active ? "text-primary" : ""}`} />
+                                    <span className="truncate">{item.label}</span>
+                                </span>
+                                {count !== null && (
+                                    <span className="ml-2 shrink-0 rounded bg-primary/10 px-1.5 text-xs font-semibold tabular-nums text-brand-700">
+                                        {count}
+                                    </span>
+                                )}
+                            </Link>
+                        );
+                    })}
                 </nav>
 
                 <div className="shrink-0 border-t p-2">

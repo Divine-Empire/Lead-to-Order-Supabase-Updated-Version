@@ -24,6 +24,7 @@ const EnquiryTracker = lazy(() => import("./pages/enquiry-tracker/EnquiryTracker
 const EnquiryTrackerForm = lazy(() => import("./pages/enquiry-tracker/EnquiryTrackerForm"))
 const Quotation = lazy(() => import("./pages/Quotation/Quotation"))
 const Report = lazy(() => import("./pages/report/Report"))
+const LostDetailsPage = lazy(() => import("./pages/report/LostDetailsPage"))
 const Master = lazy(() => import("./pages/Master/Master"))
 const Setting = lazy(() => import("./pages/Setting/Setting"))
 
@@ -340,7 +341,7 @@ function App() {
   // Name kept as `getUsernamesToFilter` since it's used throughout the app as
   // the generic "names to scope this user's data by" helper.
   const getUsernamesToFilter = () => {
-    let names = [currentUser?.fullName].filter(Boolean);
+    let names = [currentUser?.fullName, currentUser?.username].filter(Boolean);
     if (alternateAccess && alternateAccess.trim() !== '') {
       const alternateNames = alternateAccess.split(',').map(u => u.trim()).filter(u => u !== '');
       names = [...new Set([...names, ...alternateNames])];
@@ -503,6 +504,14 @@ function App() {
                     element={
                       <ProtectedRoute>
                         <Report />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/report/lost-details"
+                    element={
+                      <ProtectedRoute>
+                        <LostDetailsPage />
                       </ProtectedRoute>
                     }
                   />

@@ -1,3 +1,16 @@
+export const daysHoursMinutesToMinutes = (days: number, hours: number, minutes: number): number => {
+  return Math.max(0, Number(days) || 0) * 1440 + Math.max(0, Number(hours) || 0) * 60 + Math.max(0, Number(minutes) || 0);
+};
+
+export const minutesToDaysHoursMinutes = (totalMinutes: number): { days: number; hours: number; minutes: number } => {
+  const safeMins = Math.max(0, Number(totalMinutes) || 0);
+  const days = Math.floor(safeMins / 1440);
+  const remMinutes = safeMins % 1440;
+  const hours = Math.floor(remMinutes / 60);
+  const minutes = remMinutes % 60;
+  return { days, hours, minutes };
+};
+
 /**
  * Converts days and an "HH:MM" string into total minutes.
  * e.g., days = 1, hhmm = "02:30" => 1*1440 + 2*60 + 30 = 1590 minutes

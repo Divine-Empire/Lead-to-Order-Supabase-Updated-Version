@@ -1,69 +1,14 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useContext, useCallback, useRef, useId } from "react";
+import { useNavigate } from "react-router-dom";
 import StatusTabs from "../../components/StatusTabs";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
+import { fetchAllRows } from "../../utils/fetchAllRows";
+import { fetchLostDetails, isLostStatus } from "./lostDetailsData";
 
 // import { supabaseVisit } from "../supabaseClientVisit";
-
-
-// A handful of simultaneous connections to the same host has shown
-// occasional transient connect timeouts in practice -- retrying the single
-// affected page (not the whole fetch) makes that a non-issue rather than
-// failing the entire report load over one flaky connection.
-async function fetchPageWithRetry(buildQuery, start, end, attempts = 3) {
-    let lastResult = null;
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-        lastResult = await buildQuery().range(start, end);
-        if (!lastResult.error) return lastResult;
-        if (attempt < attempts) await new Promise(r => setTimeout(r, 400 * attempt));
-    }
-    return lastResult;
-}
-
-// Applies any already-built filters to every chunk of a paginated fetch,
-// bypassing PostgREST's silent 1000-row cap on unbounded selects -- needed
-// here since `enquiries` alone is already well past that count, and
-// `lto_enquiry_tracker` (SC Pipeline's biggest fetch) runs ~26k rows.
-//
-// Pages are fetched in parallel batches rather than one at a time -- with
-// ~1-1.5s of latency per request, sequentially paging through 26k rows (27
-// requests) took 40+ seconds end to end, during which the SC Pipeline tab
-// showed nothing at all. Firing BATCH_SIZE requests per round cuts that to
-// roughly (page count / BATCH_SIZE) round trips instead of (page count).
-async function fetchAllRows(buildQuery) {
-    const step = 1000;
-    const BATCH_SIZE = 8;
-    let allRows = [];
-    let from = 0;
-    let done = false;
-    let lastError = null;
-
-    while (!done) {
-        const batch = Array.from({ length: BATCH_SIZE }, (_, i) => {
-            const start = from + i * step;
-            return fetchPageWithRetry(buildQuery, start, start + step - 1);
-        });
-        const results = await Promise.all(batch);
-
-        for (const { data, error } of results) {
-            if (error) {
-                lastError = error;
-                done = true;
-                break;
-            }
-            if (data && data.length > 0) {
-                allRows = allRows.concat(data);
-                if (data.length < step) done = true; // reached the end mid-batch
-            } else {
-                done = true; // empty page -- definitely past the end
-            }
-        }
-        from += BATCH_SIZE * step;
-    }
-    return { data: allRows, error: lastError };
-}
 
 // Master "who shows up on this report tab" lists are curated on the Report
 // Persons master page (Master > Report Persons) rather than derived from
@@ -97,6 +42,17 @@ const formatMetricValue = (value, format) => {
 const SALES_SHEET_URL = import.meta.env.VITE_SALES_SHEET;
 
 const normalizeName = (n) => String(n || "").trim().toUpperCase();
+
+const matchesPersonName = (personName, allowedList) => {
+    if (!allowedList) return true;
+    if (!personName) return false;
+    const p = String(personName).trim().toLowerCase();
+    return allowedList.some((a) => {
+        if (!a) return false;
+        const normA = String(a).trim().toLowerCase();
+        return normA === p || p.split(/\s+/).includes(normA) || normA.split(/\s+/).includes(p);
+    });
+};
 
 // Column F is free text entered via the field app -- normalize casing so
 // "new f2f" / "New F2F " etc. all land in the right bucket instead of
@@ -265,7 +221,7 @@ function PipelineTable({ title, section, visibleLabels, isLoading }) {
         );
     }
 
-    const keep = (label) => visibleLabels === null || visibleLabels.includes(label);
+    const keep = (label) => visibleLabels === null || matchesPersonName(label, visibleLabels);
 
     const allColumns = [];
     section.categoryGroups.forEach(g => {
@@ -368,7 +324,7 @@ function FosMetricsTable({ title, rows, visibleNames, isLoading }) {
         );
     }
 
-    const visibleRows = rows.filter(r => visibleNames === null || visibleNames.includes(r.name));
+    const visibleRows = rows.filter(r => visibleNames === null || matchesPersonName(r.name, visibleNames));
 
     return (
         <div className="mb-8">
@@ -411,8 +367,76 @@ function FosMetricsTable({ title, rows, visibleNames, isLoading }) {
     );
 }
 
+// Lost Details tab -- one row per SC, clicking a row drills down to a
+// dedicated route (not an inline expand) so the detail list + export gets
+// its own page rather than being squeezed into the summary table.
+function LostSummaryTable({ title, source, rows, visibleNames, isLoading, onRowClick }) {
+    if (!rows) {
+        return (
+            <div className="mb-8">
+                <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
+                <div className="bg-card rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
+                    {isLoading ? (
+                        <span className="inline-flex items-center gap-2 text-primary">
+                            <Spinner className="h-4 w-4" /> Loading data...
+                        </span>
+                    ) : "No data available."}
+                </div>
+            </div>
+        );
+    }
+
+    const visibleRows = rows.filter(r => visibleNames === null || matchesPersonName(r.name, visibleNames));
+
+    return (
+        <div className="mb-8">
+            <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
+            <div className="bg-card rounded-lg border overflow-hidden">
+                {visibleRows.length === 0 ? (
+                    <div className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</div>
+                ) : (
+                    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={`${title} lost details, scrollable`}>
+                        <table className="min-w-full divide-y">
+                            <thead className="bg-secondary">
+                                <tr>
+                                    <th scope="col" className="px-4 py-2 text-left text-xs font-semibold text-brand-800">SC Name</th>
+                                    <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total {title}</th>
+                                    <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Lost {title}</th>
+                                    <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total Quotation Value (Without Tax) — Lost</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                                {isLoading ? (
+                                    <tr><td colSpan="4" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
+                                ) : (
+                                    visibleRows.map(row => (
+                                        <tr
+                                            key={row.name}
+                                            className="hover:bg-secondary/60 cursor-pointer"
+                                            onClick={() => onRowClick(source, row.name)}
+                                            title={`View lost ${title.toLowerCase()} for ${row.name}`}
+                                        >
+                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-primary hover:underline">{row.name}</td>
+                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.total}</td>
+                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
+                                                <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.lostCount > 0 ? "bg-destructive/10 text-destructive" : "text-muted-foreground"}`}>{row.lostCount}</span>
+                                            </td>
+                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.lostValue.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 function Report() {
     const { isAdmin, getUsernamesToFilter } = useContext(AuthContext);
+    const navigate = useNavigate();
     const [activeTab, setActiveTab] = useState("calling"); // "calling" or "fos"
 
     // Non-admins (USER role) are always scoped to their own SC name (plus any
@@ -465,6 +489,16 @@ function Report() {
         startDate: "",
         endDate: "",
     });
+
+    // Lost Details tab -- one SC-wise summary row per curated SC name (reuses
+    // the same "report_person_sc_pipeline" master list as the SC Pipeline
+    // tab), split into Leads/Enquiries cards. No default date window (unlike
+    // the other tabs' "this week"/60-day defaults) -- Lost analysis is a
+    // historical review, not a weekly ops view, so it defaults to all-time.
+    const [lostSummaryData, setLostSummaryData] = useState({ leads: null, enquiries: null });
+    const [lostSummaryError, setLostSummaryError] = useState(null);
+    const [lostSummaryFilters, setLostSummaryFilters] = useState({ startDate: "", endDate: "" });
+    const lostSummaryRequestIdRef = useRef(0);
 
     const [isLoading, setIsLoading] = useState(true);
 
@@ -629,8 +663,10 @@ function Report() {
             // none at all if their username never appears as an assigned
             // person (Person values aren't login-linked, unlike the old SC
             // Name list).
-            const allowedNames = isAdmin() ? callingPersons : (getUsernamesToFilter() || []);
-            const visiblePersons = callingPersons.filter(name => allowedNames.includes(name));
+            const allowedNames = isAdmin() ? null : (getUsernamesToFilter() || []);
+            const visiblePersons = isAdmin()
+                ? callingPersons
+                : callingPersons.filter(name => matchesPersonName(name, allowedNames));
 
             if (visiblePersons.length === 0) {
                 if (requestId === callingRequestIdRef.current) {
@@ -1227,6 +1263,49 @@ function Report() {
         }
     }, [activeTab, scPipelineFilters, scPipelinePersons]);
 
+    // Lost Details tab -- one row per curated SC (same master list as SC
+    // Pipeline: scPipelinePersons.multi + nbdOnly combined, since this tab
+    // doesn't need the CRR/NBD tier split, just "every curated SC"). Total
+    // count is EVERY lead/enquiry ever assigned to that SC, regardless of
+    // status; Lost count/value are the same set filtered to
+    // enquiry_status === "not-interested".
+    const fetchLostSummary = useCallback(async () => {
+        if (activeTab !== "lost_details") return;
+        const requestId = ++lostSummaryRequestIdRef.current;
+        setIsLoading(true);
+        setLostSummaryError(null);
+        try {
+            const scNames = [...new Set([...scPipelinePersons.multi, ...scPipelinePersons.nbdOnly])].sort();
+            const startDateISO = lostSummaryFilters.startDate ? `${lostSummaryFilters.startDate}T00:00:00` : undefined;
+            const endDateISO = lostSummaryFilters.endDate ? getEndDateWithTime(lostSummaryFilters.endDate) : undefined;
+
+            const [leadRows, enquiryRows] = await Promise.all([
+                fetchLostDetails({ source: "lead", startDateISO, endDateISO }),
+                fetchLostDetails({ source: "enquiry", startDateISO, endDateISO }),
+            ]);
+
+            if (requestId !== lostSummaryRequestIdRef.current) return;
+
+            const buildSummary = (records) => scNames.map((sc) => {
+                const forSc = records.filter((r) => r.scName === sc);
+                const lost = forSc.filter((r) => isLostStatus(r.orderReceivedStatus));
+                return {
+                    name: sc,
+                    total: forSc.length,
+                    lostCount: lost.length,
+                    lostValue: lost.reduce((sum, r) => sum + parseMoney(r.quotationValueWithoutTax), 0),
+                };
+            });
+
+            setLostSummaryData({ leads: buildSummary(leadRows), enquiries: buildSummary(enquiryRows) });
+        } catch (error) {
+            console.error("Error fetching Lost Details summary:", error);
+            if (requestId === lostSummaryRequestIdRef.current) setLostSummaryError(error?.message || "Failed to load Lost Details.");
+        } finally {
+            if (requestId === lostSummaryRequestIdRef.current) setIsLoading(false);
+        }
+    }, [activeTab, lostSummaryFilters, scPipelinePersons]);
+
 
     useEffect(() => {
         fetchCallingPersons();
@@ -1242,8 +1321,10 @@ function Report() {
             fetchFosMetrics();
         } else if (activeTab === "sc_pipeline") {
             fetchScPipelineMetrics();
+        } else if (activeTab === "lost_details") {
+            fetchLostSummary();
         }
-    }, [fetchCallingDataReport, fetchFosMetrics, fetchScPipelineMetrics, activeTab]);
+    }, [fetchCallingDataReport, fetchFosMetrics, fetchScPipelineMetrics, fetchLostSummary, activeTab]);
 
     return (
         <div className="flex flex-col">
@@ -1259,6 +1340,7 @@ function Report() {
                         { id: "calling", label: "Calling Data" },
                         { id: "fos", label: "FOS Report" },
                         { id: "sc_pipeline", label: "SC Pipeline" },
+                        { id: "lost_details", label: "Lost Details" },
                     ]}
                 />
 
@@ -1469,6 +1551,50 @@ function Report() {
                                 <>
                                     <PipelineTable title="Leads" section={scPipelineData.leads} visibleLabels={visibleLabels} isLoading={isLoading} />
                                     <PipelineTable title="Enquiries" section={scPipelineData.enquiries} visibleLabels={visibleLabels} isLoading={isLoading} />
+                                </>
+                            );
+                        })()}
+                    </>
+                )}
+
+                {/* LOST DETAILS TAB CONTENT */}
+                {activeTab === "lost_details" && (
+                    <>
+                        <p className="text-sm text-muted-foreground mb-3 flex items-center gap-2">
+                            {lostSummaryFilters.startDate || lostSummaryFilters.endDate
+                                ? "Custom date range -- one row per SC. Click a row to see the lost records."
+                                : "All-time -- one row per SC. Click a row to see the lost records."}
+                            {!isAdmin() && " You're seeing only your own row."}
+                            {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
+                        </p>
+
+                        <DateRangeFilterBar
+                            startDate={lostSummaryFilters.startDate}
+                            endDate={lostSummaryFilters.endDate}
+                            onStartDateChange={(v) => setLostSummaryFilters(prev => ({ ...prev, startDate: v }))}
+                            onEndDateChange={(v) => setLostSummaryFilters(prev => ({ ...prev, endDate: v }))}
+                            onReset={() => setLostSummaryFilters({ startDate: "", endDate: "" })}
+                            defaultRangeLabel="Showing all-time"
+                        />
+
+                        {lostSummaryError && (
+                            <div className="mb-5 px-4 py-3 rounded-md bg-destructive/10 border border-destructive/30 text-sm text-destructive" role="alert">
+                                Couldn't load Lost Details: {lostSummaryError}
+                            </div>
+                        )}
+
+                        {(() => {
+                            const visibleNames = isAdmin() ? null : (getUsernamesToFilter() || []);
+                            const handleRowClick = (source, scName) => {
+                                const params = new URLSearchParams({ source, sc: scName });
+                                if (lostSummaryFilters.startDate) params.set("start", lostSummaryFilters.startDate);
+                                if (lostSummaryFilters.endDate) params.set("end", lostSummaryFilters.endDate);
+                                navigate(`/report/lost-details?${params.toString()}`);
+                            };
+                            return (
+                                <>
+                                    <LostSummaryTable title="Leads" source="lead" rows={lostSummaryData.leads} visibleNames={visibleNames} isLoading={isLoading} onRowClick={handleRowClick} />
+                                    <LostSummaryTable title="Enquiries" source="enquiry" rows={lostSummaryData.enquiries} visibleNames={visibleNames} isLoading={isLoading} onRowClick={handleRowClick} />
                                 </>
                             );
                         })()}

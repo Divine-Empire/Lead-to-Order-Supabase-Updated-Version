@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import { AuthContext } from "../../App";
 import useConfirmDialog from "../../components/useConfirmDialog";
 import { Plus, Pencil, Trash2, RefreshCw, UserCheck, ShieldCheck, Layers, MapPin, CheckSquare, Square, Users, Repeat } from "lucide-react";
@@ -417,7 +417,7 @@ export default function CREMgmt() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
-              <UserCheck aria-hidden="true" className="h-4 w-4 text-primary" aria-hidden="true" />
+              <UserCheck aria-hidden="true" className="h-4 w-4 text-primary" />
               CRM Distribution Master
             </h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
@@ -442,7 +442,7 @@ export default function CREMgmt() {
               onClick={() => handleOpenModal("add")}
               className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              <Plus aria-hidden="true" className="h-4 w-4" aria-hidden="true" />
+              <Plus aria-hidden="true" className="h-4 w-4" />
               Add CRM Rule
             </button>
           </div>
@@ -470,7 +470,7 @@ export default function CREMgmt() {
             className="max-w-md"
           />
           <p className="flex max-w-lg items-start gap-1.5 rounded-md border border-primary/20 bg-accent px-3 py-2 text-xs font-medium text-brand-800">
-            <ShieldCheck aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            <ShieldCheck aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
             <span>Hierarchy Priority: Group Tier (Priority 1) &rarr; State-NOB Tier (Priority 2)</span>
           </p>
         </div>

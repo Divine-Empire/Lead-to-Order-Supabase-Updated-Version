@@ -1,12 +1,12 @@
-﻿import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import { AuthContext } from "../../App";
 import useConfirmDialog from "../../components/useConfirmDialog";
 import supabase from "../../utils/supabase";
 import MasterDialog from "../../components/MasterDialog";
 import { Plus, Pencil, Trash2, Clock, RefreshCw, AlertCircle } from "lucide-react";
 import {
-  daysAndTimeToMinutes,
-  minutesToDaysAndHHMM,
+  daysHoursMinutesToMinutes,
+  minutesToDaysHoursMinutes,
   minutesToHHMMSS,
   minutesToDisplayLabel,
 } from "../../utils/formatTATDuration";
@@ -33,7 +33,8 @@ const TatConfig = () => {
   const [formData, setFormData] = useState({
     stage_name: STAGE_OPTIONS[0],
     tat_days: 0,
-    tat_time: "01:00",
+    tat_hours: 1,
+    tat_minutes: 0,
     description: "",
   });
 
@@ -68,11 +69,12 @@ const TatConfig = () => {
       setIsEditing(true);
       setEditingId(item.id);
       const totalMins = Number(item.tat_duration) || 0;
-      const { days, hhmm } = minutesToDaysAndHHMM(totalMins);
+      const { days, hours, minutes } = minutesToDaysHoursMinutes(totalMins);
       setFormData({
         stage_name: item.stage_name || STAGE_OPTIONS[0],
         tat_days: days,
-        tat_time: hhmm,
+        tat_hours: hours,
+        tat_minutes: minutes,
         description: item.description || "",
       });
     } else {
@@ -81,7 +83,8 @@ const TatConfig = () => {
       setFormData({
         stage_name: STAGE_OPTIONS[0],
         tat_days: 0,
-        tat_time: "01:00",
+        tat_hours: 1,
+        tat_minutes: 0,
         description: "",
       });
     }
@@ -94,7 +97,8 @@ const TatConfig = () => {
     setFormData({
       stage_name: STAGE_OPTIONS[0],
       tat_days: 0,
-      tat_time: "01:00",
+      tat_hours: 1,
+      tat_minutes: 0,
       description: "",
     });
   };
@@ -103,7 +107,11 @@ const TatConfig = () => {
     e.preventDefault();
     setErrorMsg("");
 
-    const totalMinutes = daysAndTimeToMinutes(formData.tat_days, formData.tat_time);
+    const totalMinutes = daysHoursMinutesToMinutes(
+      formData.tat_days,
+      formData.tat_hours,
+      formData.tat_minutes
+    );
 
     if (!formData.stage_name) {
       setErrorMsg("Please select a Stage Name.");
@@ -367,13 +375,13 @@ const TatConfig = () => {
                 </p>
               </div>
 
-              {/* Duration Selection Field (Days + HH:MM time picker) */}
+              {/* Duration Selection Field (Days, Hours, Minutes) */}
               <div>
                 <p className="block text-sm font-medium text-foreground mb-1.5">
                   TAT Selection (Duration) <span className="text-destructive">*</span>
                 </p>
                 <div className="p-4 rounded-lg border bg-secondary/50 space-y-3">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-3 gap-3">
                     {/* Days Selector */}
                     <div>
                       <label htmlFor="tat-days" className="block text-xs font-medium text-muted-foreground mb-1">
@@ -385,12 +393,11 @@ const TatConfig = () => {
                           type="number"
                           min="0"
                           max="365"
-                          required
                           value={formData.tat_days}
                           onChange={(e) =>
                             setFormData({
                               ...formData,
-                              tat_days: Math.max(0, parseInt(e.target.value, 10) || 0),
+                              tat_days: e.target.value === "" ? "" : Math.max(0, parseInt(e.target.value, 10) || 0),
                             })
                           }
                           className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none pr-12"
@@ -402,41 +409,84 @@ const TatConfig = () => {
                       </div>
                     </div>
 
-                    {/* Hours & Minutes Selector (HH:MM time picker) */}
+                    {/* Hours Selector */}
                     <div>
-                      <label htmlFor="tat-time" className="block text-xs font-medium text-muted-foreground mb-1">
-                        Hours & Minutes (HH:MM)
+                      <label htmlFor="tat-hours" className="block text-xs font-medium text-muted-foreground mb-1">
+                        Hours
                       </label>
-                      <input
-                        id="tat-time"
-                        type="time"
-                        required
-                        value={formData.tat_time}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            tat_time: e.target.value || "00:00",
-                          })
-                        }
-                        className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
-                      />
+                      <div className="relative">
+                        <input
+                          id="tat-hours"
+                          type="number"
+                          min="0"
+                          max="23"
+                          value={formData.tat_hours}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              tat_hours: e.target.value === "" ? "" : Math.max(0, parseInt(e.target.value, 10) || 0),
+                            })
+                          }
+                          className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none pr-10"
+                          placeholder="0"
+                        />
+                        <span className="absolute right-2.5 top-2.5 text-xs text-muted-foreground font-medium pointer-events-none">
+                          hrs
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Minutes Selector */}
+                    <div>
+                      <label htmlFor="tat-minutes" className="block text-xs font-medium text-muted-foreground mb-1">
+                        Minutes
+                      </label>
+                      <div className="relative">
+                        <input
+                          id="tat-minutes"
+                          type="number"
+                          min="0"
+                          max="59"
+                          value={formData.tat_minutes}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              tat_minutes: e.target.value === "" ? "" : Math.max(0, parseInt(e.target.value, 10) || 0),
+                            })
+                          }
+                          className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none pr-11"
+                          placeholder="0"
+                        />
+                        <span className="absolute right-2.5 top-2.5 text-xs text-muted-foreground font-medium pointer-events-none">
+                          mins
+                        </span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="text-xs text-muted-foreground flex flex-col gap-1 pt-1 border-t">
-                    <div className="flex justify-between items-center">
-                      <span>Formatted Duration:</span>
-                      <span className="font-semibold text-brand-800 bg-accent px-2 py-0.5 rounded border border-primary/20">
-                        {minutesToDisplayLabel(daysAndTimeToMinutes(formData.tat_days, formData.tat_time))}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center text-[11px] text-muted-foreground">
-                      <span>HH:MM:SS Format:</span>
-                      <span className="font-mono text-foreground">
-                        {minutesToHHMMSS(daysAndTimeToMinutes(formData.tat_days, formData.tat_time))}
-                      </span>
-                    </div>
-                  </div>
+                  {(() => {
+                    const currentTotalMinutes = daysHoursMinutesToMinutes(
+                      formData.tat_days,
+                      formData.tat_hours,
+                      formData.tat_minutes
+                    );
+                    return (
+                      <div className="text-xs text-muted-foreground flex flex-col gap-1 pt-1 border-t">
+                        <div className="flex justify-between items-center">
+                          <span>Formatted Duration:</span>
+                          <span className="font-semibold text-brand-800 bg-accent px-2 py-0.5 rounded border border-primary/20">
+                            {minutesToDisplayLabel(currentTotalMinutes)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-[11px] text-muted-foreground">
+                          <span>HH:MM:SS Format:</span>
+                          <span className="font-mono text-foreground">
+                            {minutesToHHMMSS(currentTotalMinutes)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

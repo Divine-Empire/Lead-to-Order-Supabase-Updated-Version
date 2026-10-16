@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useContext, useRef, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -76,6 +76,7 @@ function ExcelImportModal({ onClose, onSaved }) {
   const [importedRows, setImportedRows] = useState([]);
   const [fileName, setFileName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState("");
   const [saveError, setSaveError] = useState("");
   const fileInputRef = useRef(null);
   const authContext = useContext(AuthContext) || {};
@@ -220,6 +221,7 @@ function ExcelImportModal({ onClose, onSaved }) {
     }
 
     setIsSaving(true);
+    setSaveProgress("Preparing data...");
     setSaveError("");
     try {
       // Fetch TAT for Stage='Call-Tracker for Leads' (defaults to 1 hr if null/missing)
@@ -327,8 +329,17 @@ function ExcelImportModal({ onClose, onSaved }) {
         };
       });
 
-      const { error } = await supabase.from("lto_leads").insert(rowsToInsert);
-      if (error) throw error;
+      // Insert leads in batches of 30 to avoid PostgreSQL statement timeout
+      // from the row-level trg_leads_status trigger on lto_leads
+      const LEADS_BATCH_SIZE = 30;
+      for (let i = 0; i < rowsToInsert.length; i += LEADS_BATCH_SIZE) {
+        const chunk = rowsToInsert.slice(i, i + LEADS_BATCH_SIZE);
+        setSaveProgress(
+          `Saving leads (${Math.min(i + chunk.length, rowsToInsert.length)} of ${rowsToInsert.length})...`
+        );
+        const { error: insertError } = await supabase.from("lto_leads").insert(chunk);
+        if (insertError) throw insertError;
+      }
 
       // Now sync lto_client_master for every imported company: new ones get
       // inserted (with the SC/CRE just resolved above), existing ones get
@@ -342,7 +353,10 @@ function ExcelImportModal({ onClose, onSaved }) {
         }
       });
 
-      const clientMasterWrites = [...byCompany.values()].map((r) => {
+      const newCompanies = [];
+      const existingUpdates = [];
+
+      [...byCompany.values()].forEach((r) => {
         const existing = existingByName.get(norm(r.company_name));
         const resolved = resolvedScByCompany.get(norm(r.company_name));
         if (existing) {
@@ -362,30 +376,52 @@ function ExcelImportModal({ onClose, onSaved }) {
           // inheriting client_master's Sales Type -- can't happen here since
           // every row's sales_type is already validated/non-blank above.)
           if (!existing.sales_type && r.sales_type) updatePayload.sales_type = r.sales_type;
-          return supabase.from("lto_client_master").update(updatePayload).eq("uuid", existing.uuid);
+          existingUpdates.push({ uuid: existing.uuid, payload: updatePayload });
+        } else {
+          newCompanies.push({
+            company_name: r.company_name,
+            company_group_name: r.company_group_name || null,
+            client_name: r.person_name || null,
+            client_mobile_number: r.phone_number || null,
+            state: r.state || null,
+            state_code: getStateCodeFromName(r.state),
+            billing_address: r.address || null,
+            gst_number: r.gst_number || null,
+            sc_name: r.sc_name || null,
+            crm_name: resolved?.crmName || null,
+            sales_type: r.sales_type || null,
+            isRelevant: true,
+            already_in_tracker: `Call-Tracker (${r.lead_no})`,
+            is_newly_converted: false,
+          });
         }
-        return supabase.from("lto_client_master").insert([{
-          company_name: r.company_name,
-          company_group_name: r.company_group_name || null,
-          client_name: r.person_name || null,
-          client_mobile_number: r.phone_number || null,
-          state: r.state || null,
-          state_code: getStateCodeFromName(r.state),
-          billing_address: r.address || null,
-          gst_number: r.gst_number || null,
-          sc_name: r.sc_name || null,
-          crm_name: resolved?.crmName || null,
-          sales_type: r.sales_type || null,
-          isRelevant: true,
-          already_in_tracker: `Call-Tracker (${r.lead_no})`,
-          is_newly_converted: false,
-        }]);
       });
 
-      const cmResults = await Promise.all(clientMasterWrites);
-      cmResults.forEach((res) => {
-        if (res.error) console.error("Error syncing client_master during bulk import:", res.error);
-      });
+      // Insert new companies in batches of 30
+      if (newCompanies.length > 0) {
+        const CM_BATCH = 30;
+        for (let i = 0; i < newCompanies.length; i += CM_BATCH) {
+          const chunk = newCompanies.slice(i, i + CM_BATCH);
+          setSaveProgress(`Adding new clients (${Math.min(i + chunk.length, newCompanies.length)} of ${newCompanies.length})...`);
+          const { error: cmErr } = await supabase.from("lto_client_master").insert(chunk);
+          if (cmErr) console.error("Error syncing new client_master during bulk import:", cmErr);
+        }
+      }
+
+      // Update existing companies in concurrent batches of 10
+      if (existingUpdates.length > 0) {
+        const CONCURRENCY = 10;
+        for (let i = 0; i < existingUpdates.length; i += CONCURRENCY) {
+          const chunk = existingUpdates.slice(i, i + CONCURRENCY);
+          setSaveProgress(`Updating existing clients (${Math.min(i + chunk.length, existingUpdates.length)} of ${existingUpdates.length})...`);
+          await Promise.all(
+            chunk.map(async ({ uuid, payload }) => {
+              const { error: upErr } = await supabase.from("lto_client_master").update(payload).eq("uuid", uuid);
+              if (upErr) console.error("Error updating client_master during bulk import:", upErr);
+            })
+          );
+        }
+      }
 
       showNotification(`${importedRows.length} lead(s) imported successfully!`, "success");
       // Rows can each carry their own Group Name now, so there's no longer
@@ -397,6 +433,7 @@ function ExcelImportModal({ onClose, onSaved }) {
       setSaveError("An error occurred: " + err.message);
     } finally {
       setIsSaving(false);
+      setSaveProgress("");
     }
   };
 
@@ -519,7 +556,7 @@ function ExcelImportModal({ onClose, onSaved }) {
             disabled={isSaving || importedRows.length === 0}
             className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSaving ? "Saving..." : `Save ${importedRows.length > 0 ? `(${importedRows.length})` : ""} Leads`}
+            {isSaving ? (saveProgress || "Saving...") : `Save ${importedRows.length > 0 ? `(${importedRows.length})` : ""} Leads`}
           </button>
         </div>
       </div>
