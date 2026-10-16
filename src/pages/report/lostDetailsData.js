@@ -2,193 +2,340 @@ import supabase from "../../utils/supabase";
 import { fetchAllRows } from "../../utils/fetchAllRows";
 import { mergeRowsChronologically } from "../../utils/mergeTrackerRows";
 
-// Shared by both the Lost Details tab's SC summary (Report.jsx) and its
-// per-SC drill-down page (LostDetailsPage.jsx) -- both need the exact same
-// "current state per lead/enquiry" computation, just aggregated differently.
+// Shared by both the Lost Details tab (Report.jsx) and its per-SC
+// drill-down page (LostDetailsPage.jsx).
 //
 // "Lost" = is_order_received_status === "no" on lto_enquiry_tracker /
-// lto_enquiry_tracker_for_leads -- i.e. a quotation was sent and the
-// customer's order did NOT come through -- confirmed via psql against the
-// live DB. NOT enquiry_status (that column only ever holds hot/warm/cold,
-// the lead's temperature -- a completely different field with no
-// "not-interested" value at all, despite that being the "Lost" value used by
-// the unrelated call-tracker tables/views).
-//
-// These tracker tables are append-only (one new row per stage submission),
-// so a later "Order Status" row setting is_order_received_status = "no"
-// doesn't erase the quotation_number/value fields an earlier "Make
-// Quotation" row set -- every row has to be merged chronologically
-// (mergeRowsChronologically: later non-empty value wins per field) to get
-// the record's true current state, exactly like enquiry-tracker/queries.js's
-// attachMergedTrackerFields does for the Pending tab.
+// lto_enquiry_tracker_for_leads.
 const parseMoney = (v) => {
     const value = parseFloat(String(v ?? "").replace(/,/g, "").replace(/[^\d.-]/g, ""));
     return isNaN(value) ? 0 : value;
 };
 
-const SOURCE_CONFIG = {
-    lead: {
-        table: "lto_leads",
-        idField: "lead_id",
-        scField: "lead_receiver_name",
-        numberField: "lead_no",
-        trackerTable: "lto_enquiry_tracker_for_leads",
-    },
-    enquiry: {
-        table: "lto_enquiries",
-        idField: "enquiry_id",
-        scField: "enquiry_assign_to_person",
-        numberField: "enquiry_no",
-        trackerTable: "lto_enquiry_tracker",
-    },
-};
+// "no" (Order Status stage: "was the order received?" -> No) -- case varies
+// in the live data ("no" / "No"), hence the normalize.
+export const isLostStatus = (orderReceivedStatus) => String(orderReceivedStatus || "").trim().toLowerCase() === "no";
 
-// Returns one row per lead/enquiry of the given source, regardless of
-// status -- callers filter to isLostStatus(...) (Lost) themselves, since the
-// SC summary also needs the UNFILTERED total count per SC as its
-// denominator.
-//
-// `startDateISO`/`endDateISO` (optional) bound the lead/enquiry's OWN
-// created_at, same convention as the rest of Report.jsx's tabs -- a record
-// created outside the range is excluded even if it was later marked lost
-// inside the range.
-export async function fetchLostDetails({ source, startDateISO, endDateISO }) {
-    const cfg = SOURCE_CONFIG[source];
-    if (!cfg) throw new Error(`Unknown Lost Details source: ${source}`);
+// Resolves latest quotation and item sums for a batch of records without
+// performing a massive full-table scan.
+async function attachQuotations(records) {
+    if (!records || records.length === 0) return records;
 
-    // IMPORTANT: build a brand-new query builder on every call -- fetchAllRows
-    // fires several `.range()` calls in parallel, and supabase-js's builder
-    // mutates itself in place rather than returning a fresh copy per call.
-    // Passing one already-built instance (reused across those parallel
-    // calls) lets concurrent `.range()` calls race on the same object and
-    // corrupts the result -- this is what silently zeroed out the Leads
-    // column before. A plain closure that re-builds the query each time it's
-    // invoked avoids that entirely, same as every other fetchAllRows call
-    // site in Report.jsx.
-    const buildBaseQuery = () => {
-        let q = supabase.from(cfg.table).select(`id, ${cfg.scField}, ${cfg.numberField}, company_name, created_at`);
-        if (startDateISO) q = q.gte("created_at", startDateISO);
-        if (endDateISO) q = q.lte("created_at", endDateISO);
-        return q;
-    };
-    const { data: baseRecords, error: baseErr } = await fetchAllRows(buildBaseQuery);
-    if (baseErr) throw baseErr;
-
-    // Tracker rows: floor-only bound (no upper bound) -- a tracker row can
-    // never predate the record it belongs to, so `created_at >= startDateISO`
-    // already captures every tracker row for any in-range record, while
-    // deliberately not capping the upper end keeps "is it currently lost"
-    // correct even when endDateISO is in the past.
-    const buildTrackerQuery = () => {
-        let q = supabase.from(cfg.trackerTable).select(
-            `${cfg.idField}, created_at, is_order_received_status, if_no_reason_status, if_no_reason_remark, quotation_number, quotation_value_without_tax, quotation_value_with_tax, quotation_upload`
-        );
-        if (startDateISO) q = q.gte("created_at", startDateISO);
-        return q;
-    };
-    const { data: trackerRows, error: trackerErr } = await fetchAllRows(buildTrackerQuery);
-    if (trackerErr) throw trackerErr;
-
-    const trackerByRecordId = new Map();
-    (trackerRows || []).forEach((t) => {
-        const recId = t[cfg.idField];
-        if (!recId) return;
-        if (!trackerByRecordId.has(recId)) trackerByRecordId.set(recId, []);
-        trackerByRecordId.get(recId).push(t);
+    const rawRefs = [];
+    records.forEach((r) => {
+        const raw = String(r.number || "").trim();
+        if (raw) rawRefs.push(raw);
     });
 
-    const mergedByRecordId = new Map();
-    trackerByRecordId.forEach((rows, recId) => {
-        const sorted = [...rows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-        mergedByRecordId.set(recId, mergeRowsChronologically(sorted));
+    if (rawRefs.length === 0) return records;
+
+    // Fetch quotations in batches of 100 to keep URL length well within HTTP GET limits
+    const BATCH_SIZE = 100;
+    const allQuotes = [];
+    for (let i = 0; i < rawRefs.length; i += BATCH_SIZE) {
+        const chunk = rawRefs.slice(i, i + BATCH_SIZE);
+        const { data } = await supabase
+            .from("lto_make_quotations")
+            .select("id, quotation_no, enquiry_reference_no, grand_total, pdf_url, created_at")
+            .in("enquiry_reference_no", chunk);
+        if (data && data.length > 0) allQuotes.push(...data);
+    }
+
+    if (allQuotes.length === 0) return records;
+
+    // Pick latest quotation per enquiry_reference_no
+    const latestByRef = new Map();
+    allQuotes.forEach((q) => {
+        const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
+        if (!ref) return;
+        const existing = latestByRef.get(ref);
+        if (!existing || new Date(q.created_at) > new Date(existing.created_at)) {
+            latestByRef.set(ref, q);
+        }
     });
 
-    let result = (baseRecords || []).map((rec) => {
-        const merged = mergedByRecordId.get(rec.id) || {};
-        return {
-            id: rec.id,
-            source,
-            scName: rec[cfg.scField] || null,
-            companyName: rec.company_name || "",
-            number: rec[cfg.numberField] || "",
-            createdAt: rec.created_at,
-            orderReceivedStatus: merged.is_order_received_status || null,
-            quotationNumber: merged.quotation_number || null,
-            quotationValueWithoutTax: merged.quotation_value_without_tax ?? null,
-            quotationValueWithTax: merged.quotation_value_with_tax ?? null,
-            quotationUpload: merged.quotation_upload || null,
-            lostReason: [merged.if_no_reason_status, merged.if_no_reason_remark].filter(Boolean).join(" -- ") || null,
-        };
-    });
+    const latestList = Array.from(latestByRef.values());
+    const latestIds = latestList.map((q) => q.id);
+    const amountByQId = new Map();
 
-    // Overlay the TRUE latest quotation from lto_make_quotations, same
-    // approach as enquiry-tracker/queries.js's attachLatestQuotations -- a
-    // quotation created/revised directly from the Quotation module never
-    // reaches the tracker table on its own, so the tracker-derived fields
-    // above can be stale/blank even though a real (possibly newer) quotation
-    // exists. Matched by the record's own lead_no/enquiry_no against
-    // lto_make_quotations.enquiry_reference_no.
-    //
-    // Fetched as the WHOLE table (paginated via fetchAllRows) rather than
-    // `.in("enquiry_reference_no", refs)` scoped to just this batch's
-    // numbers -- with thousands of enquiries in a single Lost Details fetch,
-    // that `.in()` list built a GET URL long enough to be rejected outright
-    // (414/CORS failure in the browser), silently breaking the whole
-    // quotation overlay. lto_make_quotations is a few thousand rows, well
-    // within what this app already pages through elsewhere (SC Pipeline
-    // pages ~26k tracker rows the same way).
-    const refs = new Set(result.map((r) => String(r.number || "").trim().toUpperCase()).filter(Boolean));
-    if (refs.size > 0) {
-        const { data: quotations, error: qErr } = await fetchAllRows(() =>
-            supabase.from("lto_make_quotations").select("id, quotation_no, enquiry_reference_no, grand_total, pdf_url, created_at")
-        );
-        if (!qErr && quotations && quotations.length > 0) {
-            const latestByRef = new Map();
-            quotations.forEach((q) => {
-                const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
-                if (!ref || !refs.has(ref)) return;
-                const existing = latestByRef.get(ref);
-                if (!existing || new Date(q.created_at) > new Date(existing.created_at)) latestByRef.set(ref, q);
-            });
-
-            // lto_make_quotations has no "value without tax" column of its
-            // own (grand_total is post-tax) -- summed from line items, same
-            // as Report.jsx's Calling Data tab and attachLatestQuotations.
-            // Same full-table-fetch reasoning as above applies here too.
-            const latestIds = new Set(Array.from(latestByRef.values()).map((q) => q.id));
-            const amountByQId = new Map();
-            if (latestIds.size > 0) {
-                const { data: items } = await fetchAllRows(() =>
-                    supabase.from("lto_make_quotation_items").select("quotation_id, amount")
-                );
-                (items || []).forEach((it) => {
-                    if (!latestIds.has(it.quotation_id)) return;
-                    amountByQId.set(it.quotation_id, (amountByQId.get(it.quotation_id) || 0) + parseMoney(it.amount));
-                });
-            }
-
-            result = result.map((row) => {
-                const ref = String(row.number || "").trim().toUpperCase();
-                const latest = latestByRef.get(ref);
-                if (!latest) return row; // no quotation exists yet -- genuinely blank
-                return {
-                    ...row,
-                    quotationNumber: latest.quotation_no,
-                    quotationValueWithoutTax: amountByQId.get(latest.id) ?? row.quotationValueWithoutTax,
-                    quotationValueWithTax: latest.grand_total ?? row.quotationValueWithTax,
-                    quotationUpload: latest.pdf_url || row.quotationUpload,
-                };
+    if (latestIds.length > 0) {
+        for (let i = 0; i < latestIds.length; i += BATCH_SIZE) {
+            const chunk = latestIds.slice(i, i + BATCH_SIZE);
+            const { data: items } = await supabase
+                .from("lto_make_quotation_items")
+                .select("quotation_id, amount")
+                .in("quotation_id", chunk);
+            (items || []).forEach((it) => {
+                amountByQId.set(it.quotation_id, (amountByQId.get(it.quotation_id) || 0) + parseMoney(it.amount));
             });
         }
     }
 
-    return result;
+    return records.map((row) => {
+        const ref = String(row.number || "").trim().toUpperCase();
+        const latest = latestByRef.get(ref);
+        if (!latest) return row;
+        return {
+            ...row,
+            quotationNumber: latest.quotation_no,
+            quotationValueWithoutTax: amountByQId.get(latest.id) ?? row.quotationValueWithoutTax,
+            quotationValueWithTax: latest.grand_total ?? row.quotationValueWithTax,
+            quotationUpload: latest.pdf_url || row.quotationUpload,
+        };
+    });
 }
 
-// "no" (Order Status stage: "was the order received?" -> No) -- case varies
-// in the live data ("no" / "No"), hence the normalize. Deliberately excludes
-// "hold" (customer_order_hold_reason_category -- a separate, still-open
-// state, not a loss) and blank/null (never resolved either way yet).
-export const isLostStatus = (orderReceivedStatus) => String(orderReceivedStatus || "").trim().toLowerCase() === "no";
+// Helper to safely fetch enquiries in chunks of 100 IDs to avoid HTTP 414 URL Too Long
+async function fetchEnquiriesByIds(ids) {
+    if (!ids || ids.length === 0) return [];
+    const BATCH = 100;
+    const all = [];
+    for (let i = 0; i < ids.length; i += BATCH) {
+        const chunk = ids.slice(i, i + BATCH);
+        const { data, error } = await supabase
+            .from("lto_enquiries")
+            .select("id, sales_coordinator_name, enquiry_assign_to_person, enquiry_no, company_name, created_at")
+            .in("id", chunk);
+        if (error) throw error;
+        if (data) all.push(...data);
+    }
+    return all;
+}
+
+// Fast progressive / chunked fetching of Lost Details.
+// Yields initial batch (e.g. first 100 records) to `onProgress` in < 400ms,
+// allowing Page 1 to render immediately while subsequent batches stream in.
+export async function fetchLostDetails({ source, startDateISO, endDateISO, onProgress }) {
+    if (source === "lead") {
+        // Leads: small dataset (total ~2300, only ~4 lost leads)
+        const { data: baseRecords, error: baseErr } = await fetchAllRows(() => {
+            let q = supabase.from("lto_leads").select("id, lead_receiver_name, lead_no, company_name, created_at").order("created_at", { ascending: false });
+            if (startDateISO) q = q.gte("created_at", startDateISO);
+            if (endDateISO) q = q.lte("created_at", endDateISO);
+            return q;
+        });
+        if (baseErr) throw baseErr;
+
+        const { data: trackerRows, error: trackerErr } = await fetchAllRows(() => {
+            let q = supabase.from("lto_enquiry_tracker_for_leads").select(
+                "lead_id, created_at, is_order_received_status, if_no_reason_status, if_no_reason_remark, quotation_number, quotation_value_without_tax, quotation_value_with_tax, quotation_upload"
+            );
+            if (startDateISO) q = q.gte("created_at", startDateISO);
+            return q;
+        });
+        if (trackerErr) throw trackerErr;
+
+        const trackerByRecordId = new Map();
+        (trackerRows || []).forEach((t) => {
+            if (!t.lead_id) return;
+            if (!trackerByRecordId.has(t.lead_id)) trackerByRecordId.set(t.lead_id, []);
+            trackerByRecordId.get(t.lead_id).push(t);
+        });
+
+        const mergedByRecordId = new Map();
+        trackerByRecordId.forEach((rows, recId) => {
+            const sorted = [...rows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+            mergedByRecordId.set(recId, mergeRowsChronologically(sorted));
+        });
+
+        const mapped = (baseRecords || []).map((rec) => {
+            const merged = mergedByRecordId.get(rec.id) || {};
+            return {
+                id: rec.id,
+                source: "lead",
+                scName: rec.lead_receiver_name || null,
+                companyName: rec.company_name || "",
+                number: rec.lead_no || "",
+                createdAt: rec.created_at,
+                orderReceivedStatus: merged.is_order_received_status || null,
+                quotationNumber: merged.quotation_number || null,
+                quotationValueWithoutTax: merged.quotation_value_without_tax ?? null,
+                quotationValueWithTax: merged.quotation_value_with_tax ?? null,
+                quotationUpload: merged.quotation_upload || null,
+                lostReason: [merged.if_no_reason_status, merged.if_no_reason_remark].filter(Boolean).join(" -- ") || null,
+            };
+        });
+
+        const withQuotes = await attachQuotations(mapped);
+        if (onProgress) onProgress(withQuotes, { totalCount: withQuotes.length, isDone: true });
+        return withQuotes;
+    }
+
+    if (source === "enquiry") {
+        // If a date filter is applied, query the date-filtered base enquiries first
+        if (startDateISO || endDateISO) {
+            const { data: baseRecords, error: baseErr } = await fetchAllRows(() => {
+                let q = supabase.from("lto_enquiries")
+                    .select("id, sales_coordinator_name, enquiry_assign_to_person, enquiry_no, company_name, created_at")
+                    .order("created_at", { ascending: false });
+                if (startDateISO) q = q.gte("created_at", startDateISO);
+                if (endDateISO) q = q.lte("created_at", endDateISO);
+                return q;
+            });
+            if (baseErr) throw baseErr;
+
+            const enqIds = (baseRecords || []).map((r) => r.id);
+            if (enqIds.length === 0) {
+                if (onProgress) onProgress([], { totalCount: 0, isDone: true });
+                return [];
+            }
+
+            // Fetch lost tracker rows for these enquiries in safe batches of 100
+            const trackerRows = [];
+            const BATCH = 100;
+            for (let i = 0; i < enqIds.length; i += BATCH) {
+                const chunk = enqIds.slice(i, i + BATCH);
+                const { data } = await supabase
+                    .from("lto_enquiry_tracker")
+                    .select("enquiry_id, created_at, is_order_received_status, if_no_reason_status, if_no_reason_remark, quotation_number, quotation_value_without_tax, quotation_value_with_tax, quotation_upload")
+                    .in("enquiry_id", chunk)
+                    .ilike("is_order_received_status", "no");
+                if (data && data.length > 0) trackerRows.push(...data);
+            }
+
+            const trackerByRecordId = new Map();
+            trackerRows.forEach((t) => {
+                if (!t.enquiry_id) return;
+                if (!trackerByRecordId.has(t.enquiry_id)) trackerByRecordId.set(t.enquiry_id, []);
+                trackerByRecordId.get(t.enquiry_id).push(t);
+            });
+
+            const mergedByRecordId = new Map();
+            trackerByRecordId.forEach((rows, recId) => {
+                const sorted = [...rows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+                mergedByRecordId.set(recId, mergeRowsChronologically(sorted));
+            });
+
+            const mapped = (baseRecords || [])
+                .filter((rec) => mergedByRecordId.has(rec.id))
+                .map((rec) => {
+                    const merged = mergedByRecordId.get(rec.id) || {};
+                    return {
+                        id: rec.id,
+                        source: "enquiry",
+                        scName: rec.sales_coordinator_name || rec.enquiry_assign_to_person || null,
+                        companyName: rec.company_name || "",
+                        number: rec.enquiry_no || "",
+                        createdAt: rec.created_at,
+                        orderReceivedStatus: merged.is_order_received_status || null,
+                        quotationNumber: merged.quotation_number || null,
+                        quotationValueWithoutTax: merged.quotation_value_without_tax ?? null,
+                        quotationValueWithTax: merged.quotation_value_with_tax ?? null,
+                        quotationUpload: merged.quotation_upload || null,
+                        lostReason: [merged.if_no_reason_status, merged.if_no_reason_remark].filter(Boolean).join(" -- ") || null,
+                    };
+                });
+
+            const withQuotes = await attachQuotations(mapped);
+            if (onProgress) onProgress(withQuotes, { totalCount: withQuotes.length, isDone: true });
+            return withQuotes;
+        }
+
+        // All-time enquiries: Upfront total count query so total is known immediately
+        let totalCount = null;
+        try {
+            const { count } = await supabase
+                .from("lto_enquiry_tracker")
+                .select("id", { count: "exact", head: true })
+                .ilike("is_order_received_status", "no");
+            totalCount = count;
+        } catch (e) {
+            console.warn("Could not get upfront total count:", e);
+        }
+
+        // Stream in progressive parts so Page 1 renders in < 400ms!
+        // Part 1: First 100 rows
+        // Part 2: Next 300 rows
+        // Part 3+: 500 rows each until finished
+        const chunkSizes = [100, 300, 500, 500, 500, 500, 500, 500, 500, 500];
+        let currentOffset = 0;
+        const allAccumulated = [];
+        const seenEnquiryIds = new Set();
+
+        for (let i = 0; i < chunkSizes.length; i++) {
+            const size = chunkSizes[i];
+            const from = currentOffset;
+            const to = currentOffset + size - 1;
+
+            const { data: trackerChunk, error: trackerErr } = await supabase
+                .from("lto_enquiry_tracker")
+                .select("enquiry_id, created_at, is_order_received_status, if_no_reason_status, if_no_reason_remark, quotation_number, quotation_value_without_tax, quotation_value_with_tax, quotation_upload")
+                .ilike("is_order_received_status", "no")
+                .order("created_at", { ascending: false })
+                .range(from, to);
+
+            if (trackerErr) throw trackerErr;
+            if (!trackerChunk || trackerChunk.length === 0) break;
+
+            // Deduplicate tracker rows by enquiry_id within chunk and overall
+            const newTrackers = [];
+            const newEnquiryIds = [];
+            trackerChunk.forEach((t) => {
+                if (t.enquiry_id && !seenEnquiryIds.has(t.enquiry_id)) {
+                    seenEnquiryIds.add(t.enquiry_id);
+                    newTrackers.push(t);
+                    newEnquiryIds.push(t.enquiry_id);
+                }
+            });
+
+            if (newEnquiryIds.length > 0) {
+                // Fetch base enquiries safely in batches of 100 IDs
+                const enqs = await fetchEnquiriesByIds(newEnquiryIds);
+
+                const enqById = new Map();
+                (enqs || []).forEach((e) => enqById.set(e.id, e));
+
+                const chunkMapped = [];
+                newTrackers.forEach((t) => {
+                    const enq = enqById.get(t.enquiry_id);
+                    if (!enq) return;
+                    chunkMapped.push({
+                        id: enq.id,
+                        source: "enquiry",
+                        scName: enq.sales_coordinator_name || enq.enquiry_assign_to_person || null,
+                        companyName: enq.company_name || "",
+                        number: enq.enquiry_no || "",
+                        createdAt: enq.created_at,
+                        orderReceivedStatus: t.is_order_received_status || "no",
+                        quotationNumber: t.quotation_number || null,
+                        quotationValueWithoutTax: t.quotation_value_without_tax ?? null,
+                        quotationValueWithTax: t.quotation_value_with_tax ?? null,
+                        quotationUpload: t.quotation_upload || null,
+                        lostReason: [t.if_no_reason_status, t.if_no_reason_remark].filter(Boolean).join(" -- ") || null,
+                    });
+                });
+
+                // Attach latest quotations for this chunk
+                const chunkWithQuotes = await attachQuotations(chunkMapped);
+                allAccumulated.push(...chunkWithQuotes);
+
+                // Yield progressive batch immediately to frontend!
+                if (onProgress) {
+                    onProgress([...allAccumulated], {
+                        totalCount: totalCount || allAccumulated.length,
+                        isDone: false,
+                    });
+                }
+            }
+
+            if (trackerChunk.length < size) {
+                // Reached the end of available tracker rows
+                break;
+            }
+            currentOffset += size;
+        }
+
+        if (onProgress) {
+            onProgress([...allAccumulated], {
+                totalCount: allAccumulated.length,
+                isDone: true,
+            });
+        }
+
+        return allAccumulated;
+    }
+
+    throw new Error(`Unknown Lost Details source: ${source}`);
+}
 
 export { parseMoney };

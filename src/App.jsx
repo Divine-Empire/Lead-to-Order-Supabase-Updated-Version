@@ -342,6 +342,12 @@ function App() {
   // the generic "names to scope this user's data by" helper.
   const getUsernamesToFilter = () => {
     let names = [currentUser?.fullName, currentUser?.username].filter(Boolean);
+    if (currentUser?.fullName) {
+      const firstName = currentUser.fullName.trim().split(/\s+/)[0];
+      if (firstName && firstName !== currentUser.fullName) {
+        names.push(firstName);
+      }
+    }
     if (alternateAccess && alternateAccess.trim() !== '') {
       const alternateNames = alternateAccess.split(',').map(u => u.trim()).filter(u => u !== '');
       names = [...new Set([...names, ...alternateNames])];

@@ -1,12 +1,12 @@
-"use client";
-
-import { useState, useEffect, useContext, useCallback, useRef, useId } from "react";
+import { useState, useEffect, useContext, useCallback, useRef, useId, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import StatusTabs from "../../components/StatusTabs";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
 import { fetchAllRows } from "../../utils/fetchAllRows";
-import { fetchLostDetails, isLostStatus } from "./lostDetailsData";
+import { fetchLostDetails, isLostStatus, parseMoney } from "./lostDetailsData";
+import * as XLSX from "xlsx";
+import { Download, FileText, Search, ChevronLeft, ChevronRight, Calendar, RotateCcw, X } from "lucide-react";
 
 // import { supabaseVisit } from "../supabaseClientVisit";
 
@@ -367,66 +367,487 @@ function FosMetricsTable({ title, rows, visibleNames, isLoading }) {
     );
 }
 
-// Lost Details tab -- one row per SC, clicking a row drills down to a
-// dedicated route (not an inline expand) so the detail list + export gets
-// its own page rather than being squeezed into the summary table.
-function LostSummaryTable({ title, source, rows, visibleNames, isLoading, onRowClick }) {
-    if (!rows) {
-        return (
-            <div className="mb-8">
-                <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
-                <div className="bg-card rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground">
-                    {isLoading ? (
-                        <span className="inline-flex items-center gap-2 text-primary">
-                            <Spinner className="h-4 w-4" /> Loading data...
-                        </span>
-                    ) : "No data available."}
-                </div>
-            </div>
-        );
-    }
+const formatCurrency = (v) => (v || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
 
-    const visibleRows = rows.filter(r => visibleNames === null || matchesPersonName(r.name, visibleNames));
+// Lost Details tab -- All-in-one view with unified filter & action card,
+// KPI summary cards, and detailed records table with wrapped lost reasons.
+function LostDetailsAllInOne({
+    records,
+    isLoading,
+    isLoadingMore,
+    expectedTotal,
+    isAdmin,
+    getUsernamesToFilter,
+    source,
+    setSource,
+    startDate,
+    endDate,
+    onStartDateChange,
+    onEndDateChange,
+    onReset,
+}) {
+    const [selectedSc, setSelectedSc] = useState("all");
+    const [searchTerm, setSearchTerm] = useState("");
+    const [currentPage, setCurrentPage] = useState(1);
+    const [showDateModal, setShowDateModal] = useState(false);
+    const [tempStart, setTempStart] = useState(startDate || "");
+    const [tempEnd, setTempEnd] = useState(endDate || "");
+    const pageSize = 20;
+
+    const activeRecords = (source === "lead" ? records?.leads : records?.enquiries) || [];
+
+    // Reset pagination when filter changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [source, selectedSc, searchTerm]);
+
+    // Keep temp dates synced with external props
+    useEffect(() => {
+        setTempStart(startDate || "");
+        setTempEnd(endDate || "");
+    }, [startDate, endDate]);
+
+    // Dynamic: Only show SCs who actually have lost records in the active source (leads or enquiries)
+    const availableScNames = useMemo(() => {
+        const set = new Set();
+        (activeRecords || []).forEach((r) => {
+            const name = (r.scName || "").trim();
+            if (name && name !== "--") {
+                set.add(name);
+            }
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }, [activeRecords]);
+
+    // Reset selectedSc to "all" if the previously selected person has no lost records in current activeRecords
+    useEffect(() => {
+        if (selectedSc !== "all" && !availableScNames.includes(selectedSc)) {
+            setSelectedSc("all");
+        }
+    }, [availableScNames, selectedSc]);
+
+    // Reset all filters icon handler
+    const handleResetAll = () => {
+        onReset();
+        setTempStart("");
+        setTempEnd("");
+        setSelectedSc("all");
+        setSearchTerm("");
+    };
+
+    // Date trigger label
+    const dateButtonLabel = useMemo(() => {
+        if (startDate && endDate) return `${startDate} to ${endDate}`;
+        if (startDate) return `From ${startDate}`;
+        if (endDate) return `Up to ${endDate}`;
+        return "Date Range";
+    }, [startDate, endDate]);
+
+    // Filter by RBAC, SC selection, and Search term
+    const filteredRows = useMemo(() => {
+        return activeRecords.filter((row) => {
+            // 1. RBAC non-admin filter
+            if (!isAdmin()) {
+                const allowed = getUsernamesToFilter();
+                if (!matchesPersonName(row.scName, allowed)) return false;
+            }
+
+            // 2. Admin selected SC filter
+            if (selectedSc !== "all") {
+                if (normalizeName(row.scName) !== normalizeName(selectedSc) && !matchesPersonName(row.scName, [selectedSc])) {
+                    return false;
+                }
+            }
+
+            // 3. Search term filter
+            if (searchTerm.trim()) {
+                const term = searchTerm.toLowerCase();
+                const num = String(row.number || "").toLowerCase();
+                const comp = String(row.companyName || "").toLowerCase();
+                const qNum = String(row.quotationNumber || "").toLowerCase();
+                const sc = String(row.scName || "").toLowerCase();
+                const reason = String(row.lostReason || "").toLowerCase();
+                if (!num.includes(term) && !comp.includes(term) && !qNum.includes(term) && !sc.includes(term) && !reason.includes(term)) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+    }, [activeRecords, selectedSc, searchTerm, isAdmin, getUsernamesToFilter]);
+
+    // KPI Metrics calculation
+    const totalLostCount = filteredRows.length;
+    const totalLostValueWithoutTax = useMemo(() => {
+        return filteredRows.reduce((sum, r) => sum + parseMoney(r.quotationValueWithoutTax), 0);
+    }, [filteredRows]);
+    const totalLostValueWithTax = useMemo(() => {
+        return filteredRows.reduce((sum, r) => sum + parseMoney(r.quotationValueWithTax), 0);
+    }, [filteredRows]);
+    const totalQuotationsSent = useMemo(() => {
+        return filteredRows.filter((r) => r.quotationNumber).length;
+    }, [filteredRows]);
+
+    // Pagination
+    const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+    const paginatedRows = useMemo(() => {
+        const start = (currentPage - 1) * pageSize;
+        return filteredRows.slice(start, start + pageSize);
+    }, [filteredRows, currentPage, pageSize]);
+
+    // Excel Export
+    const handleExport = () => {
+        if (filteredRows.length === 0) return;
+
+        const sheetRows = filteredRows.map((r) => ({
+            "SC Name": r.scName || "",
+            [source === "lead" ? "Lead Number" : "Enquiry Number"]: r.number || "",
+            "Company Name": r.companyName || "",
+            "Quotation Number": r.quotationNumber || "",
+            "Quotation Value (Without Tax)": r.quotationValueWithoutTax != null ? parseMoney(r.quotationValueWithoutTax) : "",
+            "Quotation Value (With Tax)": r.quotationValueWithTax != null ? parseMoney(r.quotationValueWithTax) : "",
+            "Quotation Copy URL": r.quotationUpload || "",
+            "Lost Reason": r.lostReason || "",
+            "Date": r.createdAt ? new Date(r.createdAt).toLocaleDateString("en-IN") : "",
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(sheetRows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Lost Details");
+        const safeSc = selectedSc === "all" ? "All_SC" : selectedSc.replace(/[^a-z0-9]+/gi, "_");
+        const dateStr = new Date().toISOString().split("T")[0];
+        XLSX.writeFile(wb, `Lost_Details_${source === "lead" ? "Leads" : "Enquiries"}_${safeSc}_${dateStr}.xlsx`);
+    };
 
     return (
-        <div className="mb-8">
-            <h2 className="text-base font-semibold text-foreground mb-3">{title}</h2>
-            <div className="bg-card rounded-lg border overflow-hidden">
-                {visibleRows.length === 0 ? (
-                    <div className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</div>
+        <div className="flex flex-col gap-4">
+            {/* Unified Inline Filter & Action Bar: All filters and icons inline */}
+            <div className="bg-card p-3 rounded-lg border shadow-xs flex flex-wrap items-center gap-2.5">
+                {/* Source Toggle */}
+                <div className="inline-flex rounded-md border bg-card p-0.5 shadow-2xs">
+                    <button
+                        type="button"
+                        onClick={() => setSource("lead")}
+                        className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${
+                            source === "lead"
+                                ? "bg-primary text-primary-foreground shadow-2xs"
+                                : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                        Leads ({records?.leads?.length || 0})
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setSource("enquiry")}
+                        className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${
+                            source === "enquiry"
+                                ? "bg-primary text-primary-foreground shadow-2xs"
+                                : "text-muted-foreground hover:text-foreground"
+                        }`}
+                    >
+                        Enquiries ({expectedTotal && expectedTotal > (records?.enquiries?.length || 0) ? `${records?.enquiries?.length || 0} / ${expectedTotal}` : (records?.enquiries?.length || 0)})
+                    </button>
+                </div>
+
+                {isLoadingMore && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-secondary text-[11px] font-medium text-muted-foreground animate-pulse">
+                        <Spinner className="h-3 w-3" />
+                        <span>Loading {records?.enquiries?.length || 0}{expectedTotal ? ` of ${expectedTotal}` : ""} records...</span>
+                    </span>
+                )}
+
+                {/* Single Date Dialog Button */}
+                <button
+                    type="button"
+                    onClick={() => setShowDateModal(true)}
+                    className={`h-9 px-3 rounded-md border text-xs font-medium inline-flex items-center gap-1.5 transition-colors ${
+                        startDate || endDate
+                            ? "border-primary bg-primary/10 text-primary font-semibold"
+                            : "border-input bg-card text-foreground hover:bg-accent"
+                    }`}
+                    title="Filter by date range"
+                >
+                    <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span>{dateButtonLabel}</span>
+                </button>
+
+                {/* Single Reset Icon Button */}
+                <button
+                    type="button"
+                    onClick={handleResetAll}
+                    disabled={!startDate && !endDate && selectedSc === "all" && !searchTerm}
+                    className="h-9 w-9 rounded-md border border-input bg-card text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center justify-center transition-colors shadow-2xs"
+                    title="Reset all filters"
+                    aria-label="Reset all filters"
+                >
+                    <RotateCcw className="h-4 w-4" />
+                </button>
+
+                {/* SC Filter Dropdown (Dynamic: only shows SCs with lost records in active source) */}
+                {isAdmin() ? (
+                    <select
+                        value={selectedSc}
+                        onChange={(e) => setSelectedSc(e.target.value)}
+                        className="h-9 rounded-md border border-input bg-card px-3 text-xs font-medium focus:border-primary focus:outline-none max-w-[210px]"
+                        aria-label="Filter by Sales Coordinator"
+                    >
+                        <option value="all">All Sales Coordinators ({availableScNames.length})</option>
+                        {availableScNames.map((name) => (
+                            <option key={name} value={name}>{name}</option>
+                        ))}
+                    </select>
                 ) : (
-                    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={`${title} lost details, scrollable`}>
-                        <table className="min-w-full divide-y">
-                            <thead className="bg-secondary">
+                    <span className="px-3 py-1.5 rounded-md bg-card text-xs font-medium text-foreground border border-input">
+                        SC: {getUsernamesToFilter().join(", ")}
+                    </span>
+                )}
+
+                {/* Search Input */}
+                <div className="relative flex-1 min-w-[200px] max-w-sm">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+                    <input
+                        type="text"
+                        placeholder="Search company, number, quotation..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="h-9 pl-8 pr-3 w-full rounded-md border border-input bg-card text-xs focus:border-primary focus:outline-none"
+                    />
+                </div>
+
+                {/* Export Button inline right */}
+                <div className="ml-auto">
+                    <button
+                        type="button"
+                        onClick={handleExport}
+                        disabled={isLoading || filteredRows.length === 0}
+                        className="h-9 px-4 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 shadow-2xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                        title="Export filtered records to Excel"
+                    >
+                        <Download className="h-4 w-4" />
+                        <span>Export to Excel</span>
+                    </button>
+                </div>
+            </div>
+
+            {/* Date Range Modal Dialog */}
+            {showDateModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-2xs"
+                    onClick={() => setShowDateModal(false)}
+                >
+                    <div
+                        className="w-full max-w-sm rounded-lg border bg-card p-5 shadow-xl flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-150"
+                        onClick={(e) => e.stopPropagation()}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="date-range-dialog-title"
+                    >
+                        <div className="flex items-center justify-between border-b pb-3">
+                            <div className="flex items-center gap-2">
+                                <Calendar className="h-4 w-4 text-primary" />
+                                <h3 id="date-range-dialog-title" className="text-sm font-semibold text-foreground">Filter by Date Range</h3>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowDateModal(false)}
+                                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                                title="Close"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+
+                        <div className="flex flex-col gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-muted-foreground mb-1">Start Date</label>
+                                <input
+                                    type="date"
+                                    value={tempStart}
+                                    onChange={(e) => setTempStart(e.target.value)}
+                                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-xs focus:border-primary focus:outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-muted-foreground mb-1">End Date</label>
+                                <input
+                                    type="date"
+                                    value={tempEnd}
+                                    onChange={(e) => setTempEnd(e.target.value)}
+                                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-xs focus:border-primary focus:outline-none"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-between border-t pt-3 mt-1">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setTempStart("");
+                                    setTempEnd("");
+                                    onReset();
+                                    setShowDateModal(false);
+                                }}
+                                className="h-8 px-3 rounded-md border border-input bg-card text-xs font-medium text-foreground hover:bg-accent"
+                            >
+                                All-time
+                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowDateModal(false)}
+                                    className="h-8 px-3 rounded-md text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        onStartDateChange(tempStart);
+                                        onEndDateChange(tempEnd);
+                                        setShowDateModal(false);
+                                    }}
+                                    className="h-8 px-4 rounded-md bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90"
+                                >
+                                    Apply
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* KPI Summary Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+                <div className="bg-card rounded-lg border p-4 shadow-xs">
+                    <p className="text-xs font-medium text-muted-foreground">Total Lost {source === "lead" ? "Leads" : "Enquiries"}</p>
+                    <p className="text-2xl font-bold text-foreground mt-1">
+                        {totalLostCount}
+                        {isLoadingMore && source === "enquiry" && expectedTotal && expectedTotal > totalLostCount && (
+                            <span className="text-xs font-normal text-muted-foreground ml-1.5">
+                                of {expectedTotal}
+                            </span>
+                        )}
+                    </p>
+                </div>
+                <div className="bg-card rounded-lg border p-4 shadow-xs">
+                    <p className="text-xs font-medium text-muted-foreground">Total Quotation Value (Without Tax)</p>
+                    <p className="text-2xl font-bold text-destructive mt-1">{formatCurrency(totalLostValueWithoutTax)}</p>
+                </div>
+                <div className="bg-card rounded-lg border p-4 shadow-xs">
+                    <p className="text-xs font-medium text-muted-foreground">Total Quotation Value (With Tax)</p>
+                    <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totalLostValueWithTax)}</p>
+                </div>
+                <div className="bg-card rounded-lg border p-4 shadow-xs">
+                    <p className="text-xs font-medium text-muted-foreground">Quotations Generated</p>
+                    <p className="text-2xl font-bold text-primary mt-1">{totalQuotationsSent}</p>
+                </div>
+            </div>
+
+            {/* Table Area */}
+            <div className="bg-card rounded-lg border overflow-hidden">
+                <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Lost details table, scrollable">
+                    <table className="min-w-full divide-y">
+                        <thead className="bg-secondary">
+                            <tr>
+                                <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold text-brand-800">SC Name</th>
+                                <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold text-brand-800">{source === "lead" ? "Lead No" : "Enquiry No"}</th>
+                                <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold text-brand-800 min-w-[180px]">Company Name</th>
+                                <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold text-brand-800">Quotation No</th>
+                                <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold text-brand-800">Quotation Value (Without Tax)</th>
+                                <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold text-brand-800">Quotation Value (With Tax)</th>
+                                <th scope="col" className="px-4 py-2.5 text-center text-xs font-semibold text-brand-800">Quotation Copy</th>
+                                <th scope="col" className="px-4 py-2.5 text-left text-xs font-semibold text-brand-800 min-w-[220px]">Lost Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y bg-card">
+                            {isLoading ? (
                                 <tr>
-                                    <th scope="col" className="px-4 py-2 text-left text-xs font-semibold text-brand-800">SC Name</th>
-                                    <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total {title}</th>
-                                    <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Lost {title}</th>
-                                    <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total Quotation Value (Without Tax) — Lost</th>
+                                    <td colSpan="8" className="px-4 py-12 text-center text-sm text-primary">
+                                        <span className="inline-flex items-center gap-2">
+                                            <Spinner className="h-4 w-4" /> Loading lost records...
+                                        </span>
+                                    </td>
                                 </tr>
-                            </thead>
-                            <tbody className="divide-y">
-                                {isLoading ? (
-                                    <tr><td colSpan="4" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
-                                ) : (
-                                    visibleRows.map(row => (
-                                        <tr
-                                            key={row.name}
-                                            className="hover:bg-secondary/60 cursor-pointer"
-                                            onClick={() => onRowClick(source, row.name)}
-                                            title={`View lost ${title.toLowerCase()} for ${row.name}`}
-                                        >
-                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-primary hover:underline">{row.name}</td>
-                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.total}</td>
-                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
-                                                <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.lostCount > 0 ? "bg-destructive/10 text-destructive" : "text-muted-foreground"}`}>{row.lostCount}</span>
-                                            </td>
-                                            <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.lostValue.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
-                                        </tr>
-                                    ))
-                                )}
-                            </tbody>
-                        </table>
+                            ) : paginatedRows.length === 0 ? (
+                                <tr>
+                                    <td colSpan="8" className="px-4 py-10 text-center text-sm text-muted-foreground">
+                                        No lost {source === "lead" ? "leads" : "enquiries"} found matching current filters.
+                                    </td>
+                                </tr>
+                            ) : (
+                                paginatedRows.map((row) => (
+                                    <tr key={row.id} className="hover:bg-secondary/60 transition-colors">
+                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-medium text-foreground">
+                                            {row.scName || "--"}
+                                        </td>
+                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-semibold text-primary">
+                                            {row.number || "--"}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-sm text-foreground min-w-[180px] max-w-xs whitespace-normal break-words leading-relaxed" title={row.companyName || ""}>
+                                            {row.companyName || "--"}
+                                        </td>
+                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm font-mono text-foreground">
+                                            {row.quotationNumber || "--"}
+                                        </td>
+                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-right text-foreground">
+                                            {row.quotationValueWithoutTax != null ? formatCurrency(parseMoney(row.quotationValueWithoutTax)) : "--"}
+                                        </td>
+                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-right text-foreground">
+                                            {row.quotationValueWithTax != null ? formatCurrency(parseMoney(row.quotationValueWithTax)) : "--"}
+                                        </td>
+                                        <td className="px-4 py-2.5 whitespace-nowrap text-center text-sm">
+                                            {row.quotationUpload ? (
+                                                <a
+                                                    href={row.quotationUpload}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                                                    title="Open Quotation PDF"
+                                                >
+                                                    <FileText className="h-3.5 w-3.5" />
+                                                    <span>View PDF</span>
+                                                </a>
+                                            ) : (
+                                                <span className="text-xs text-muted-foreground italic">No PDF</span>
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-2.5 text-xs text-foreground min-w-[220px] max-w-sm whitespace-normal break-words leading-relaxed" title={row.lostReason || ""}>
+                                            {row.lostReason || "--"}
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                {/* Pagination Footer */}
+                {filteredRows.length > pageSize && (
+                    <div className="flex items-center justify-between px-4 py-3 border-t bg-card text-xs text-muted-foreground">
+                        <div>
+                            Showing <span className="font-medium text-foreground">{(currentPage - 1) * pageSize + 1}</span> to{" "}
+                            <span className="font-medium text-foreground">{Math.min(currentPage * pageSize, filteredRows.length)}</span> of{" "}
+                            <span className="font-medium text-foreground">{filteredRows.length}</span> records
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                className="h-8 px-2.5 rounded border border-input bg-card hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1 font-medium"
+                            >
+                                <ChevronLeft className="h-3.5 w-3.5" /> Prev
+                            </button>
+                            <span className="px-2 font-medium">Page {currentPage} of {totalPages}</span>
+                            <button
+                                type="button"
+                                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages}
+                                className="h-8 px-2.5 rounded border border-input bg-card hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1 font-medium"
+                            >
+                                Next <ChevronRight className="h-3.5 w-3.5" />
+                            </button>
+                        </div>
                     </div>
                 )}
             </div>
@@ -490,14 +911,13 @@ function Report() {
         endDate: "",
     });
 
-    // Lost Details tab -- one SC-wise summary row per curated SC name (reuses
-    // the same "report_person_sc_pipeline" master list as the SC Pipeline
-    // tab), split into Leads/Enquiries cards. No default date window (unlike
-    // the other tabs' "this week"/60-day defaults) -- Lost analysis is a
-    // historical review, not a weekly ops view, so it defaults to all-time.
-    const [lostSummaryData, setLostSummaryData] = useState({ leads: null, enquiries: null });
+    // Lost Details tab -- All-in-One records, filters and error state
+    const [lostDetailsRecords, setLostDetailsRecords] = useState({ leads: null, enquiries: null });
+    const [expectedTotalEnquiries, setExpectedTotalEnquiries] = useState(null);
     const [lostSummaryError, setLostSummaryError] = useState(null);
     const [lostSummaryFilters, setLostSummaryFilters] = useState({ startDate: "", endDate: "" });
+    const [lostSource, setLostSource] = useState("lead");
+    const [isLoadingMoreLost, setIsLoadingMoreLost] = useState(false);
     const lostSummaryRequestIdRef = useRef(0);
 
     const [isLoading, setIsLoading] = useState(true);
@@ -945,7 +1365,7 @@ function Report() {
             // (already date-bounded) record set for a section and its
             // tracker rows keyed by record id.
             const computePersonMetrics = (name, records, trackerByRecordId) => {
-                const mine = records.filter(r => r._receiverName === name);
+                const mine = records.filter(r => normalizeName(r._receiverName) === normalizeName(name) || matchesPersonName(r._receiverName, [name]));
                 let enquiries = 0, enquiryValue = 0, ordersConverted = 0, orderConvertedValue = 0;
                 let pipelineCount = 0, pipelineValue = 0;
 
@@ -1273,38 +1693,62 @@ function Report() {
         if (activeTab !== "lost_details") return;
         const requestId = ++lostSummaryRequestIdRef.current;
         setIsLoading(true);
+        setIsLoadingMoreLost(true);
         setLostSummaryError(null);
         try {
-            const scNames = [...new Set([...scPipelinePersons.multi, ...scPipelinePersons.nbdOnly])].sort();
             const startDateISO = lostSummaryFilters.startDate ? `${lostSummaryFilters.startDate}T00:00:00` : undefined;
             const endDateISO = lostSummaryFilters.endDate ? getEndDateWithTime(lostSummaryFilters.endDate) : undefined;
 
-            const [leadRows, enquiryRows] = await Promise.all([
-                fetchLostDetails({ source: "lead", startDateISO, endDateISO }),
-                fetchLostDetails({ source: "enquiry", startDateISO, endDateISO }),
-            ]);
-
-            if (requestId !== lostSummaryRequestIdRef.current) return;
-
-            const buildSummary = (records) => scNames.map((sc) => {
-                const forSc = records.filter((r) => r.scName === sc);
-                const lost = forSc.filter((r) => isLostStatus(r.orderReceivedStatus));
-                return {
-                    name: sc,
-                    total: forSc.length,
-                    lostCount: lost.length,
-                    lostValue: lost.reduce((sum, r) => sum + parseMoney(r.quotationValueWithoutTax), 0),
-                };
+            // Fetch Leads in parallel
+            const leadPromise = fetchLostDetails({
+                source: "lead",
+                startDateISO,
+                endDateISO,
+            }).then((leadRows) => {
+                if (requestId !== lostSummaryRequestIdRef.current) return;
+                const lostLeads = (leadRows || []).filter((r) => isLostStatus(r.orderReceivedStatus));
+                lostLeads.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                setLostDetailsRecords((prev) => ({ ...prev, leads: lostLeads }));
+                if (lostSource === "lead") {
+                    setIsLoading(false);
+                }
             });
 
-            setLostSummaryData({ leads: buildSummary(leadRows), enquiries: buildSummary(enquiryRows) });
+            // Fetch Enquiries progressively in parts
+            const enquiryPromise = fetchLostDetails({
+                source: "enquiry",
+                startDateISO,
+                endDateISO,
+                onProgress: (partialRows, meta) => {
+                    if (requestId !== lostSummaryRequestIdRef.current) return;
+                    const lostEnquiries = (partialRows || []).filter((r) => isLostStatus(r.orderReceivedStatus));
+                    lostEnquiries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                    setLostDetailsRecords((prev) => ({ ...prev, enquiries: lostEnquiries }));
+                    if (meta?.totalCount) {
+                        setExpectedTotalEnquiries(meta.totalCount);
+                    }
+                    // Unblock page loading as soon as the first part arrives so Page 1 renders immediately!
+                    setIsLoading(false);
+                },
+            }).then((finalRows) => {
+                if (requestId !== lostSummaryRequestIdRef.current) return;
+                const lostEnquiries = (finalRows || []).filter((r) => isLostStatus(r.orderReceivedStatus));
+                lostEnquiries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                setLostDetailsRecords((prev) => ({ ...prev, enquiries: lostEnquiries }));
+                setExpectedTotalEnquiries(lostEnquiries.length);
+            });
+
+            await Promise.all([leadPromise, enquiryPromise]);
         } catch (error) {
-            console.error("Error fetching Lost Details summary:", error);
+            console.error("Error fetching Lost Details records:", error);
             if (requestId === lostSummaryRequestIdRef.current) setLostSummaryError(error?.message || "Failed to load Lost Details.");
         } finally {
-            if (requestId === lostSummaryRequestIdRef.current) setIsLoading(false);
+            if (requestId === lostSummaryRequestIdRef.current) {
+                setIsLoading(false);
+                setIsLoadingMoreLost(false);
+            }
         }
-    }, [activeTab, lostSummaryFilters, scPipelinePersons]);
+    }, [activeTab, lostSummaryFilters, lostSource]);
 
 
     useEffect(() => {
@@ -1557,47 +2001,30 @@ function Report() {
                     </>
                 )}
 
-                {/* LOST DETAILS TAB CONTENT */}
+                {/* LOST DETAILS TAB CONTENT (OPTION A: ALL-IN-ONE) */}
                 {activeTab === "lost_details" && (
                     <>
-                        <p className="text-sm text-muted-foreground mb-3 flex items-center gap-2">
-                            {lostSummaryFilters.startDate || lostSummaryFilters.endDate
-                                ? "Custom date range -- one row per SC. Click a row to see the lost records."
-                                : "All-time -- one row per SC. Click a row to see the lost records."}
-                            {!isAdmin() && " You're seeing only your own row."}
-                            {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
-                        </p>
-
-                        <DateRangeFilterBar
-                            startDate={lostSummaryFilters.startDate}
-                            endDate={lostSummaryFilters.endDate}
-                            onStartDateChange={(v) => setLostSummaryFilters(prev => ({ ...prev, startDate: v }))}
-                            onEndDateChange={(v) => setLostSummaryFilters(prev => ({ ...prev, endDate: v }))}
-                            onReset={() => setLostSummaryFilters({ startDate: "", endDate: "" })}
-                            defaultRangeLabel="Showing all-time"
-                        />
-
                         {lostSummaryError && (
                             <div className="mb-5 px-4 py-3 rounded-md bg-destructive/10 border border-destructive/30 text-sm text-destructive" role="alert">
                                 Couldn't load Lost Details: {lostSummaryError}
                             </div>
                         )}
 
-                        {(() => {
-                            const visibleNames = isAdmin() ? null : (getUsernamesToFilter() || []);
-                            const handleRowClick = (source, scName) => {
-                                const params = new URLSearchParams({ source, sc: scName });
-                                if (lostSummaryFilters.startDate) params.set("start", lostSummaryFilters.startDate);
-                                if (lostSummaryFilters.endDate) params.set("end", lostSummaryFilters.endDate);
-                                navigate(`/report/lost-details?${params.toString()}`);
-                            };
-                            return (
-                                <>
-                                    <LostSummaryTable title="Leads" source="lead" rows={lostSummaryData.leads} visibleNames={visibleNames} isLoading={isLoading} onRowClick={handleRowClick} />
-                                    <LostSummaryTable title="Enquiries" source="enquiry" rows={lostSummaryData.enquiries} visibleNames={visibleNames} isLoading={isLoading} onRowClick={handleRowClick} />
-                                </>
-                            );
-                        })()}
+                        <LostDetailsAllInOne
+                            records={lostDetailsRecords}
+                            isLoading={isLoading}
+                            isLoadingMore={isLoadingMoreLost}
+                            expectedTotal={expectedTotalEnquiries}
+                            isAdmin={isAdmin}
+                            getUsernamesToFilter={getUsernamesToFilter}
+                            source={lostSource}
+                            setSource={setLostSource}
+                            startDate={lostSummaryFilters.startDate}
+                            endDate={lostSummaryFilters.endDate}
+                            onStartDateChange={(v) => setLostSummaryFilters(prev => ({ ...prev, startDate: v }))}
+                            onEndDateChange={(v) => setLostSummaryFilters(prev => ({ ...prev, endDate: v }))}
+                            onReset={() => setLostSummaryFilters({ startDate: "", endDate: "" })}
+                        />
                     </>
                 )}
 
