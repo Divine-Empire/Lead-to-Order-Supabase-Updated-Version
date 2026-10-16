@@ -446,6 +446,18 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
         updateData.planned_at = new Date(formData.nextCallDate).toISOString();
       }
 
+      // The required "Enquiry Type" answer above (insertData.enquiry_type)
+      // only ever landed on lto_call_tracker_for_leads -- a table Enquiry
+      // Tracker never reads from for this field. Enquiry Tracker's own
+      // "Enquiry Type" column comes from lto_leads.sales_type (joined via
+      // enquiry_pending_view/enquiry_history_view), so without this line a
+      // lead whose sales_type was already blank (e.g. from a pre-validation
+      // bulk import) kept showing blank there forever, no matter how many
+      // times this "required" field was correctly answered here.
+      if (enquiryStatus === "yes") {
+        updateData.sales_type = salesType || null;
+      }
+
       // 4. Update the leads table with new data
       const { error: updateError } = await supabase
         .from('lto_leads')

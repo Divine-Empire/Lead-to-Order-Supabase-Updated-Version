@@ -2908,12 +2908,16 @@ const handleSaveClick = async () => {
             />
           </div>
           <div className="space-y-2">
-            <label htmlFor="pending-edit-8" className="block text-sm font-medium text-foreground">Enquiry Type</label>
+            <label htmlFor="pending-edit-8" className="block text-sm font-medium text-foreground">
+              Enquiry Type
+              <span className="text-destructive">*</span>
+            </label>
             <select
               id="pending-edit-8"
               value={salesTypeOptions.includes(editedData.salesType) ? editedData.salesType : ""}
               onChange={(e) => handleFieldChange("salesType", e.target.value)}
               className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+              required
             >
               <option value="">Select type</option>
               {salesTypeOptions.map((option) => (
