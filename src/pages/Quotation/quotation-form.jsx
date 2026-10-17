@@ -9,7 +9,7 @@ import TermsAndConditions from "./terms and conditions";
 import BankDetails from "./bank-details";
 import NotesSection from "./notes-section";
 import SpecialOfferSection from "./special-offer-section";
-import { getCompanyPrefix, getNextQuotationNumber, isValidSalesTypePrefix } from "./quotation-service";
+import { getCompanyPrefix, getNextQuotationNumber, isValidSalesTypePrefix, syncClientMasterSalesType } from "./quotation-service";
 import { getStateCodeFromName } from "../../utils/gstStateCodes";
 import supabase from "../../utils/supabase";
 
@@ -533,22 +533,23 @@ const QuotationForm = ({
 
     // Resolve the quotation-number prefix and regenerate the number.
     //
-    // client_master is checked FIRST because it's the record that actually
-    // gets kept current -- e.g. syncClientOnOrderConversion upgrades
-    // NBD -> NBD_CRR there on order conversion (and now writes that back to
-    // the source lead/enquiry too, but older/other leads for the same
-    // company predating that fix can still be stale). The lead/enquiry's
-    // own sales_type/Enquiry_Type is only used when client_master has
-    // nothing usable, and either way the value is validated against the
-    // known prefix codes (CRR/NBD/NBD_CRR) before use -- a stray value like
-    // "Lead" must never flow into the quotation number as-is (that's what
-    // produced e.g. "Lead-26-27-001").
+    // The selected lead/enquiry (lto_leads / lto_enquiries) is the source of
+    // truth for the prefix. If its sales_type differs from lto_client_master,
+    // client_master is updated to match it (syncClientMasterSalesType), so the
+    // mismatch is fixed at the source and doesn't recur. client_master is only
+    // consulted when the lead/enquiry has no valid value of its own, and
+    // every value is validated against the known prefix codes
+    // (CRR/NBD/NBD_CRR) -- a stray value like "Lead" must never flow into the
+    // quotation number as-is (that's what produced e.g. "Lead-26-27-001").
     try {
-      let companyPrefix = await getCompanyPrefix(companyName);
+      const ownSalesType = leadData.rowData.sales_type || leadData.rowData.Enquiry_Type || leadData.rowData.enquiry_type || "";
+      let companyPrefix = null;
 
-      if (!companyPrefix) {
-        const ownSalesType = leadData.rowData.sales_type || leadData.rowData.Enquiry_Type || leadData.rowData.enquiry_type || "";
-        companyPrefix = isValidSalesTypePrefix(ownSalesType) ? ownSalesType.trim().toUpperCase() : "NBD";
+      if (isValidSalesTypePrefix(ownSalesType)) {
+        companyPrefix = ownSalesType.trim().toUpperCase();
+        await syncClientMasterSalesType(companyName, companyPrefix);
+      } else {
+        companyPrefix = (await getCompanyPrefix(companyName)) || "NBD";
       }
 
       const newQuotationNumber = await getNextQuotationNumber(companyPrefix);

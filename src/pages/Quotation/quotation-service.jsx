@@ -244,4 +244,34 @@ export const getCompanyPrefix = async (companyName) => {
   }
 };
 
+// Lead/enquiry (lto_leads / lto_enquiries) is the source of truth for the
+// sales_type. If lto_client_master disagrees, overwrite it with the
+// lead/enquiry's value. Only updates an existing row (never inserts) and
+// never throws -- a failed sync must not block quotation creation.
+export const syncClientMasterSalesType = async (companyName, salesType) => {
+  const trimmedName = (companyName || "").trim();
+  if (!trimmedName || !isValidSalesTypePrefix(salesType)) return;
+  const target = salesType.trim().toUpperCase();
+
+  try {
+    const { data, error } = await supabase
+      .from("lto_client_master")
+      .select("uuid, sales_type")
+      .ilike("company_name", trimmedName)
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !data) return;
+    if ((data.sales_type || "").trim().toUpperCase() === target) return;
+
+    const { error: updErr } = await supabase
+      .from("lto_client_master")
+      .update({ sales_type: target })
+      .eq("uuid", data.uuid);
+    if (updErr) console.error("Error syncing client_master sales_type:", updErr);
+  } catch (err) {
+    console.error("Error syncing client_master sales_type:", err);
+  }
+};
+
 
