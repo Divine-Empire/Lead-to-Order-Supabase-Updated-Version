@@ -17,6 +17,7 @@ const ModalFormInner = ({
   onSubmit,
   submitText = 'Submit',
   cancelText = 'Cancel',
+  submitDisabled = false,
   maxWidth = 'max-w-2xl',
   maxHeight = '60vh',
   zIndex = 'z-[100]'
@@ -63,6 +64,7 @@ const ModalFormInner = ({
             onCancel={onClose}
             cancelText={cancelText}
             submitText={submitText}
+            submitDisabled={submitDisabled}
             className="w-full"
             formId="ultra-compact-form"
           />

@@ -18,6 +18,7 @@ export const FormActionButtons = ({
   cancelText = 'Cancel',
   submitText = 'Save Changes',
   loading = false,
+  submitDisabled = false,
   className = "",
   formId = null,
   extraButton = null
@@ -44,7 +45,7 @@ export const FormActionButtons = ({
         type={onSubmit ? "button" : "submit"}
         form={formId}
         onClick={onSubmit}
-        disabled={loading}
+        disabled={loading || submitDisabled}
         className="flex h-9 flex-[1.5] items-center justify-center gap-2 rounded-md bg-primary px-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         title={submitText}
       >

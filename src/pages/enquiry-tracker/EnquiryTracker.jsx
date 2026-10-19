@@ -292,6 +292,17 @@ function EnquiryTracker() {
   // row -- editedData tracks the row's field values, the modal is just
   // where the inputs live now.
   const [isPendingEditModalOpen, setIsPendingEditModalOpen] = useState(false);
+  // Snapshot of the row as it was when the Edit modal opened -- Save stays
+  // disabled until one of the modal's fields differs from this.
+  const [originalEditData, setOriginalEditData] = useState({});
+  const PENDING_EDIT_FIELDS = [
+    "companyName", "phoneNumber", "salespersonName", "shippingAddress",
+    "gstNumber", "enquiryState", "billingAddress", "salesType", "leadSource",
+    "enquiryReceiverName", "enquiryApproach", "enquiryAssignToProject", "sc_name",
+  ];
+  const isPendingEditDirty = PENDING_EDIT_FIELDS.some(
+    (f) => (editedData[f] ?? "") !== (originalEditData[f] ?? "")
+  );
 
   // Valid-value option lists for the inline Pending-row edit -- same
   // lto_dropdown categories CallTrackerForm.jsx/MakeQuotationForm.jsx use,
@@ -338,6 +349,7 @@ function EnquiryTracker() {
   const [enquiryApproachOptions, setEnquiryApproachOptions] = useState(["INCOMING", "OUTGOING"]);
   const [receiverNameOptions, setReceiverNameOptions] = useState([]);
   const [assignToPersonOptions, setAssignToPersonOptions] = useState([]);
+  const [leadSourceOptions, setLeadSourceOptions] = useState([]);
   useEffect(() => {
     const fetchCategory = (category) =>
       supabase.from("lto_dropdown").select("value").eq("category", category);
@@ -351,13 +363,16 @@ function EnquiryTracker() {
           { data: approachData },
           { data: receiverData },
           { data: assignData },
+          { data: leadSourceData },
         ] = await Promise.all([
           fetchCategory("state"),
           fetchCategory("sales_type"),
           fetchCategory("enquiry_approach"),
           fetchCategory("lead_receiver_name"),
           fetchCategory("lead_assign_to"),
+          fetchCategory("lead_source"),
         ]);
+        setLeadSourceOptions(toValues(leadSourceData));
         setEnquiryStateOptions(toValues(stateData));
         setSalesTypeOptions(toValues(salesTypeData));
         const approachValues = toValues(approachData);
@@ -751,16 +766,19 @@ function EnquiryTracker() {
 
   const handleEditClick = (tracker, index) => {
     setEditingRowId(index);
-    setEditedData({
+    const initialData = {
       ...tracker,
       id: tracker.id,
-    });
+    };
+    setEditedData(initialData);
+    setOriginalEditData(initialData);
     setIsPendingEditModalOpen(true);
   };
 
   const handlePendingEditCancel = () => {
     setEditingRowId(null);
     setEditedData({});
+    setOriginalEditData({});
     setIsPendingEditModalOpen(false);
   };
 
@@ -857,6 +875,7 @@ const handleSaveClick = async () => {
             enquiry_for_state: editedData.enquiryState,
             location: editedData.billingAddress,
             sales_type: editedData.salesType,
+            lead_source: editedData.leadSource,
             enquiry_receiver_name: editedData.enquiryReceiverName,
             enquiry_approach: editedData.enquiryApproach,
             enquiry_assign_to_person: editedData.enquiryAssignToProject,
@@ -871,6 +890,7 @@ const handleSaveClick = async () => {
             state: editedData.enquiryState,
             location: editedData.billingAddress,
             sales_type: editedData.salesType,
+            lead_source: editedData.leadSource,
             lead_receiver_name: editedData.enquiryReceiverName,
             sc_name: editedData.sc_name,
           };
@@ -2825,8 +2845,9 @@ const handleSaveClick = async () => {
         isOpen={isPendingEditModalOpen}
         onClose={handlePendingEditCancel}
         title="Edit Record"
-        onSubmit={(e) => { e.preventDefault(); handleSaveClick(); }}
+        onSubmit={(e) => { e.preventDefault(); if (isPendingEditDirty) handleSaveClick(); }}
         submitText="Save"
+        submitDisabled={!isPendingEditDirty}
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
@@ -2921,6 +2942,20 @@ const handleSaveClick = async () => {
             >
               <option value="">Select type</option>
               {salesTypeOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="pending-edit-13" className="block text-sm font-medium text-foreground">Enquiry Source</label>
+            <select
+              id="pending-edit-13"
+              value={leadSourceOptions.includes(editedData.leadSource) ? editedData.leadSource : ""}
+              onChange={(e) => handleFieldChange("leadSource", e.target.value)}
+              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+            >
+              <option value="">Select source</option>
+              {leadSourceOptions.map((option) => (
                 <option key={option} value={option}>{option}</option>
               ))}
             </select>
