@@ -68,11 +68,16 @@ function Spinner({ className = "h-4 w-4" }) {
 // default to a fixed window (per task.txt) with no filter applied -- setting
 // either date here switches that tab over to a server-queried custom range
 // instead of the default, until "Reset to default" is pressed.
-function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateChange, onReset, defaultRangeLabel, children }) {
+// Optional `onApply`: shows an Apply button, for tabs whose dates are held as
+// a draft and only take effect (and fetch) on Apply. In that mode
+// `rangeApplied` says whether a custom range is actually in effect (the
+// startDate/endDate props are then just the draft).
+function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateChange, onReset, defaultRangeLabel, children, onApply, applyDisabled, rangeApplied }) {
     const uid = useId();
-    const hasCustomRange = !!(startDate || endDate);
+    const hasCustomRange = onApply ? !!(rangeApplied || startDate || endDate) : !!(startDate || endDate);
+    const showsCustomRange = onApply ? !!rangeApplied : hasCustomRange;
     return (
-        <div className="bg-card p-3.5 rounded-lg border mb-5 flex flex-col md:flex-row gap-3 items-end md:items-center">
+        <div className="bg-card p-3.5 rounded-lg border mb-5 flex flex-col md:flex-row gap-3 items-end">
             <div className="w-full md:w-1/5">
                 <label htmlFor={`${uid}-start`} className="block text-xs font-medium text-muted-foreground mb-1">Start Date</label>
                 <input
@@ -94,6 +99,18 @@ function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateCh
                 />
             </div>
             {children}
+            {onApply && (
+                <div className="w-full md:w-auto">
+                    <button
+                        type="button"
+                        onClick={onApply}
+                        disabled={applyDisabled}
+                        className="h-9 px-4 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 w-full md:w-auto disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Apply
+                    </button>
+                </div>
+            )}
             <div className="w-full md:w-auto">
                 <button
                     type="button"
@@ -101,11 +118,11 @@ function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateCh
                     disabled={!hasCustomRange}
                     className="h-9 px-4 rounded-md border border-input bg-card text-sm font-medium text-foreground transition-colors hover:bg-accent w-full md:w-auto disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    Reset to default
+                    Clear
                 </button>
             </div>
-            <div className="text-xs text-muted-foreground md:ml-1" aria-live="polite">
-                {hasCustomRange ? "Showing custom range" : defaultRangeLabel}
+            <div className="text-xs text-muted-foreground md:ml-1 md:flex md:h-9 md:items-center" aria-live="polite">
+                {showsCustomRange ? "Showing custom range" : defaultRangeLabel}
             </div>
         </div>
     );
@@ -827,11 +844,17 @@ function Report() {
     // curated person's actual sales_type records.
     const [scPipelinePersons, setScPipelinePersons] = useState({ multi: [], nbdOnly: [] });
 
+    // fosFilters holds the APPLIED dates (these drive the fetch); the date
+    // inputs edit fosDraftDates and only copy into fosFilters on Apply, so
+    // picking Start then End (or typing a year) doesn't fetch each time.
     const [fosFilters, setFosFilters] = useState({
         receiverName: "all",
         startDate: "",
         endDate: "",
     });
+    const [fosDraftDates, setFosDraftDates] = useState({ startDate: "", endDate: "" });
+    const fosDraftChanged = fosDraftDates.startDate !== fosFilters.startDate || fosDraftDates.endDate !== fosFilters.endDate;
+    const fosDraftInvalid = !!(fosDraftDates.startDate && fosDraftDates.endDate && fosDraftDates.startDate > fosDraftDates.endDate);
 
     // Lost Details tab -- All-in-One records, filters and error state
     const [lostDetailsRecords, setLostDetailsRecords] = useState({ leads: null, enquiries: null });
@@ -1806,11 +1829,17 @@ function Report() {
                         </p>
 
                         <DateRangeFilterBar
-                            startDate={fosFilters.startDate}
-                            endDate={fosFilters.endDate}
-                            onStartDateChange={(v) => setFosFilters(prev => ({ ...prev, startDate: v }))}
-                            onEndDateChange={(v) => setFosFilters(prev => ({ ...prev, endDate: v }))}
-                            onReset={() => setFosFilters(prev => ({ ...prev, startDate: "", endDate: "" }))}
+                            startDate={fosDraftDates.startDate}
+                            endDate={fosDraftDates.endDate}
+                            onStartDateChange={(v) => setFosDraftDates(prev => ({ ...prev, startDate: v }))}
+                            onEndDateChange={(v) => setFosDraftDates(prev => ({ ...prev, endDate: v }))}
+                            onApply={() => setFosFilters(prev => ({ ...prev, startDate: fosDraftDates.startDate, endDate: fosDraftDates.endDate }))}
+                            applyDisabled={!fosDraftChanged || fosDraftInvalid}
+                            rangeApplied={!!(fosFilters.startDate || fosFilters.endDate)}
+                            onReset={() => {
+                                setFosDraftDates({ startDate: "", endDate: "" });
+                                setFosFilters(prev => ({ ...prev, startDate: "", endDate: "" }));
+                            }}
                             defaultRangeLabel="Showing last Monday through today"
                         >
                             {isAdmin() && (
