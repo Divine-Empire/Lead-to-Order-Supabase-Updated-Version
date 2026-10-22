@@ -1048,7 +1048,17 @@ function Report() {
     // scheme (see nextRevision in Quotation.jsx) is unambiguous about this:
     // "PREFIX-YY-YY-NNN" (4 hyphen-separated parts) is a root quotation;
     // appending "-01", "-02", ... for each revision makes it 5 parts.
-    const isRootQuotationNo = (quotationNo) => String(quotationNo || "").split("-").length === 4;
+    // Root number of a quotation: strips a trailing "-NN" revision suffix
+    // (CRR-26-27-2549-01 -> CRR-26-27-2549). getQuotationRevision is that
+    // suffix as a number (0 for the root itself).
+    const getRootQuotationNo = (quotationNo) => {
+        const parts = String(quotationNo || "").trim().split("-");
+        return parts.length === 5 && /^\d{1,2}$/.test(parts[4]) ? parts.slice(0, 4).join("-") : String(quotationNo || "").trim();
+    };
+    const getQuotationRevision = (quotationNo) => {
+        const parts = String(quotationNo || "").trim().split("-");
+        return parts.length === 5 && /^\d{1,2}$/.test(parts[4]) ? parseInt(parts[4], 10) : 0;
+    };
 
     const parseMoney = (v) => {
         const value = parseFloat(String(v).replace(/,/g, '').replace(/[^\d.-]/g, ''));
@@ -1099,12 +1109,12 @@ function Report() {
             // ---- Base tables (unbounded -- a quotation created this week can
             // reference a lead/enquiry created any time in the past, so the
             // lead_no/enquiry_no -> Person lookup needs the full table).
-            // Attribution is the lead/enquiry's OWN receiver-name column --
-            // lead_receiver_name / enquiry_receiver_name -- not any
+            // Attribution: a lead's own lead_receiver_name; an enquiry's own
+            // enquiry_assign_to_person -- not any
             // call-tracker or "assign to person" field.
             const [{ data: allLeads }, { data: allEnquiries }] = await Promise.all([
                 fetchAllRows(() => supabase.from("lto_leads").select("id, lead_no, lead_receiver_name, created_at")),
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, enquiry_receiver_name, enquiry_approach, created_at")),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_no, enquiry_assign_to_person, enquiry_approach, created_at")),
             ]);
             const leadById = new Map();
             (allLeads || []).forEach(l => leadById.set(l.id, l));
@@ -1117,63 +1127,110 @@ function Report() {
             // other than the lead's receiver.
             const { data: weekCalls } = await fetchAllRows(() =>
                 supabase.from("lto_call_tracker_for_leads")
-                    .select("lead_id, created_at, enquiry_approach")
+                    .select("lead_id, created_at, enquiry_approach, what_did_customer_say, enquiry_received_status")
                     .gte("created_at", rangeStartISO)
                     .lte("created_at", rangeEndISO)
             );
-
-            // ---- "Converted to Enquiries" = the lead is showing up in the
-            // Enquiry Tracker's Pending tab, i.e. lto_call_tracker_for_leads
-            // has planned_at set for it (written at the moment a call is
-            // logged with "Enquiry Received = yes" -- see
-            // CallTrackerForm.jsx). Fetched unbounded/all-time since a lead
-            // created this week could have been called (and had planned_at
-            // set) at any point up to now.
-            const { data: allLeadCallsForPlanning } = await fetchAllRows(() =>
-                supabase.from("lto_call_tracker_for_leads").select("lead_id, planned_at")
-            );
-            const leadIdsWithPlannedAt = new Set();
-            (allLeadCallsForPlanning || []).forEach(c => {
-                if (c.lead_id && c.planned_at) leadIdsWithPlannedAt.add(c.lead_id);
-            });
 
             // ---- Order conversions in-range (any lead/enquiry, regardless
             // of its own creation date -- "their updation has been done
             // within this week/range") ----
             const [{ data: weekLeadOrders }, { data: weekEnquiryOrders }] = await Promise.all([
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads")
-                    .select("lead_id, created_at")
+                    .select("lead_id, created_at, quotation_number")
                     .gte("created_at", rangeStartISO)
                     .lte("created_at", rangeEndISO)
                     .eq("is_order_received_status", "yes")),
                 fetchAllRows(() => supabase.from("lto_enquiry_tracker")
-                    .select("enquiry_id, created_at")
+                    .select("enquiry_id, created_at, quotation_number")
                     .gte("created_at", rangeStartISO)
                     .lte("created_at", rangeEndISO)
                     .eq("is_order_received_status", "yes")),
             ]);
 
-            // ---- Root quotations created in-range, plus their pre-tax
-            // item totals (lto_make_quotations has no "value without tax"
-            // column of its own -- grand_total is post-tax) ----
-            const { data: weekQuotations } = await fetchAllRows(() =>
-                supabase.from("lto_make_quotations")
-                    .select("id, quotation_no, enquiry_reference_no, created_at")
+            // ---- Total Quotations / Quotation Amount source: Enquiry Tracker
+            // rows at current_stage = make-quotation created in range (leads:
+            // lto_enquiry_tracker_for_leads, enquiries: lto_enquiry_tracker).
+            // Per lead/enquiry, each quotation family (root + its revisions)
+            // counts once, via its highest revision in the range; the amount
+            // is that row's quotation_value_without_tax.
+            const fetchMakeQuotationRows = (table, idCol) => fetchAllRows(() =>
+                supabase.from(table)
+                    .select(`${idCol}, quotation_number, quotation_value_without_tax, created_at`)
+                    .eq("current_stage", "make-quotation")
                     .gte("created_at", rangeStartISO)
                     .lte("created_at", rangeEndISO)
             );
-            const rootWeekQuotations = (weekQuotations || []).filter(q => isRootQuotationNo(q.quotation_no));
-
-            const quotationAmountByQId = new Map();
-            const quotationIds = rootWeekQuotations.map(q => q.id);
-            if (quotationIds.length > 0) {
-                const { data: items } = await fetchAllRows(() =>
-                    supabase.from("lto_make_quotation_items").select("quotation_id, amount").in("quotation_id", quotationIds)
-                );
-                (items || []).forEach(it => {
-                    quotationAmountByQId.set(it.quotation_id, (quotationAmountByQId.get(it.quotation_id) || 0) + parseMoney(it.amount));
+            const [{ data: weekLeadQuotationRows }, { data: weekEnquiryQuotationRows }] = await Promise.all([
+                fetchMakeQuotationRows("lto_enquiry_tracker_for_leads", "lead_id"),
+                fetchMakeQuotationRows("lto_enquiry_tracker", "enquiry_id"),
+            ]);
+            const latestQuotationPerFamily = (rows, idCol) => {
+                const families = new Map();
+                (rows || []).forEach(r => {
+                    const quotationNo = String(r.quotation_number || "").trim();
+                    if (!r[idCol] || !quotationNo) return;
+                    const key = `${r[idCol]}|${getRootQuotationNo(quotationNo).toUpperCase()}`;
+                    const current = families.get(key);
+                    if (!current || getQuotationRevision(quotationNo) > getQuotationRevision(current.quotation_number)) {
+                        families.set(key, { ...r, quotation_number: quotationNo });
+                    }
                 });
-            }
+                return [...families.values()];
+            };
+            const leadQuotationFamilies = latestQuotationPerFamily(weekLeadQuotationRows, "lead_id");
+            const enquiryQuotationFamilies = latestQuotationPerFamily(weekEnquiryQuotationRows, "enquiry_id");
+
+            // Converted Order Value: the order row's own value is usually
+            // empty, so the value comes from the tracker row(s) carrying the
+            // SAME quotation_number the order was placed on (i.e. the exact
+            // revision that was ordered), whatever their date or stage --
+            // the make-quotation row is preferred, but some quotations have
+            // no make-quotation row at all (only a later-stage row). If no
+            // tracker row has a value, fall back to the quotation's item
+            // amounts (lto_make_quotation_items), the same figure.
+            const fetchOrderQuotationValues = async (table, orderRows) => {
+                const quotationNos = [...new Set((orderRows || [])
+                    .map(r => String(r.quotation_number || "").trim()).filter(Boolean))];
+                const valueByQuotationNo = new Map();
+                for (let i = 0; i < quotationNos.length; i += 100) {
+                    const noChunk = quotationNos.slice(i, i + 100);
+                    const { data } = await fetchAllRows(() =>
+                        supabase.from(table)
+                            .select("quotation_number, quotation_value_without_tax, current_stage")
+                            .in("quotation_number", noChunk)
+                    );
+                    const rows = [...(data || [])].sort((a, b) =>
+                        (b.current_stage === "make-quotation") - (a.current_stage === "make-quotation"));
+                    rows.forEach(r => {
+                        const no = String(r.quotation_number || "").trim();
+                        const value = parseMoney(r.quotation_value_without_tax);
+                        if (no && value > 0 && !valueByQuotationNo.has(no)) valueByQuotationNo.set(no, value);
+                    });
+                }
+
+                const missingNos = quotationNos.filter(no => !valueByQuotationNo.has(no));
+                for (let i = 0; i < missingNos.length; i += 100) {
+                    const noChunk = missingNos.slice(i, i + 100);
+                    const { data: quotations } = await fetchAllRows(() =>
+                        supabase.from("lto_make_quotations").select("id, quotation_no").in("quotation_no", noChunk)
+                    );
+                    const noById = new Map((quotations || []).map(q => [q.id, String(q.quotation_no).trim()]));
+                    if (noById.size === 0) continue;
+                    const { data: items } = await fetchAllRows(() =>
+                        supabase.from("lto_make_quotation_items").select("quotation_id, amount").in("quotation_id", [...noById.keys()])
+                    );
+                    (items || []).forEach(it => {
+                        const no = noById.get(it.quotation_id);
+                        if (no) valueByQuotationNo.set(no, (valueByQuotationNo.get(no) || 0) + parseMoney(it.amount));
+                    });
+                }
+                return valueByQuotationNo;
+            };
+            const [leadOrderValueByQuotationNo, enquiryOrderValueByQuotationNo] = await Promise.all([
+                fetchOrderQuotationValues("lto_enquiry_tracker_for_leads", weekLeadOrders),
+                fetchOrderQuotationValues("lto_enquiry_tracker", weekEnquiryOrders),
+            ]);
 
             // A newer call for this tab (e.g. the date filter was changed
             // again while all the fetches above were still in flight) has
@@ -1181,76 +1238,83 @@ function Report() {
             // overwriting whatever that newer call ends up committing.
             if (requestId !== callingRequestIdRef.current) return;
 
-            // ---- Lookups: lead_no / enquiry_no -> Person, for tying a
-            // quotation back to whichever person's lead/enquiry it belongs to ----
-            const leadPersonByLeadNo = new Map();
-            (allLeads || []).forEach(l => {
-                if (l.lead_no && l.lead_receiver_name) leadPersonByLeadNo.set(l.lead_no.trim().toUpperCase(), l.lead_receiver_name);
-            });
             const enquiryById = new Map();
-            const enquiryPersonByEnquiryNo = new Map();
-            (allEnquiries || []).forEach(e => {
-                enquiryById.set(e.id, e);
-                if (e.enquiry_no) enquiryPersonByEnquiryNo.set(e.enquiry_no.trim().toUpperCase(), e.enquiry_receiver_name);
-            });
+            (allEnquiries || []).forEach(e => enquiryById.set(e.id, e));
 
             // ==================== LEADS SECTION ====================
             const leadStats = {};
             visiblePersons.forEach(name => {
                 leadStats[name] = {
                     name, totalLeads: 0, calls: 0, convertedToEnquiry: 0,
-                    quotations: 0, quotationAmount: 0, orderConverted: 0, incoming: 0, outgoing: 0,
+                    quotations: 0, quotationAmount: 0, orderConverted: 0, orderValue: 0, incoming: 0, outgoing: 0,
                 };
             });
 
-            // Credited to the lead's own lead_receiver_name (via leadById),
-            // not this call row's own enquiry_assign_to_person.
-            const callsByLeadId = new Map();
+            // Calls: logs created in range, excluding failed-contact outcomes.
+            // Several logs of one lead on the same calendar date count once
+            // ("unique"). Credited to the lead's own lead_receiver_name.
+            const EXCLUDED_CALL_OUTCOMES = new Set(["call attempt failed", "not connected", "switched off"]);
+            const callDayKey = (dateStr) => new Date(dateStr).toLocaleDateString("en-CA");
+            const callUnits = new Set();          // lead_id|date
+            const callApproachUnits = new Set();  // lead_id|date|approach
             (weekCalls || []).forEach(c => {
                 if (!c.lead_id) return;
+                if (EXCLUDED_CALL_OUTCOMES.has(String(c.what_did_customer_say || "").trim().toLowerCase())) return;
                 const person = leadById.get(c.lead_id)?.lead_receiver_name;
-                if (!person) return;
-                if (!callsByLeadId.has(c.lead_id)) callsByLeadId.set(c.lead_id, { person, approaches: new Set() });
-                if (c.enquiry_approach) callsByLeadId.get(c.lead_id).approaches.add(String(c.enquiry_approach).trim().toUpperCase());
-            });
-
-            (allLeads || []).forEach(lead => {
-                if (!inThisWeek(lead.created_at)) return;
-                const person = lead.lead_receiver_name;
                 if (!person || !leadStats[person]) return;
-                leadStats[person].totalLeads++;
-
-                if (leadIdsWithPlannedAt.has(lead.id)) leadStats[person].convertedToEnquiry++;
-
-                const callEntry = callsByLeadId.get(lead.id);
-                if (callEntry) {
-                    if (callEntry.approaches.has("INCOMING")) leadStats[person].incoming++;
-                    if (callEntry.approaches.has("OUTGOING")) leadStats[person].outgoing++;
+                const unit = `${c.lead_id}|${callDayKey(c.created_at)}`;
+                if (!callUnits.has(unit)) { callUnits.add(unit); leadStats[person].calls++; }
+                const approach = String(c.enquiry_approach || "").trim().toUpperCase();
+                if (approach === "INCOMING" || approach === "OUTGOING") {
+                    const approachUnit = `${unit}|${approach}`;
+                    if (!callApproachUnits.has(approachUnit)) {
+                        callApproachUnits.add(approachUnit);
+                        if (approach === "INCOMING") leadStats[person].incoming++; else leadStats[person].outgoing++;
+                    }
                 }
             });
 
-            // No. of Calls: distinct leads (any creation date) called this
-            // week, credited to that lead's own lead_receiver_name, max one per lead.
-            callsByLeadId.forEach(entry => {
-                if (entry.person && leadStats[entry.person]) leadStats[entry.person].calls++;
+            // Total Leads: all-time, no date filter.
+            (allLeads || []).forEach(lead => {
+                const person = lead.lead_receiver_name;
+                if (!person || !leadStats[person]) return;
+                leadStats[person].totalLeads++;
+            });
+
+            // Converted to Enquiries: distinct leads that had a call log
+            // with enquiry_received_status = yes created in the selected
+            // range (the outcome-exclusion list above does NOT apply here).
+            const convertedLeadIds = new Set();
+            (weekCalls || []).forEach(c => {
+                if (!c.lead_id || convertedLeadIds.has(c.lead_id)) return;
+                if (String(c.enquiry_received_status || "").trim().toLowerCase() !== "yes") return;
+                const person = leadById.get(c.lead_id)?.lead_receiver_name;
+                if (!person || !leadStats[person]) return;
+                convertedLeadIds.add(c.lead_id);
+                leadStats[person].convertedToEnquiry++;
             });
 
             // Order Converted: any lead (any creation date) whose order was
             // marked received this week, credited to that lead's lead_receiver_name.
+            const orderedLeadIds = new Set();
             (weekLeadOrders || []).forEach(row => {
+                if (!row.lead_id || orderedLeadIds.has(row.lead_id)) return;
+                orderedLeadIds.add(row.lead_id);
                 const person = leadById.get(row.lead_id)?.lead_receiver_name;
-                if (person && leadStats[person]) leadStats[person].orderConverted++;
+                if (person && leadStats[person]) {
+                    leadStats[person].orderConverted++;
+                    leadStats[person].orderValue += leadOrderValueByQuotationNo.get(String(row.quotation_number || "").trim()) || 0;
+                }
             });
 
-            // Quotations: root quotations created this week whose reference
-            // no. points at a lead (LD-...), credited to that lead's lead_receiver_name.
-            rootWeekQuotations.forEach(q => {
-                const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
-                if (!ref.startsWith("LD-")) return;
-                const person = leadPersonByLeadNo.get(ref);
+            // Quotations: one per quotation family (latest revision) at the
+            // make-quotation stage in range, credited to the lead's
+            // lead_receiver_name; amount = quotation_value_without_tax.
+            leadQuotationFamilies.forEach(q => {
+                const person = leadById.get(q.lead_id)?.lead_receiver_name;
                 if (person && leadStats[person]) {
                     leadStats[person].quotations++;
-                    leadStats[person].quotationAmount += quotationAmountByQId.get(q.id) || 0;
+                    leadStats[person].quotationAmount += parseMoney(q.quotation_value_without_tax);
                 }
             });
 
@@ -1261,32 +1325,41 @@ function Report() {
             visiblePersons.forEach(name => {
                 enquiryStats[name] = {
                     name, totalEnquiries: 0, quotations: 0, quotationAmount: 0,
-                    orderConverted: 0, incoming: 0, outgoing: 0,
+                    orderConverted: 0, orderValue: 0, incoming: 0, outgoing: 0,
                 };
             });
 
+            // Total Enquiries: all-time, no date filter. Incoming/Outgoing
+            // use enquiry_approach of enquiries created in the range.
             (allEnquiries || []).forEach(e => {
-                if (!inThisWeek(e.created_at)) return;
-                const person = e.enquiry_receiver_name;
+                const person = e.enquiry_assign_to_person;
                 if (!person || !enquiryStats[person]) return;
                 enquiryStats[person].totalEnquiries++;
+                if (!inThisWeek(e.created_at)) return;
                 const approach = String(e.enquiry_approach || "").trim().toUpperCase();
                 if (approach === "INCOMING") enquiryStats[person].incoming++;
                 if (approach === "OUTGOING") enquiryStats[person].outgoing++;
             });
 
+            const orderedEnquiryIds = new Set();
             (weekEnquiryOrders || []).forEach(row => {
+                if (!row.enquiry_id || orderedEnquiryIds.has(row.enquiry_id)) return;
+                orderedEnquiryIds.add(row.enquiry_id);
                 const e = enquiryById.get(row.enquiry_id);
-                if (e?.enquiry_receiver_name && enquiryStats[e.enquiry_receiver_name]) enquiryStats[e.enquiry_receiver_name].orderConverted++;
+                const person = e?.enquiry_assign_to_person;
+                if (person && enquiryStats[person]) {
+                    enquiryStats[person].orderConverted++;
+                    enquiryStats[person].orderValue += enquiryOrderValueByQuotationNo.get(String(row.quotation_number || "").trim()) || 0;
+                }
             });
 
-            rootWeekQuotations.forEach(q => {
-                const ref = String(q.enquiry_reference_no || "").trim().toUpperCase();
-                if (!ref.startsWith("EN-")) return;
-                const person = enquiryPersonByEnquiryNo.get(ref);
+            // Quotations: same family rule as Leads, credited to the
+            // enquiry's enquiry_assign_to_person.
+            enquiryQuotationFamilies.forEach(q => {
+                const person = enquiryById.get(q.enquiry_id)?.enquiry_assign_to_person;
                 if (person && enquiryStats[person]) {
                     enquiryStats[person].quotations++;
-                    enquiryStats[person].quotationAmount += quotationAmountByQId.get(q.id) || 0;
+                    enquiryStats[person].quotationAmount += parseMoney(q.quotation_value_without_tax);
                 }
             });
 
@@ -1823,15 +1896,16 @@ function Report() {
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total Quotations</th>
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Quotation Amount</th>
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Order Converted</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Converted Order Value</th>
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Incoming</th>
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Outgoing</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y">
                                             {isLoading ? (
-                                                <tr><td colSpan="9" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
+                                                <tr><td colSpan="10" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
                                             ) : leadsReportRows.length === 0 ? (
-                                                <tr><td colSpan="9" className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</td></tr>
+                                                <tr><td colSpan="10" className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</td></tr>
                                             ) : (
                                                 leadsReportRows.map(row => (
                                                     <tr key={row.name} className="hover:bg-secondary/60">
@@ -1844,6 +1918,7 @@ function Report() {
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
                                                             <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.orderConverted > 0 ? "bg-success/10 text-success" : "text-muted-foreground"}`}>{row.orderConverted}</span>
                                                         </td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.orderValue.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-info">{row.incoming}</td>
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-warning-foreground">{row.outgoing}</td>
                                                     </tr>
@@ -1868,15 +1943,16 @@ function Report() {
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Total Quotations</th>
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Quotation Amount</th>
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Order Converted</th>
+                                                <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Converted Order Value</th>
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Incoming</th>
                                                 <th scope="col" className="px-4 py-2 text-center text-xs font-semibold text-brand-800">Outgoing</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y">
                                             {isLoading ? (
-                                                <tr><td colSpan="7" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
+                                                <tr><td colSpan="8" className="px-4 py-8 text-center text-sm text-primary"><span className="inline-flex items-center gap-2"><Spinner className="h-4 w-4" /> Loading...</span></td></tr>
                                             ) : enquiriesReportRows.length === 0 ? (
-                                                <tr><td colSpan="7" className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</td></tr>
+                                                <tr><td colSpan="8" className="px-4 py-6 text-center text-sm text-muted-foreground">No rows to show</td></tr>
                                             ) : (
                                                 enquiriesReportRows.map(row => (
                                                     <tr key={row.name} className="hover:bg-secondary/60">
@@ -1887,6 +1963,7 @@ function Report() {
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center">
                                                             <span className={`inline-flex items-center justify-center min-w-[1.75rem] px-2 py-0.5 rounded-full text-xs font-semibold ${row.orderConverted > 0 ? "bg-success/10 text-success" : "text-muted-foreground"}`}>{row.orderConverted}</span>
                                                         </td>
+                                                        <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-foreground">{row.orderValue.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })}</td>
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-info">{row.incoming}</td>
                                                         <td className="px-4 py-2.5 whitespace-nowrap text-sm text-center text-warning-foreground">{row.outgoing}</td>
                                                     </tr>
