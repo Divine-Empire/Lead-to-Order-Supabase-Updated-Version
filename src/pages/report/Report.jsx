@@ -5,41 +5,23 @@ import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
 import { fetchAllRows } from "../../utils/fetchAllRows";
 import { fetchLostDetails, isLostStatus, parseMoney } from "./lostDetailsData";
+import { latestQuotationPerFamily, fetchOrderQuotationValues } from "./quotationMetrics";
 import * as XLSX from "xlsx";
 import { Download, FileText, Search, ChevronLeft, ChevronRight, Calendar, RotateCcw, X } from "lucide-react";
 
-// import { supabaseVisit } from "../supabaseClientVisit";
-
-// Master "who shows up on this report tab" lists are curated on the Report
-// Persons master page (Master > Report Persons) rather than derived from
-// whatever raw values happen to appear in the data -- see fetchCallingPersons
-// / fetchScPipelinePersons / fetchFosPersons below. All 3 reuse the existing
-// lto_dropdown table (category/value pairs), one category per tab.
 const REPORT_PERSON_CATEGORY = {
     CALLING: "report_person_calling",
     SC_PIPELINE: "report_person_sc_pipeline",
-    FOS: "report_person_fos",
 };
 
 const formatMetricValue = (value, format) => {
     if (format === "blank") return "--";
-    // Visit counts: null means the sheet fetch itself failed (shown as "--",
-    // distinct from a real 0 -- a person can genuinely have zero visits
-    // this week, which shouldn't look the same as "couldn't load this").
+
     if (format === "visitCount") return (value === null || value === undefined) ? "--" : value;
     if (format === "currency") return (value || 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
     if (format === "percent") return `${(value || 0).toFixed(1)}%`;
     return value || 0;
 };
-
-// ---- Field Sales "Data" sheet (Total Visit count) -----------------------
-// Read-only source: Code.gs's doGet on the "Data" sheet, columns A-F =
-// Timestamp / SN / Sale Person Name / Date and Time to Visit /
-// City-Location of Visit / Type of Visit, per task.txt. This is a plain
-// GET against the Apps Script webapp (VITE_SALES_SHEET) -- Apps Script web
-// apps allow cross-origin GET by default, so no proxy/no-cors workaround
-// is needed here (unlike the POST sync in sheetSync.js).
-const SALES_SHEET_URL = import.meta.env.VITE_SALES_SHEET;
 
 const normalizeName = (n) => String(n || "").trim().toUpperCase();
 
@@ -54,73 +36,16 @@ const matchesPersonName = (personName, allowedList) => {
     });
 };
 
-// Column F is free text entered via the field app -- normalize casing so
-// "new f2f" / "New F2F " etc. all land in the right bucket instead of
-// silently falling through unmatched.
+// field_sales_form.visit_type is a fixed dropdown in the field app (New F2F /
+// Existing F2F / MDO F2F) -- normalize casing/spacing anyway so a stray
+// "new f2f " still lands in the right bucket.
 const normalizeVisitType = (raw) => {
     const s = String(raw || "").trim().toLowerCase();
-    if (s === "new f2f") return "newF2F";
-    if (s === "existing f2f") return "existingF2F";
+    if (s === "new f2f") return "newF2FVisits";
+    if (s === "existing f2f") return "existingF2FVisits";
+    if (s === "mdo f2f") return "mdoF2FVisits";
     return null;
 };
-
-// Sheet timestamps come back either as ISO strings (Apps Script serializes
-// real Date cells that way via JSON.stringify) or as "YYYY-MM-DD HH:mm:ss"
-// plain text (seen in the raw sheet for some rows) -- the latter isn't
-// reliably parsed by `new Date()` in every browser, so normalize the
-// separator before parsing.
-const parseSheetTimestamp = (raw) => {
-    if (!raw) return null;
-    if (raw instanceof Date) return isNaN(raw.getTime()) ? null : raw;
-    const s = String(raw).trim();
-    if (!s) return null;
-    const normalized = s.includes("T") ? s : s.replace(" ", "T");
-    const d = new Date(normalized);
-    return isNaN(d.getTime()) ? null : d;
-};
-
-// Counts New F2F / Existing F2F rows per Sale Person Name whose Timestamp
-// falls in [rangeStart, rangeEnd] -- per task.txt this window is always
-// "last Monday through today", independent of whatever date filter the FOS
-// tab itself has applied. Returns a map keyed by normalized (trim+upper)
-// name; throws on any fetch/parse failure so the caller can distinguish
-// "genuinely zero visits" from "couldn't load the sheet".
-async function fetchFosVisitCounts(rangeStart, rangeEnd) {
-    if (!SALES_SHEET_URL) throw new Error("VITE_SALES_SHEET is not configured");
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
-    let res;
-    try {
-        res = await fetch(SALES_SHEET_URL, { signal: controller.signal });
-    } finally {
-        clearTimeout(timeoutId);
-    }
-    if (!res.ok) throw new Error(`Sheet request failed (${res.status})`);
-
-    const json = await res.json();
-    if (!json.success) throw new Error(json.error || "Sheet request failed");
-
-    const allRows = json.data || [];
-    // Header row is wherever column A reads "Timestamp" -- avoids hardcoding
-    // a row index that would break if a banner row is added/removed above it.
-    const headerIdx = allRows.findIndex(r => normalizeName(r?.[0]) === "TIMESTAMP");
-    const dataRows = headerIdx === -1 ? [] : allRows.slice(headerIdx + 1);
-
-    const counts = {};
-    dataRows.forEach(row => {
-        const timestamp = parseSheetTimestamp(row[0]);
-        if (!timestamp || timestamp < rangeStart || timestamp > rangeEnd) return;
-
-        const name = normalizeName(row[2]);
-        const visitType = normalizeVisitType(row[5]);
-        if (!name || !visitType) return;
-
-        if (!counts[name]) counts[name] = { newF2F: 0, existingF2F: 0 };
-        counts[name][visitType]++;
-    });
-    return counts;
-}
 
 // Green/amber/rose thresholds for at-a-glance conversion health -- applied
 // to both % metric cells, consistent across the whole page.
@@ -143,7 +68,7 @@ function Spinner({ className = "h-4 w-4" }) {
 // default to a fixed window (per task.txt) with no filter applied -- setting
 // either date here switches that tab over to a server-queried custom range
 // instead of the default, until "Reset to default" is pressed.
-function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateChange, onReset, defaultRangeLabel }) {
+function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateChange, onReset, defaultRangeLabel, children }) {
     const uid = useId();
     const hasCustomRange = !!(startDate || endDate);
     return (
@@ -168,6 +93,7 @@ function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateCh
                     onChange={(e) => onEndDateChange(e.target.value)}
                 />
             </div>
+            {children}
             <div className="w-full md:w-auto">
                 <button
                     type="button"
@@ -289,15 +215,16 @@ function PipelineTable({ title, section, visibleLabels, isLoading }) {
 }
 
 const FOS_METRIC_COLUMNS = [
-    { key: "newF2FVisits", label: "New F2F Visits", format: "visitCount" },
-    { key: "existingF2FVisits", label: "Existing F2F Visits", format: "visitCount" },
-    { key: "enquiries", label: "No. of Enquiries", format: "int" },
-    { key: "enquiryValue", label: "Total Enquiry Value", format: "currency" },
-    { key: "ordersConverted", label: "Orders Converted", format: "int" },
-    { key: "orderConvertedValue", label: "Order Converted Value", format: "currency" },
+    { key: "newF2FVisits", label: "New F2F Visits", format: "int" },
+    { key: "existingF2FVisits", label: "Existing F2F Visits", format: "int" },
+    { key: "mdoF2FVisits", label: "MDO F2F Visits", format: "int" },
+    { key: "enquiries", label: "Total Enquiries", format: "int" },
+    { key: "quotationValue", label: "Total Quotation Value", format: "currency" },
+    { key: "ordersConverted", label: "Order Converted", format: "int" },
+    { key: "orderConvertedValue", label: "Converted Order Value", format: "currency" },
     { key: "avgTicket", label: "Avg Ticket Size", format: "currency" },
     { key: "pipelineCount", label: "Pipeline", format: "int" },
-    { key: "pipelineValue", label: "Pipeline (Value)", format: "currency" },
+    { key: "pipelineValue", label: "Pipeline Value", format: "currency" },
 ];
 
 // Renders one FOS Report table (Leads or Enquiries): one row per FOS team
@@ -881,7 +808,7 @@ function Report() {
     const [callingPersons, setCallingPersons] = useState([]);
     const [callingFilters, setCallingFilters] = useState({ startDate: "", endDate: "" });
 
-    const [fosTableData, setFosTableData] = useState({ leads: null, enquiries: null });
+    const [fosTableData, setFosTableData] = useState(null);
     // Surfaced in the UI if the fetch throws, same convention as SC Pipeline.
     const [fosError, setFosError] = useState(null);
     // Separate error slot for the Total Visit count sheet fetch -- a failure
@@ -899,11 +826,6 @@ function Report() {
     // SC_PIPELINE_NBD_ONLY_SCS arrays had -- is still derived from each
     // curated person's actual sales_type records.
     const [scPipelinePersons, setScPipelinePersons] = useState({ multi: [], nbdOnly: [] });
-
-    // Master FOS receiver list -- curated on the Report Persons master page
-    // (lto_dropdown, category "report_person_fos"); replaces the old
-    // hardcoded FOS_RECEIVERS array.
-    const [fosPersons, setFosPersons] = useState([]);
 
     const [fosFilters, setFosFilters] = useState({
         receiverName: "all",
@@ -1019,22 +941,6 @@ function Report() {
         }
     }, []);
 
-    // Master FOS receiver list -- see fosPersons above.
-    const fetchFosPersons = useCallback(async () => {
-        try {
-            const { data, error } = await fetchAllRows(() =>
-                supabase.from("lto_dropdown").select("value").eq("category", REPORT_PERSON_CATEGORY.FOS)
-            );
-            if (error) throw error;
-
-            const names = new Set();
-            (data || []).forEach(r => { if (r.value) names.add(r.value.trim()); });
-            setFosPersons([...names].sort());
-        } catch (error) {
-            console.error("Error fetching FOS persons:", error);
-        }
-    }, []);
-
     // Monday 00:00 of the current week -> now. "Always started from Monday"
     // per the spec -- this tab has no date picker, it's always this week.
     const getMondayStart = () => {
@@ -1042,22 +948,6 @@ function Report() {
         const day = now.getDay(); // 0 = Sun, 1 = Mon, ... 6 = Sat
         const diffToMonday = day === 0 ? 6 : day - 1;
         return new Date(now.getFullYear(), now.getMonth(), now.getDate() - diffToMonday, 0, 0, 0, 0);
-    };
-
-    // Root quotation = no revision suffix. Quotation.jsx's own numbering
-    // scheme (see nextRevision in Quotation.jsx) is unambiguous about this:
-    // "PREFIX-YY-YY-NNN" (4 hyphen-separated parts) is a root quotation;
-    // appending "-01", "-02", ... for each revision makes it 5 parts.
-    // Root number of a quotation: strips a trailing "-NN" revision suffix
-    // (CRR-26-27-2549-01 -> CRR-26-27-2549). getQuotationRevision is that
-    // suffix as a number (0 for the root itself).
-    const getRootQuotationNo = (quotationNo) => {
-        const parts = String(quotationNo || "").trim().split("-");
-        return parts.length === 5 && /^\d{1,2}$/.test(parts[4]) ? parts.slice(0, 4).join("-") : String(quotationNo || "").trim();
-    };
-    const getQuotationRevision = (quotationNo) => {
-        const parts = String(quotationNo || "").trim().split("-");
-        return parts.length === 5 && /^\d{1,2}$/.test(parts[4]) ? parseInt(parts[4], 10) : 0;
     };
 
     const parseMoney = (v) => {
@@ -1165,68 +1055,11 @@ function Report() {
                 fetchMakeQuotationRows("lto_enquiry_tracker_for_leads", "lead_id"),
                 fetchMakeQuotationRows("lto_enquiry_tracker", "enquiry_id"),
             ]);
-            const latestQuotationPerFamily = (rows, idCol) => {
-                const families = new Map();
-                (rows || []).forEach(r => {
-                    const quotationNo = String(r.quotation_number || "").trim();
-                    if (!r[idCol] || !quotationNo) return;
-                    const key = `${r[idCol]}|${getRootQuotationNo(quotationNo).toUpperCase()}`;
-                    const current = families.get(key);
-                    if (!current || getQuotationRevision(quotationNo) > getQuotationRevision(current.quotation_number)) {
-                        families.set(key, { ...r, quotation_number: quotationNo });
-                    }
-                });
-                return [...families.values()];
-            };
             const leadQuotationFamilies = latestQuotationPerFamily(weekLeadQuotationRows, "lead_id");
             const enquiryQuotationFamilies = latestQuotationPerFamily(weekEnquiryQuotationRows, "enquiry_id");
 
-            // Converted Order Value: the order row's own value is usually
-            // empty, so the value comes from the tracker row(s) carrying the
-            // SAME quotation_number the order was placed on (i.e. the exact
-            // revision that was ordered), whatever their date or stage --
-            // the make-quotation row is preferred, but some quotations have
-            // no make-quotation row at all (only a later-stage row). If no
-            // tracker row has a value, fall back to the quotation's item
-            // amounts (lto_make_quotation_items), the same figure.
-            const fetchOrderQuotationValues = async (table, orderRows) => {
-                const quotationNos = [...new Set((orderRows || [])
-                    .map(r => String(r.quotation_number || "").trim()).filter(Boolean))];
-                const valueByQuotationNo = new Map();
-                for (let i = 0; i < quotationNos.length; i += 100) {
-                    const noChunk = quotationNos.slice(i, i + 100);
-                    const { data } = await fetchAllRows(() =>
-                        supabase.from(table)
-                            .select("quotation_number, quotation_value_without_tax, current_stage")
-                            .in("quotation_number", noChunk)
-                    );
-                    const rows = [...(data || [])].sort((a, b) =>
-                        (b.current_stage === "make-quotation") - (a.current_stage === "make-quotation"));
-                    rows.forEach(r => {
-                        const no = String(r.quotation_number || "").trim();
-                        const value = parseMoney(r.quotation_value_without_tax);
-                        if (no && value > 0 && !valueByQuotationNo.has(no)) valueByQuotationNo.set(no, value);
-                    });
-                }
-
-                const missingNos = quotationNos.filter(no => !valueByQuotationNo.has(no));
-                for (let i = 0; i < missingNos.length; i += 100) {
-                    const noChunk = missingNos.slice(i, i + 100);
-                    const { data: quotations } = await fetchAllRows(() =>
-                        supabase.from("lto_make_quotations").select("id, quotation_no").in("quotation_no", noChunk)
-                    );
-                    const noById = new Map((quotations || []).map(q => [q.id, String(q.quotation_no).trim()]));
-                    if (noById.size === 0) continue;
-                    const { data: items } = await fetchAllRows(() =>
-                        supabase.from("lto_make_quotation_items").select("quotation_id, amount").in("quotation_id", [...noById.keys()])
-                    );
-                    (items || []).forEach(it => {
-                        const no = noById.get(it.quotation_id);
-                        if (no) valueByQuotationNo.set(no, (valueByQuotationNo.get(no) || 0) + parseMoney(it.amount));
-                    });
-                }
-                return valueByQuotationNo;
-            };
+            // Converted Order Value: value of the exact quotation revision the
+            // order was placed on (see fetchOrderQuotationValues).
             const [leadOrderValueByQuotationNo, enquiryOrderValueByQuotationNo] = await Promise.all([
                 fetchOrderQuotationValues("lto_enquiry_tracker_for_leads", weekLeadOrders),
                 fetchOrderQuotationValues("lto_enquiry_tracker", weekEnquiryOrders),
@@ -1372,6 +1205,11 @@ function Report() {
         }
     }, [activeTab, isAdmin, getUsernamesToFilter, callingPersons, callingFilters]);
 
+    // FOS Report -- one row per sales person who has at least one
+    // field_sales_form visit in the selected range (so the Person rows and the
+    // Receiver dropdown are always exactly the people with data in view).
+    // Default range is last Monday through today; a Start/End date filter
+    // replaces it and applies to every metric, visits included.
     const fetchFosMetrics = useCallback(async () => {
         if (activeTab !== "fos") return;
         const requestId = ++fosRequestIdRef.current;
@@ -1379,196 +1217,176 @@ function Report() {
         setFosError(null);
         setFosVisitError(null);
         try {
-            const monday = getMondayStart();
             const now = new Date();
-
-            // Kicked off up front so it overlaps with the Supabase fetches
-            // below rather than adding its own latency on top. Total Visit
-            // count is always "last Monday through today" per task.txt --
-            // deliberately NOT the fosFilters custom range/60-day pipeline
-            // windows used by the rest of this tab's metrics.
-            const visitCountsPromise = fetchFosVisitCounts(monday, now)
-                .then(counts => { if (requestId === fosRequestIdRef.current) setFosVisitError(null); return counts; })
-                .catch(err => {
-                    console.error("FOS visit-count fetch error:", err);
-                    if (requestId === fosRequestIdRef.current) setFosVisitError(err?.message || "Failed to load Total Visit count.");
-                    return null; // null (not {}) so it renders "--", not "0"
-                });
-            const defaultSixtyDaysAgo = new Date(now);
-            defaultSixtyDaysAgo.setDate(defaultSixtyDaysAgo.getDate() - 60);
-            const hasCustomRange = !!(fosFilters.startDate || fosFilters.endDate);
-
-            const rangeStart = hasCustomRange
-                ? (fosFilters.startDate ? new Date(`${fosFilters.startDate}T00:00:00`) : defaultSixtyDaysAgo)
-                : monday;
-            const rangeEnd = hasCustomRange
-                ? (fosFilters.endDate ? new Date(getEndDateWithTime(fosFilters.endDate)) : now)
-                : now;
-
-            const fetchStart = hasCustomRange ? rangeStart : defaultSixtyDaysAgo;
-            const fetchEnd = hasCustomRange ? rangeEnd : now;
-            const fetchStartISO = fetchStart.toISOString();
-            const fetchEndISO = fetchEnd.toISOString();
-
+            const rangeStart = fosFilters.startDate ? new Date(`${fosFilters.startDate}T00:00:00`) : getMondayStart();
+            const rangeEnd = fosFilters.endDate ? new Date(getEndDateWithTime(fosFilters.endDate)) : now;
+            const rangeStartISO = rangeStart.toISOString();
+            const rangeEndISO = rangeEnd.toISOString();
             const inRange = (d) => {
                 const dt = new Date(d);
                 return !isNaN(dt.getTime()) && dt >= rangeStart && dt <= rangeEnd;
             };
-            // Under a custom range there is only one window, not two.
-            const inPipelineWindow = hasCustomRange ? inRange : (d) => {
-                const dt = new Date(d);
-                return !isNaN(dt.getTime()) && dt >= defaultSixtyDaysAgo && dt <= now;
-            };
-            const isYes = (status) => String(status || "").trim().toLowerCase() === "yes";
+            const inRangeTracker = (query) => query.gte("created_at", rangeStartISO).lte("created_at", rangeEndISO);
 
-            // Pipeline = genuinely PENDING work, matching the Enquiry
-            // Tracker's own "Pending" tab (enquiry_pending_view): anything
-            // that hasn't resolved to yes/no yet. A brand-new record with
-            // ZERO tracker activity still counts here -- it's untouched,
-            // not resolved, and it's exactly what shows up in that Pending
-            // tab -- only an explicit "yes" (converted) or "no" (order
-            // lost) removes it from pipeline.
-            const isPendingRows = (rows) => {
-                const hasYes = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "yes");
-                const hasNo = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "no");
-                return !hasYes && !hasNo;
-            };
-
-            // Computes all 8 columns for one FOS person, given the full
-            // (already date-bounded) record set for a section and its
-            // tracker rows keyed by record id.
-            const computePersonMetrics = (name, records, trackerByRecordId) => {
-                const mine = records.filter(r => normalizeName(r._receiverName) === normalizeName(name) || matchesPersonName(r._receiverName, [name]));
-                let enquiries = 0, enquiryValue = 0, ordersConverted = 0, orderConvertedValue = 0;
-                let pipelineCount = 0, pipelineValue = 0;
-
-                mine.forEach(rec => {
-                    const trackerRows = trackerByRecordId.get(rec.id) || [];
-                    const isConverted = trackerRows.some(t => isYes(t.is_order_received_status));
-
-                    // Latest row that actually HAS a quotation value -- not
-                    // just the newest row overall. A later stage (e.g. Order
-                    // Expected) inserts its own tracker row without ever
-                    // touching quotation_value_without_tax, so picking the
-                    // literal newest row would silently zero this out even
-                    // though an earlier row already set it.
-                    let latestValueRow = null;
-                    trackerRows.forEach(t => {
-                        if (t.quotation_value_without_tax === null || t.quotation_value_without_tax === undefined) return;
-                        if (!latestValueRow || new Date(t.created_at) > new Date(latestValueRow.created_at)) latestValueRow = t;
-                    });
-                    const latestValue = latestValueRow ? parseMoney(latestValueRow.quotation_value_without_tax) : 0;
-
-                    if (inRange(rec.created_at)) {
-                        enquiries++;
-                        enquiryValue += latestValue;
-                        if (isConverted) {
-                            ordersConverted++;
-                            orderConvertedValue += latestValue;
-                        }
-                    }
-                    if (inPipelineWindow(rec.created_at) && isPendingRows(trackerRows)) {
-                        pipelineCount++;
-                        pipelineValue += latestValue;
-                    }
-                });
-
-                return {
-                    name,
-                    enquiries, enquiryValue, ordersConverted, orderConvertedValue,
-                    avgTicket: ordersConverted > 0 ? orderConvertedValue / ordersConverted : 0,
-                    pipelineCount, pipelineValue,
-                };
-            };
-
-            // visitCounts is keyed by normalized (trim+upper) name; null
-            // means the sheet fetch failed, {} means it loaded but had no
-            // matching rows for anyone in-range -- both are handled by
-            // formatMetricValue's "visitCount" case ("--" vs a real 0/1/2/...
-            const withVisitCounts = (rows) => rows.map(r => {
-                const c = visitCounts ? visitCounts[normalizeName(r.name)] : null;
-                return {
-                    ...r,
-                    newF2FVisits: visitCounts ? (c?.newF2F ?? 0) : null,
-                    existingF2FVisits: visitCounts ? (c?.existingF2F ?? 0) : null,
-                };
-            });
-
-            // ---- Leads section ----
-            // lto_leads has no enquiry_assign_to_person column of its own --
-            // that field only lives on lto_call_tracker_for_leads, set once
-            // a call is logged with "Enquiry Received = yes" (same
-            // attribution path the Calling Data tab uses). Fetched unbounded
-            // since a lead created this week could be assigned at any point
-            // up to now; most recent assignment wins if more than one exists.
-            const [{ data: allLeads, error: leadsErr }, { data: allLeadTrackers, error: leadTrackersErr }, { data: allLeadCalls, error: leadCallsErr }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_leads").select("id, created_at")
-                    .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
-                fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, created_at, is_order_received_status, quotation_value_without_tax")
-                    .gte("created_at", fetchStartISO)),
-                fetchAllRows(() => supabase.from("lto_call_tracker_for_leads").select("lead_id, enquiry_assign_to_person, created_at")),
-            ]);
-            if (leadsErr) throw leadsErr;
-            if (leadTrackersErr) throw leadTrackersErr;
-            if (leadCallsErr) throw leadCallsErr;
-
-            const personByLeadId = new Map();
-            (allLeadCalls || []).forEach(c => {
-                if (!c.lead_id || !c.enquiry_assign_to_person) return;
-                const existing = personByLeadId.get(c.lead_id);
-                if (!existing || new Date(c.created_at) > new Date(existing.at)) {
-                    personByLeadId.set(c.lead_id, { person: c.enquiry_assign_to_person, at: c.created_at });
-                }
-            });
-
-            const leadTrackerByLeadId = new Map();
-            (allLeadTrackers || []).forEach(t => {
-                if (!t.lead_id) return;
-                if (!leadTrackerByLeadId.has(t.lead_id)) leadTrackerByLeadId.set(t.lead_id, []);
-                leadTrackerByLeadId.get(t.lead_id).push(t);
-            });
-            const leadRecords = (allLeads || []).map(l => ({ ...l, _receiverName: personByLeadId.get(l.id)?.person || null }));
-            const leadsRows = fosPersons.map(name => computePersonMetrics(name, leadRecords, leadTrackerByLeadId));
-
-            // ---- Enquiries section ----
-            const [{ data: allEnquiries, error: enqErr }, { data: allEnquiryTrackers, error: enqTrackersErr }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_assign_to_person, created_at")
-                    .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
-                fetchAllRows(() => supabase.from("lto_enquiry_tracker").select("enquiry_id, created_at, is_order_received_status, quotation_value_without_tax")
-                    .gte("created_at", fetchStartISO)),
+            const [
+                visitRes,
+                { data: allEnquiries, error: enqErr },
+                { data: makeQuotationRows, error: mqErr },
+                { data: orderRows, error: ordErr },
+                { data: openRows, error: openErr },
+            ] = await Promise.all([
+                // Visits: field_sales_form has RLS with no anon SELECT, so
+                // counts come from a SECURITY DEFINER RPC (see
+                // Database/11_fos_visit_counts_rpc.sql).
+                supabase.rpc("fos_visit_counts", { p_start: rangeStartISO, p_end: rangeEndISO }),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_receiver_name, created_at")),
+                // Quotations created (make-quotation stage) in range.
+                fetchAllRows(() => inRangeTracker(supabase.from("lto_enquiry_tracker")
+                    .select("enquiry_id, quotation_number, quotation_value_without_tax, created_at")
+                    .eq("current_stage", "make-quotation"))),
+                // Orders marked received in range.
+                fetchAllRows(() => inRangeTracker(supabase.from("lto_enquiry_tracker")
+                    .select("enquiry_id, created_at, quotation_number")
+                    .eq("is_order_received_status", "yes"))),
+                // Pipeline candidates: tracker rows in range with no order status yet.
+                fetchAllRows(() => inRangeTracker(supabase.from("lto_enquiry_tracker")
+                    .select("enquiry_id")
+                    .is("is_order_received_status", null))),
             ]);
             if (enqErr) throw enqErr;
-            if (enqTrackersErr) throw enqTrackersErr;
+            if (mqErr) throw mqErr;
+            if (ordErr) throw ordErr;
+            if (openErr) throw openErr;
 
-            const enquiryTrackerByEnquiryId = new Map();
-            (allEnquiryTrackers || []).forEach(t => {
-                if (!t.enquiry_id) return;
-                if (!enquiryTrackerByEnquiryId.has(t.enquiry_id)) enquiryTrackerByEnquiryId.set(t.enquiry_id, []);
-                enquiryTrackerByEnquiryId.get(t.enquiry_id).push(t);
+            // ---- Person rows: sales_person_name values with a visit in range ----
+            const visitRows = visitRes.error ? [] : (visitRes.data || []);
+            if (visitRes.error) {
+                console.error("FOS visit-count RPC error:", visitRes.error);
+                if (requestId === fosRequestIdRef.current) {
+                    setFosVisitError(visitRes.error.message || "Failed to load visit counts.");
+                }
+            }
+            const stats = new Map();
+            visitRows.forEach(v => {
+                const name = normalizeName(v.person_name);
+                if (!name) return;
+                if (!stats.has(name)) {
+                    stats.set(name, {
+                        name,
+                        newF2FVisits: 0, existingF2FVisits: 0, mdoF2FVisits: 0,
+                        enquiries: 0, quotationValue: 0, ordersConverted: 0, orderConvertedValue: 0,
+                        avgTicket: 0, pipelineCount: 0, pipelineValue: 0,
+                    });
+                }
+                const bucket = normalizeVisitType(v.visit_type);
+                if (bucket) stats.get(name)[bucket] += Number(v.visit_count) || 0;
             });
-            const enquiryRecords = (allEnquiries || []).map(e => ({ ...e, _receiverName: e.enquiry_assign_to_person }));
-            const enquiriesRows = fosPersons.map(name => computePersonMetrics(name, enquiryRecords, enquiryTrackerByEnquiryId));
+            const personNames = [...stats.keys()];
 
-            const visitCounts = await visitCountsPromise;
+            // Enquiry receiver name -> visit person (exact normalized match,
+            // else the same loose first-name/full-name match used elsewhere).
+            const personCache = new Map();
+            const resolvePerson = (receiver) => {
+                const key = normalizeName(receiver);
+                if (!key) return null;
+                if (personCache.has(key)) return personCache.get(key);
+                const match = stats.has(key) ? key : (personNames.find(p => matchesPersonName(receiver, [p])) || null);
+                personCache.set(key, match);
+                return match;
+            };
+            const receiverByEnquiryId = new Map();
+            (allEnquiries || []).forEach(e => receiverByEnquiryId.set(e.id, e.enquiry_receiver_name));
+            const personOfEnquiry = (enquiryId) => resolvePerson(receiverByEnquiryId.get(enquiryId));
+
+            // Total Enquiries: enquiries created in range, by receiver name.
+            (allEnquiries || []).forEach(e => {
+                if (!inRange(e.created_at)) return;
+                const person = resolvePerson(e.enquiry_receiver_name);
+                if (person) stats.get(person).enquiries++;
+            });
+
+            // Total Quotation Value: one quotation per family (latest
+            // revision) made in range -- same rule as the Calling Data tab.
+            latestQuotationPerFamily(makeQuotationRows, "enquiry_id").forEach(q => {
+                const person = personOfEnquiry(q.enquiry_id);
+                if (person) stats.get(person).quotationValue += parseMoney(q.quotation_value_without_tax);
+            });
+
+            // Order Converted + Converted Order Value: orders received in
+            // range, one per enquiry, valued at the exact revision ordered.
+            const orderValueByQuotationNo = await fetchOrderQuotationValues("lto_enquiry_tracker", orderRows);
+            const orderedEnquiryIds = new Set();
+            (orderRows || []).forEach(row => {
+                if (!row.enquiry_id || orderedEnquiryIds.has(row.enquiry_id)) return;
+                orderedEnquiryIds.add(row.enquiry_id);
+                const person = personOfEnquiry(row.enquiry_id);
+                if (!person) return;
+                stats.get(person).ordersConverted++;
+                stats.get(person).orderConvertedValue += orderValueByQuotationNo.get(String(row.quotation_number || "").trim()) || 0;
+            });
+
+            // Pipeline: enquiries with a tracker row in range that has no
+            // order status, and that never reached yes/no/hold on ANY tracker
+            // row (so an enquiry that has since converted, been lost or been
+            // put on hold drops out). Pipeline Value = their make-quotation values (latest
+            // revision per quotation family).
+            const candidateIds = [...new Set((openRows || []).map(r => r.enquiry_id).filter(Boolean))];
+            const pipelineQuotationRows = [];
+            for (let i = 0; i < candidateIds.length; i += 100) {
+                const idChunk = candidateIds.slice(i, i + 100);
+                const { data: rows, error: rowsErr } = await fetchAllRows(() =>
+                    supabase.from("lto_enquiry_tracker")
+                        .select("enquiry_id, current_stage, quotation_number, quotation_value_without_tax, is_order_received_status")
+                        .in("enquiry_id", idChunk)
+                );
+                if (rowsErr) throw rowsErr;
+                const resolved = new Set();
+                (rows || []).forEach(r => {
+                    const status = String(r.is_order_received_status || "").trim().toLowerCase();
+                    if (status === "yes" || status === "no" || status === "hold") resolved.add(r.enquiry_id);
+                });
+                idChunk.forEach(id => {
+                    if (resolved.has(id)) return;
+                    const person = personOfEnquiry(id);
+                    if (person) stats.get(person).pipelineCount++;
+                });
+                (rows || []).forEach(r => {
+                    if (!resolved.has(r.enquiry_id) && r.current_stage === "make-quotation") pipelineQuotationRows.push(r);
+                });
+            }
+            latestQuotationPerFamily(pipelineQuotationRows, "enquiry_id").forEach(q => {
+                const person = personOfEnquiry(q.enquiry_id);
+                if (person) stats.get(person).pipelineValue += parseMoney(q.quotation_value_without_tax);
+            });
+
+            const rows = [...stats.values()]
+                .map(r => ({ ...r, avgTicket: r.ordersConverted > 0 ? r.orderConvertedValue / r.ordersConverted : 0 }))
+                .sort((a, b) => a.name.localeCompare(b.name));
 
             // A newer call for this tab has since started (e.g. the date
             // filter changed again while this one was still fetching) --
             // discard this now-stale result rather than overwriting
             // whatever that newer call ends up committing.
             if (requestId !== fosRequestIdRef.current) return;
-
-            setFosTableData({ leads: withVisitCounts(leadsRows), enquiries: withVisitCounts(enquiriesRows) });
-
+            setFosTableData(rows);
         } catch (err) {
             console.error("FOS fetch error:", err);
             if (requestId === fosRequestIdRef.current) {
                 setFosError(err?.message || "Failed to load FOS report data.");
-                setFosTableData({ leads: [], enquiries: [] });
+                setFosTableData([]);
             }
         } finally {
             if (requestId === fosRequestIdRef.current) setIsLoading(false);
         }
-    }, [fosFilters, activeTab, fosPersons]);
+    }, [fosFilters.startDate, fosFilters.endDate, activeTab]);
+
+    // The Receiver dropdown only lists people present in the current rows, so
+    // drop a stale selection (e.g. after the date range changed) back to "all".
+    useEffect(() => {
+        if (fosFilters.receiverName !== "all" && fosTableData && !fosTableData.some(r => r.name === fosFilters.receiverName)) {
+            setFosFilters(prev => ({ ...prev, receiverName: "all" }));
+        }
+    }, [fosTableData, fosFilters.receiverName]);
 
     const normalizeCategory = (rawSalesType) => {
         const s = String(rawSalesType || "").trim().toUpperCase().replace(/[\s-]+/g, "_");
@@ -1827,8 +1645,7 @@ function Report() {
     useEffect(() => {
         fetchCallingPersons();
         fetchScPipelinePersons();
-        fetchFosPersons();
-    }, [fetchCallingPersons, fetchScPipelinePersons, fetchFosPersons]);
+    }, [fetchCallingPersons, fetchScPipelinePersons]);
 
 
     useEffect(() => {
@@ -1980,33 +1797,13 @@ function Report() {
                 {/* FOS REPORT TAB CONTENT */}
                 {activeTab === "fos" && (
                     <>
-                        <p className="text-sm text-muted-foreground mb-1 flex items-center gap-2">
+                        <p className="text-sm text-muted-foreground mb-3 flex items-center gap-2">
                             {fosFilters.startDate || fosFilters.endDate
-                                ? "Custom date range applies to every metric below, including Pipeline."
-                                : "This week (Monday through today) for Enquiries/Orders columns; Pipeline looks back 60 days at non-converted work."}
+                                ? "Custom date range applies to every metric below, visits included -- one row per person with a visit in the range."
+                                : "Last Monday through today applies to every metric below -- one row per person with a visit in that range."}
                             {!isAdmin() && " You're seeing only your own row."}
                             {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
                         </p>
-                        <p className="text-xs text-muted-foreground mb-3">
-                            New/Existing F2F Visits always cover last Monday through today, regardless of the date filter below.
-                        </p>
-
-                        {isAdmin() && (
-                            <div className="bg-card p-3.5 rounded-lg border mb-3">
-                                <label htmlFor="fos-receiver" className="block text-xs font-medium text-muted-foreground mb-1">Receiver Name</label>
-                                <select
-                                    id="fos-receiver"
-                                    className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none md:w-1/4"
-                                    value={fosFilters.receiverName}
-                                    onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
-                                >
-                                    <option value="all">All Receivers</option>
-                                    {fosPersons.map(name => (
-                                        <option key={name} value={name}>{name}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
 
                         <DateRangeFilterBar
                             startDate={fosFilters.startDate}
@@ -2014,8 +1811,25 @@ function Report() {
                             onStartDateChange={(v) => setFosFilters(prev => ({ ...prev, startDate: v }))}
                             onEndDateChange={(v) => setFosFilters(prev => ({ ...prev, endDate: v }))}
                             onReset={() => setFosFilters(prev => ({ ...prev, startDate: "", endDate: "" }))}
-                            defaultRangeLabel="Showing this week + rolling 60-day pipeline"
-                        />
+                            defaultRangeLabel="Showing last Monday through today"
+                        >
+                            {isAdmin() && (
+                                <div className="w-full md:w-1/4">
+                                    <label htmlFor="fos-receiver" className="block text-xs font-medium text-muted-foreground mb-1">Receiver Name</label>
+                                    <select
+                                        id="fos-receiver"
+                                        className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                                        value={fosFilters.receiverName}
+                                        onChange={(e) => setFosFilters(prev => ({ ...prev, receiverName: e.target.value }))}
+                                    >
+                                        <option value="all">All Receivers</option>
+                                        {(fosTableData || []).map(row => (
+                                            <option key={row.name} value={row.name}>{row.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                        </DateRangeFilterBar>
 
                         {fosError && (
                             <div className="mb-5 px-4 py-3 rounded-md bg-destructive/10 border border-destructive/30 text-sm text-destructive" role="alert">
@@ -2025,19 +1839,16 @@ function Report() {
 
                         {fosVisitError && (
                             <div className="mb-5 px-4 py-3 rounded-md bg-destructive/10 border border-destructive/30 text-sm text-destructive" role="alert">
-                                Couldn't load Total Visit count from the sheet: {fosVisitError}
+                                Couldn't load visit counts: {fosVisitError}
                             </div>
                         )}
 
-                        {(() => {
-                            const visibleNames = getScFilterList(fosFilters.receiverName);
-                            return (
-                                <>
-                                    <FosMetricsTable title="Leads" rows={fosTableData.leads} visibleNames={visibleNames} isLoading={isLoading} />
-                                    <FosMetricsTable title="Enquiries" rows={fosTableData.enquiries} visibleNames={visibleNames} isLoading={isLoading} />
-                                </>
-                            );
-                        })()}
+                        <FosMetricsTable
+                            title="FOS Report"
+                            rows={fosTableData}
+                            visibleNames={getScFilterList(fosFilters.receiverName)}
+                            isLoading={isLoading}
+                        />
                     </>
                 )}
 
