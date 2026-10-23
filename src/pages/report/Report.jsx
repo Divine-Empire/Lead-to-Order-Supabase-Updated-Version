@@ -1281,7 +1281,10 @@ function Report() {
             if (ordErr) throw ordErr;
             if (openErr) throw openErr;
 
-            // ---- Person rows: sales_person_name values with a visit in range ----
+            // ---- Person rows: union of everyone with a visit in range
+            // (sales_person_name) and every receiver of an enquiry created in
+            // range (enquiry_receiver_name) -- so a person with visits but no
+            // enquiries, or enquiries but no visits, both still get a row. ----
             const visitRows = visitRes.error ? [] : (visitRes.data || []);
             if (visitRes.error) {
                 console.error("FOS visit-count RPC error:", visitRes.error);
@@ -1290,9 +1293,7 @@ function Report() {
                 }
             }
             const stats = new Map();
-            visitRows.forEach(v => {
-                const name = normalizeName(v.person_name);
-                if (!name) return;
+            const ensurePerson = (name) => {
                 if (!stats.has(name)) {
                     stats.set(name, {
                         name,
@@ -1301,19 +1302,34 @@ function Report() {
                         avgTicket: 0, pipelineCount: 0, pipelineValue: 0,
                     });
                 }
+                return stats.get(name);
+            };
+            visitRows.forEach(v => {
+                const name = normalizeName(v.person_name);
+                if (!name) return;
+                const row = ensurePerson(name);
                 const bucket = normalizeVisitType(v.visit_type);
-                if (bucket) stats.get(name)[bucket] += Number(v.visit_count) || 0;
+                if (bucket) row[bucket] += Number(v.visit_count) || 0;
             });
-            const personNames = [...stats.keys()];
+            const visitPersonNames = [...stats.keys()];
 
-            // Enquiry receiver name -> visit person (exact normalized match,
-            // else the same loose first-name/full-name match used elsewhere).
+            // Enquiry receiver name -> person row. Matches a visit person
+            // first (exact normalized name, else the loose first-name/
+            // full-name match used elsewhere, e.g. "Aman" vs "AMAN JHA").
+            // Only a receiver of an enquiry CREATED in range (the Total
+            // Enquiries loop below, which runs first, passes create=true)
+            // may add a new row; quotations/orders/pipeline for anyone else
+            // are attributed only if that person already has a row.
             const personCache = new Map();
-            const resolvePerson = (receiver) => {
+            const resolvePerson = (receiver, create = false) => {
                 const key = normalizeName(receiver);
                 if (!key) return null;
                 if (personCache.has(key)) return personCache.get(key);
-                const match = stats.has(key) ? key : (personNames.find(p => matchesPersonName(receiver, [p])) || null);
+                let match = null;
+                if (visitPersonNames.includes(key)) match = key;
+                else match = visitPersonNames.find(p => matchesPersonName(receiver, [p])) || (stats.has(key) || create ? key : null);
+                if (!match) return null;
+                ensurePerson(match);
                 personCache.set(key, match);
                 return match;
             };
@@ -1324,7 +1340,7 @@ function Report() {
             // Total Enquiries: enquiries created in range, by receiver name.
             (allEnquiries || []).forEach(e => {
                 if (!inRange(e.created_at)) return;
-                const person = resolvePerson(e.enquiry_receiver_name);
+                const person = resolvePerson(e.enquiry_receiver_name, true);
                 if (person) stats.get(person).enquiries++;
             });
 
@@ -1822,8 +1838,8 @@ function Report() {
                     <>
                         <p className="text-sm text-muted-foreground mb-3 flex items-center gap-2">
                             {fosFilters.startDate || fosFilters.endDate
-                                ? "Custom date range applies to every metric below, visits included -- one row per person with a visit in the range."
-                                : "Last Monday through today applies to every metric below -- one row per person with a visit in that range."}
+                                ? "Custom date range applies to every metric below, visits included -- one row per person with a visit or a new enquiry in the range."
+                                : "Last Monday through today applies to every metric below -- one row per person with a visit or a new enquiry in that range."}
                             {!isAdmin() && " You're seeing only your own row."}
                             {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
                         </p>
