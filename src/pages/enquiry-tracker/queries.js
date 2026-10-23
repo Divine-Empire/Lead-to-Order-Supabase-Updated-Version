@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import supabase from "../../utils/supabase";
 import { mergeRowsChronologically } from "../../utils/mergeTrackerRows";
 import { tokenizeLoose, buildPgLooseToken } from "../../utils/looseSearch";
+import { fetchAllRows } from "../../utils/fetchAllRows";
 
 // Local YYYY-MM-DD, NOT `date.toISOString().split("T")[0]` -- toISOString()
 // converts to UTC first, so in any timezone ahead of UTC (IST, +5:30) local
@@ -245,11 +246,22 @@ async function attachBillingAddress(rows) {
   }));
 }
 
+// Item filter helpers. The views expose item_qty, one text per record built
+// as "ITEM A : 2, ITEM B : 1" (see enquiry_history_view / enquiry_pending_view),
+// (case-sensitive LIKE: "Freight" and "FREIGHT" are different dropdown options)
+// so "record has item X" means the list starts with "X : " or contains
+// ", X : " -- anchoring both ends stops "GEAR OIL" from also matching
+// "GEAR OIL 90NO : 2", and "LEVEL" from matching "AUTOMATIC LEVEL : 1". The chosen name is
+// LIKE-escaped (names contain % and _), then double-quoted for PostgREST's
+// or() syntax (names also contain commas, brackets and quotes).
+const escapeLike = (s) => String(s).replace(/[\\%_]/g, (c) => `\\${c}`);
+const quoteOrValue = (s) => `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
 // Applies the filters shared by both the pending and history views. Every
 // filter is a real WHERE clause against the view, not a client-side re-scan
 // of whatever rows happen to already be loaded -- this is what lets a
 // filter surface matches that haven't been paged into the UI yet.
-function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction }) {
+function applySharedFilters(query, { searchTerm, currentStageFilter, itemFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction }) {
   let q = query;
 
   if (searchTerm) {
@@ -267,6 +279,14 @@ function applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter
   }
   if (currentStageFilter && currentStageFilter.length > 0) {
     q = q.in("current_stage", currentStageFilter);
+  }
+  if (itemFilter && itemFilter.length > 0) {
+    // Several selected items = any of them (OR). A second .or() on the same
+    // query (e.g. the calling-days one) is ANDed with this one.
+    q = q.or(itemFilter.flatMap((name) => [
+      `item_qty.like.${quoteOrValue(`${escapeLike(name)} : *`)}`,   // first item in the list
+      `item_qty.like.${quoteOrValue(`*, ${escapeLike(name)} : *`)}`, // any later item
+    ]).join(","));
   }
   if (valueFilter === "gte100000") {
     q = q.gte("quotation_value_without_tax", 100000);
@@ -324,6 +344,7 @@ export function usePendingEnquiries({
   itemsPerPage,
   searchTerm,
   currentStageFilter,
+  itemFilter,
   valueFilter,
   callingDaysFilter,
   scNameFilter,
@@ -340,6 +361,7 @@ export function usePendingEnquiries({
       itemsPerPage,
       searchTerm,
       currentStageFilter,
+      itemFilter,
       valueFilter,
       callingDaysFilter,
       scNameFilter,
@@ -360,7 +382,7 @@ export function usePendingEnquiries({
         .order("created_at", { ascending: false })
         .range(from, to);
 
-      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+      query = applySharedFilters(query, { searchTerm, currentStageFilter, itemFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
       query = applyPendingCallingDaysFilter(query, callingDaysFilter);
 
       const { data, error, count } = await query;
@@ -380,6 +402,7 @@ export function useHistoryEnquiries({
   itemsPerPage,
   searchTerm,
   currentStageFilter,
+  itemFilter,
   valueFilter,
   callingDaysFilter,
   scNameFilter,
@@ -396,6 +419,7 @@ export function useHistoryEnquiries({
       itemsPerPage,
       searchTerm,
       currentStageFilter,
+      itemFilter,
       valueFilter,
       callingDaysFilter,
       scNameFilter,
@@ -413,7 +437,7 @@ export function useHistoryEnquiries({
         .order("created_at", { ascending: false })
         .range(from, to);
 
-      query = applySharedFilters(query, { searchTerm, currentStageFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+      query = applySharedFilters(query, { searchTerm, currentStageFilter, itemFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
       query = applyHistoryCallingDaysFilter(query, callingDaysFilter);
 
       const { data, error, count } = await query;
@@ -433,6 +457,32 @@ export function useHistoryEnquiries({
     },
     enabled,
     placeholderData: (prev) => prev,
+  });
+}
+
+// Options for the Item filter: every distinct item name actually used on an
+// enquiry or lead (NOT the lto_items master -- ~580 used names, e.g. renamed
+// or one-off items, are not in it). Reads the small lto_item_name_options
+// view (Database/12_item_name_options_view.sql); if that migration hasn't
+// been run yet, falls back to de-duplicating the item tables client-side.
+export function useItemNameOptions() {
+  return useQuery({
+    queryKey: ["enquiryTracker", "itemNameOptions"],
+    staleTime: 30 * 60 * 1000,
+    queryFn: async () => {
+      let names = null;
+      const viaView = await fetchAllRows(() => supabase.from("lto_item_name_options").select("item_name"));
+      if (!viaView.error) {
+        names = (viaView.data || []).map((r) => r.item_name);
+      } else {
+        const [enq, lead] = await Promise.all([
+          fetchAllRows(() => supabase.from("lto_enquiry_items").select("item_name")),
+          fetchAllRows(() => supabase.from("lto_lead_items").select("item_name")),
+        ]);
+        names = [...(enq.data || []), ...(lead.data || [])].map((r) => r.item_name);
+      }
+      return Array.from(new Set(names.filter((n) => n && String(n).trim()))).sort((a, b) => a.localeCompare(b));
+    },
   });
 }
 

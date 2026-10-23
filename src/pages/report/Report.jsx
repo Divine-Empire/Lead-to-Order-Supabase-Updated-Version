@@ -12,6 +12,7 @@ import { Download, FileText, Search, ChevronLeft, ChevronRight, Calendar, Rotate
 const REPORT_PERSON_CATEGORY = {
     CALLING: "report_person_calling",
     SC_PIPELINE: "report_person_sc_pipeline",
+    FOS: "report_person_fos",
 };
 
 const formatMetricValue = (value, format) => {
@@ -853,6 +854,9 @@ function Report() {
         endDate: "",
     });
     const [fosDraftDates, setFosDraftDates] = useState({ startDate: "", endDate: "" });
+    // Static FOS responsible-person list -- curated on Master > Report Persons
+    // (lto_dropdown, category "report_person_fos"). null = not loaded yet.
+    const [fosPersons, setFosPersons] = useState(null);
     const fosDraftChanged = fosDraftDates.startDate !== fosFilters.startDate || fosDraftDates.endDate !== fosFilters.endDate;
     const fosDraftInvalid = !!(fosDraftDates.startDate && fosDraftDates.endDate && fosDraftDates.startDate > fosDraftDates.endDate);
 
@@ -1228,13 +1232,32 @@ function Report() {
         }
     }, [activeTab, isAdmin, getUsernamesToFilter, callingPersons, callingFilters]);
 
-    // FOS Report -- one row per sales person who has at least one
-    // field_sales_form visit in the selected range (so the Person rows and the
-    // Receiver dropdown are always exactly the people with data in view).
-    // Default range is last Monday through today; a Start/End date filter
-    // replaces it and applies to every metric, visits included.
+    // Master FOS responsible-person list -- see fosPersons above.
+    const fetchFosPersons = useCallback(async () => {
+        try {
+            const { data, error } = await fetchAllRows(() =>
+                supabase.from("lto_dropdown").select("value").eq("category", REPORT_PERSON_CATEGORY.FOS)
+            );
+            if (error) throw error;
+
+            const names = new Set();
+            (data || []).forEach(r => { if (r.value && r.value.trim()) names.add(r.value.trim()); });
+            setFosPersons([...names].sort());
+        } catch (error) {
+            console.error("Error fetching FOS persons:", error);
+            setFosPersons([]);
+        }
+    }, []);
+
+    // FOS Report -- one row per responsible person in the static master list
+    // (fosPersons), always shown even with zero activity. Visits are matched
+    // by sales_person_name, enquiry-side metrics by enquiry_receiver_name;
+    // anyone not on the list is not shown. Default range is last Monday
+    // through today; a Start/End date filter replaces it and applies to every
+    // metric, visits included.
     const fetchFosMetrics = useCallback(async () => {
-        if (activeTab !== "fos") return;
+        // Wait for the master list so the first load isn't fetched twice.
+        if (activeTab !== "fos" || !fosPersons) return;
         const requestId = ++fosRequestIdRef.current;
         setIsLoading(true);
         setFosError(null);
@@ -1281,10 +1304,7 @@ function Report() {
             if (ordErr) throw ordErr;
             if (openErr) throw openErr;
 
-            // ---- Person rows: union of everyone with a visit in range
-            // (sales_person_name) and every receiver of an enquiry created in
-            // range (enquiry_receiver_name) -- so a person with visits but no
-            // enquiries, or enquiries but no visits, both still get a row. ----
+            // ---- Person rows: the static master list ----
             const visitRows = visitRes.error ? [] : (visitRes.data || []);
             if (visitRes.error) {
                 console.error("FOS visit-count RPC error:", visitRes.error);
@@ -1293,46 +1313,36 @@ function Report() {
                 }
             }
             const stats = new Map();
-            const ensurePerson = (name) => {
-                if (!stats.has(name)) {
-                    stats.set(name, {
-                        name,
-                        newF2FVisits: 0, existingF2FVisits: 0, mdoF2FVisits: 0,
-                        enquiries: 0, quotationValue: 0, ordersConverted: 0, orderConvertedValue: 0,
-                        avgTicket: 0, pipelineCount: 0, pipelineValue: 0,
-                    });
-                }
-                return stats.get(name);
-            };
-            visitRows.forEach(v => {
-                const name = normalizeName(v.person_name);
-                if (!name) return;
-                const row = ensurePerson(name);
-                const bucket = normalizeVisitType(v.visit_type);
-                if (bucket) row[bucket] += Number(v.visit_count) || 0;
+            fosPersons.forEach(name => {
+                const key = normalizeName(name);
+                if (!key || stats.has(key)) return;
+                stats.set(key, {
+                    name,
+                    newF2FVisits: 0, existingF2FVisits: 0, mdoF2FVisits: 0,
+                    enquiries: 0, quotationValue: 0, ordersConverted: 0, orderConvertedValue: 0,
+                    avgTicket: 0, pipelineCount: 0, pipelineValue: 0,
+                });
             });
-            const visitPersonNames = [...stats.keys()];
+            const personKeys = [...stats.keys()];
 
-            // Enquiry receiver name -> person row. Matches a visit person
-            // first (exact normalized name, else the loose first-name/
-            // full-name match used elsewhere, e.g. "Aman" vs "AMAN JHA").
-            // Only a receiver of an enquiry CREATED in range (the Total
-            // Enquiries loop below, which runs first, passes create=true)
-            // may add a new row; quotations/orders/pipeline for anyone else
-            // are attributed only if that person already has a row.
+            // A name from the data (visit sales_person_name or enquiry
+            // receiver) -> master-list row: exact normalized match, else the
+            // loose first-name/full-name match used elsewhere (e.g. "Aman"
+            // vs "AMAN JHA"). Names not on the list resolve to null.
             const personCache = new Map();
-            const resolvePerson = (receiver, create = false) => {
-                const key = normalizeName(receiver);
+            const resolvePerson = (rawName) => {
+                const key = normalizeName(rawName);
                 if (!key) return null;
                 if (personCache.has(key)) return personCache.get(key);
-                let match = null;
-                if (visitPersonNames.includes(key)) match = key;
-                else match = visitPersonNames.find(p => matchesPersonName(receiver, [p])) || (stats.has(key) || create ? key : null);
-                if (!match) return null;
-                ensurePerson(match);
+                const match = stats.has(key) ? key : (personKeys.find(p => matchesPersonName(rawName, [p])) || null);
                 personCache.set(key, match);
                 return match;
             };
+            visitRows.forEach(v => {
+                const person = resolvePerson(v.person_name);
+                const bucket = normalizeVisitType(v.visit_type);
+                if (person && bucket) stats.get(person)[bucket] += Number(v.visit_count) || 0;
+            });
             const receiverByEnquiryId = new Map();
             (allEnquiries || []).forEach(e => receiverByEnquiryId.set(e.id, e.enquiry_receiver_name));
             const personOfEnquiry = (enquiryId) => resolvePerson(receiverByEnquiryId.get(enquiryId));
@@ -1340,7 +1350,7 @@ function Report() {
             // Total Enquiries: enquiries created in range, by receiver name.
             (allEnquiries || []).forEach(e => {
                 if (!inRange(e.created_at)) return;
-                const person = resolvePerson(e.enquiry_receiver_name, true);
+                const person = resolvePerson(e.enquiry_receiver_name);
                 if (person) stats.get(person).enquiries++;
             });
 
@@ -1417,7 +1427,7 @@ function Report() {
         } finally {
             if (requestId === fosRequestIdRef.current) setIsLoading(false);
         }
-    }, [fosFilters.startDate, fosFilters.endDate, activeTab]);
+    }, [fosFilters.startDate, fosFilters.endDate, activeTab, fosPersons]);
 
     // The Receiver dropdown only lists people present in the current rows, so
     // drop a stale selection (e.g. after the date range changed) back to "all".
@@ -1684,7 +1694,8 @@ function Report() {
     useEffect(() => {
         fetchCallingPersons();
         fetchScPipelinePersons();
-    }, [fetchCallingPersons, fetchScPipelinePersons]);
+        fetchFosPersons();
+    }, [fetchCallingPersons, fetchScPipelinePersons, fetchFosPersons]);
 
 
     useEffect(() => {
@@ -1838,8 +1849,8 @@ function Report() {
                     <>
                         <p className="text-sm text-muted-foreground mb-3 flex items-center gap-2">
                             {fosFilters.startDate || fosFilters.endDate
-                                ? "Custom date range applies to every metric below, visits included -- one row per person with a visit or a new enquiry in the range."
-                                : "Last Monday through today applies to every metric below -- one row per person with a visit or a new enquiry in that range."}
+                                ? "Custom date range applies to every metric below, visits included -- one row per responsible person."
+                                : "Last Monday through today applies to every metric below -- one row per responsible person."}
                             {!isAdmin() && " You're seeing only your own row."}
                             {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
                         </p>

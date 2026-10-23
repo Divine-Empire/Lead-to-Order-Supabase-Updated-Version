@@ -16,6 +16,7 @@ const EnquiryTrackerFilter = ({
   callingDaysFilter, setCallingDaysFilter,
   valueFilter, setValueFilter,
   currentStageFilter, setCurrentStageFilter,
+  itemFilter = [], setItemFilter = () => {}, itemOptions = [],
   filterCounts,
   showColumnDropdown, setShowColumnDropdown,
   visibleColumns, handleSelectAll, handleColumnToggle, columnOptions,
@@ -47,6 +48,9 @@ const EnquiryTrackerFilter = ({
     ? currentStageOptions.map(l => ({ value: l, label: l, count: activeData.filter(d => d.currentStage === l).length }))
     : Array.from(new Set(activeData.map(c => c.currentStage).filter(Boolean))).map(l => ({ value: l, label: l, count: activeData.filter(d => d.currentStage === l).length }));
 
+  // Item names actually used on enquiries/leads (see useItemNameOptions).
+  const itemDropdownOptions = itemOptions.map(n => ({ value: n, label: n }));
+
   const valueLabel = VALUE_OPTIONS.find(o => o.value === valueFilter)?.label;
 
   const chips = [
@@ -54,9 +58,10 @@ const EnquiryTrackerFilter = ({
     ...chipsForValues("Calling days", callingDaysFilter, callingDaysOptions, setCallingDaysFilter),
     ...(valueFilter ? [{ key: "value", label: valueLabel || valueFilter, onRemove: () => setValueFilter("") }] : []),
     ...chipsForValues("Stage", currentStageFilter, stageOptions, setCurrentStageFilter),
+    ...chipsForValues("Item", itemFilter, itemDropdownOptions, setItemFilter),
   ];
 
-  const clearAll = () => { setCallingDaysFilter([]); setValueFilter(""); setCurrentStageFilter([]); setSearchTerm(""); };
+  const clearAll = () => { setCallingDaysFilter([]); setValueFilter(""); setCurrentStageFilter([]); setItemFilter([]); setSearchTerm(""); };
 
   return (
     <div className="mb-3 flex w-full shrink-0 flex-col gap-2">
@@ -107,6 +112,17 @@ const EnquiryTrackerFilter = ({
             value={currentStageFilter}
             onChange={setCurrentStageFilter}
             placeholder="Current Stage"
+            className="dropdown-container"
+          />
+        </div>
+
+        <div className="z-[30] min-w-[150px] flex-1 sm:max-w-[240px]">
+          <SearchableDropdown
+            isMulti={true}
+            options={itemDropdownOptions}
+            value={itemFilter}
+            onChange={setItemFilter}
+            placeholder="Item"
             className="dropdown-container"
           />
         </div>

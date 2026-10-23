@@ -7,14 +7,13 @@ import MasterDialog from "../../components/MasterDialog";
 
 // Reuses the existing `lto_dropdown` table (category/value pairs) rather
 // than a dedicated table -- see the Report Persons master page notes.
-// Each of these report tabs gets its own category; a person who should show
-// up on both tabs gets one row per category (same value, different
-// category), so a name can be added/removed per tab independently. (The FOS
-// Report tab has no category here -- its people come from field_sales_form
-// visits in the selected range.)
+// Each of the 3 report tabs gets its own category; a person who should show
+// up on all three tabs gets one row per category (same value, different
+// category), so a name can be added/removed per tab independently.
 const TAB_TYPES = [
   { key: "report_person_calling", label: "Calling Data (Person)" },
   { key: "report_person_sc_pipeline", label: "SC Pipeline" },
+  { key: "report_person_fos", label: "FOS Report" },
 ];
 const TAB_KEYS = TAB_TYPES.map((t) => t.key);
 
@@ -207,7 +206,7 @@ const ReportPersons = () => {
         <div>
           <h2 className="text-base font-semibold text-foreground">Report Persons</h2>
           <p className="mt-0.5 max-w-3xl text-sm text-muted-foreground">
-            Controls exactly who shows up as a row/column on the Reports page -- Calling Data and SC Pipeline each only show the people added here.
+            Controls exactly who shows up as a row/column on the Reports page -- Calling Data, SC Pipeline, and FOS Report each only show the people added here.
           </p>
         </div>
         <button

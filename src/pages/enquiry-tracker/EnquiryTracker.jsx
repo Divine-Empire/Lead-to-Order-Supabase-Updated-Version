@@ -24,7 +24,7 @@ import useDialogBehavior from "../../components/useDialogBehavior";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import MakeQuotationForm from "../../components/enquiry-tracker/MakeQuotationFrom";
 import { compressImageFile, validateFileSize } from "../../utils/imageCompression";
-import { usePendingEnquiries, useHistoryEnquiries, CURRENT_STAGE_OPTIONS } from "./queries";
+import { usePendingEnquiries, useHistoryEnquiries, useItemNameOptions, CURRENT_STAGE_OPTIONS } from "./queries";
 
 const columnsConfig = [
   { key: "timestamp", label: "Timestamp" },
@@ -254,6 +254,9 @@ function EnquiryTracker() {
   // Value filter over "Quotation Value Without Tax": "" (all) | "gte100000" | "lt100000"
   const [valueFilter, setValueFilter] = useState("");
   const [currentStageFilter, setCurrentStageFilter] = useState([]);
+  // Item filter: selected item names (any-of); matched against the views'
+  // item_qty column server-side -- see applySharedFilters in queries.js.
+  const [itemFilter, setItemFilter] = useState([]);
   const [scNameFilter] = useState("all");
 
 
@@ -1705,11 +1708,14 @@ const handleSaveClick = async () => {
   // over usernamesToFilter inside applySharedFilters (queries.js).
   const leadSourceRestriction = isAdmin() ? [] : getLeadSourcesToFilter();
 
+  const { data: itemNameOptions = [] } = useItemNameOptions();
+
   const pendingQuery = usePendingEnquiries({
     page: currentPage,
     itemsPerPage,
     searchTerm,
     currentStageFilter,
+    itemFilter,
     valueFilter,
     callingDaysFilter,
     scNameFilter,
@@ -1724,6 +1730,7 @@ const handleSaveClick = async () => {
     itemsPerPage,
     searchTerm,
     currentStageFilter,
+    itemFilter,
     valueFilter,
     callingDaysFilter,
     scNameFilter,
@@ -2242,7 +2249,7 @@ const handleSaveClick = async () => {
     setHasMorePending(true);
     setHasMoreHistory(true);
     setHasMoreDirectEnquiry(true);
-  }, [activeTab, searchTerm, callingDaysFilter, valueFilter, currentStageFilter]);
+  }, [activeTab, searchTerm, callingDaysFilter, valueFilter, currentStageFilter, itemFilter]);
 
   const fetchCallingDaysCounts = async () => {
     try {
@@ -2718,6 +2725,9 @@ const handleSaveClick = async () => {
         setValueFilter={setValueFilter}
         currentStageFilter={currentStageFilter}
         setCurrentStageFilter={setCurrentStageFilter}
+        itemFilter={itemFilter}
+        setItemFilter={setItemFilter}
+        itemOptions={itemNameOptions}
         filterCounts={filterCounts}
         showColumnDropdown={showColumnDropdown}
         setShowColumnDropdown={setShowColumnDropdown}
