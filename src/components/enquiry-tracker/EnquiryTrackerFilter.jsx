@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { SlidersHorizontal, X, Download, ChevronDown } from 'lucide-react';
+import { SlidersHorizontal, X, Download, ChevronDown, Loader2 } from 'lucide-react';
 import FilterTabs from "../FilterTabs";
 import SearchableDropdown from "../SearchableDropdown";
 import ColumnSelector from "../ColumnSelector";
@@ -10,8 +10,6 @@ const VALUE_OPTIONS = [
   { value: "gte100000", label: "Value greater than 1,00,000" },
   { value: "lt100000", label: "Value less than 1,00,000" },
 ];
-
-const EXPORT_LIMITS = [100, 200, 500, 1000, 2000];
 
 const EMPTY_DRAFT = { callingDays: [], value: "", stage: [], item: [], copy: "" };
 
@@ -31,7 +29,7 @@ const EnquiryTrackerFilter = ({
   pendingCallTrackers = [],
   historyCallTrackers = [],
   currentStageOptions = null,
-  exportTotal = 0, onExport = () => {}, exporting = false,
+  exportTotal = 0, onExport = () => {}, exporting = false, exportLoaded = 0,
 }) => {
   const [filterOpen, setFilterOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -156,44 +154,18 @@ const EnquiryTrackerFilter = ({
             />
           )}
 
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setExportOpen((o) => !o)}
-              disabled={exporting}
-              aria-haspopup="true"
-              aria-expanded={exportOpen}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
-            >
-              <Download size={16} aria-hidden="true" />
-              {exporting ? "Exporting..." : "Export"}
-            </button>
-            {exportOpen && !exporting && (
-              <>
-                <div className="fixed inset-0 z-[90]" onClick={() => setExportOpen(false)} aria-hidden="true" />
-                <div className="absolute right-0 top-full z-[100] mt-1 w-64 rounded-md border bg-popover p-3 shadow-lg">
-                  <p className="text-sm font-semibold text-foreground">Export CSV</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Total matching records: <span className="font-semibold text-foreground">{exportTotal.toLocaleString("en-IN")}</span>.
-                    Exports the visible columns for the first N records.
-                  </p>
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    {EXPORT_LIMITS.map((n) => (
-                      <button
-                        key={n}
-                        type="button"
-                        disabled={exportTotal === 0}
-                        onClick={() => { setExportOpen(false); onExport(Math.min(n, exportTotal)); }}
-                        className="h-8 rounded-md border border-input text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
-                      >
-                        {n.toLocaleString("en-IN")}{n > exportTotal && exportTotal > 0 ? ` (all ${exportTotal})` : ""}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => setExportOpen(true)}
+            disabled={exporting || exportTotal === 0}
+            aria-busy={exporting}
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {exporting
+              ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+              : <Download size={16} aria-hidden="true" />}
+            {exporting ? `Exporting${exportLoaded ? ` ${exportLoaded.toLocaleString("en-IN")}/${exportTotal.toLocaleString("en-IN")}` : "..."}` : "Export"}
+          </button>
 
           {activeTab !== "history" && setShowNewCallTrackerForm && (
             <button
@@ -208,6 +180,37 @@ const EnquiryTrackerFilter = ({
       </div>
 
       <FilterChips chips={chips} onClearAll={clearAll} />
+
+      {exportOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4" onClick={() => setExportOpen(false)}>
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="Confirm export"
+            className="w-full max-w-sm rounded-xl bg-card p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-foreground">Export to CSV</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              <span className="font-semibold text-foreground">{exportTotal.toLocaleString("en-IN")}</span> records match the current
+              filters. The visible columns will be exported. Are you ready to export?
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setExportOpen(false)} className="h-9 rounded-md border border-input px-4 text-sm font-medium hover:bg-accent">
+                Cancel
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => { setExportOpen(false); onExport(); }}
+                className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Export
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {filterOpen && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4" onClick={() => setFilterOpen(false)}>

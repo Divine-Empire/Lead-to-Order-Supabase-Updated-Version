@@ -534,41 +534,51 @@ export const CURRENT_STAGE_OPTIONS = [
   "order-status",
 ];
 
-// Export: the first `limit` rows of the CURRENT tab + filters, in the same
-// order as the table (created_at desc), fetched in 1000-row batches
-// (PostgREST's per-request cap) and enriched exactly like the paged queries.
-// Returns raw view rows -- the caller maps them with its own row mappers.
+// Export: EVERY row of the CURRENT tab + filters, in the same order as the
+// table (created_at desc). Loaded in 1000-row batches (PostgREST's per-request
+// cap); each batch is enriched in 100-row chunks (keeps the .in() URLs short)
+// exactly like the paged queries. `onProgress(loadedSoFar)` fires after each
+// batch. Returns raw view rows -- the caller maps them with its own mappers.
 const EXPORT_BATCH = 1000;
 
-export async function fetchEnquiryExportRows(tab, { limit, searchTerm, currentStageFilter, itemFilter, quotationCopyFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction }) {
+export async function fetchEnquiryExportRows(tab, { onProgress, searchTerm, currentStageFilter, itemFilter, quotationCopyFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction }) {
   const isPending = tab === "pending";
+  const filters = { searchTerm, currentStageFilter, itemFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction };
   if (isPending && quotationCopyFilter === "blank") {
-    const blankRows = await fetchPendingWithoutCopy({ searchTerm, currentStageFilter, itemFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
-    return attachBillingAddress(blankRows.slice(0, limit));
+    const blankRows = await fetchPendingWithoutCopy({ ...filters, callingDaysFilter });
+    const withBilling = await attachBillingAddress(blankRows);
+    if (onProgress) onProgress(withBilling.length);
+    return withBilling;
   }
+
+  const enrich = async (chunk) => {
+    if (!isPending) return attachQuotationPdfsByExactNumber(chunk);
+    const merged = await attachMergedTrackerFields(chunk);
+    return attachBillingAddress(await attachLatestQuotations(merged));
+  };
+
   const all = [];
-  for (let from = 0; from < limit; from += EXPORT_BATCH) {
-    const to = Math.min(from + EXPORT_BATCH, limit) - 1;
+  for (let from = 0; ; from += EXPORT_BATCH) {
     let query = supabase
       .from(isPending ? "enquiry_pending_view" : "enquiry_history_view")
       .select("*")
       // record_id as a tie-breaker keeps batch boundaries stable.
       .order("created_at", { ascending: false })
       .order("record_id", { ascending: true })
-      .range(from, to);
-    query = applySharedFilters(query, { searchTerm, currentStageFilter, itemFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+      .range(from, from + EXPORT_BATCH - 1);
+    query = applySharedFilters(query, filters);
     query = isPending
       ? applyPendingCallingDaysFilter(query, callingDaysFilter)
       : applyHistoryCallingDaysFilter(query, callingDaysFilter);
     const { data, error } = await query;
     if (error) throw error;
-    all.push(...(data || []));
-    if (!data || data.length < to - from + 1) break;
+    const batch = data || [];
+
+    const chunks = [];
+    for (let i = 0; i < batch.length; i += ENRICH_CHUNK) chunks.push(batch.slice(i, i + ENRICH_CHUNK));
+    all.push(...(await Promise.all(chunks.map(enrich))).flat());
+    if (onProgress) onProgress(all.length);
+    if (batch.length < EXPORT_BATCH) break;
   }
-  if (isPending) {
-    const merged = await attachMergedTrackerFields(all);
-    const withQuotations = await attachLatestQuotations(merged);
-    return attachBillingAddress(withQuotations);
-  }
-  return attachQuotationPdfsByExactNumber(all);
+  return all;
 }

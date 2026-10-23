@@ -130,13 +130,11 @@ function DateRangeFilterBar({ startDate, endDate, onStartDateChange, onEndDateCh
 }
 
 const PIPELINE_METRIC_ROWS = [
-    { key: "enquiries", label: "Total Enquiries / Leads", format: "int" },
-    { key: "enquiryValue", label: "Enquiry Value", format: "currency" },
+    { key: "enquiries", label: "Total Enquiries", labelLeads: "Total Leads", format: "int" },
+    { key: "quotationValue", label: "Quotation Value", format: "currency" },
     { key: "pipelineValue", label: "Pipeline Value (60d)", format: "currency" },
-    { key: "noOrder", label: "No. of Orders", format: "int" },
-    { key: "billValue", label: "Bill Value", format: "currency" },
-    { key: "engConv", label: "Conversion %", format: "percent" },
-    { key: "valueConv", label: "Value Conversion %", format: "percent" },
+    { key: "ordersConverted", label: "Orders Converted", format: "int" },
+    { key: "orderConvertedValue", label: "Converted Order Value", format: "currency" },
     { key: "avgTicket", label: "Avg Ticket Size", format: "currency" },
 ];
 
@@ -146,6 +144,7 @@ const PIPELINE_METRIC_ROWS = [
 // since "TOTAL" is never a real SC name, this naturally hides team-total
 // columns from non-admins with no extra special-casing needed.
 function PipelineTable({ title, section, visibleLabels, isLoading }) {
+    const rowLabel = (row) => (title === "Leads" && row.labelLeads) || row.label;
     // Was previously a silent `return null` -- both "still loading" (this
     // fetch pages through ~35k tracker rows, so it's genuinely slow) and "the
     // fetch failed" looked identical to the user: a blank page. Now shows an
@@ -208,7 +207,7 @@ function PipelineTable({ title, section, visibleLabels, isLoading }) {
                                 ) : (
                                     PIPELINE_METRIC_ROWS.map(row => (
                                         <tr key={row.key} className="hover:bg-secondary/60">
-                                            <td className="px-4 py-2.5 text-sm font-medium text-foreground whitespace-nowrap sticky left-0 bg-card">{row.label}</td>
+                                            <td className="px-4 py-2.5 text-sm font-medium text-foreground whitespace-nowrap sticky left-0 bg-card">{rowLabel(row)}</td>
                                             {allColumns.map(c => {
                                                 const val = c.metrics[row.key];
                                                 return (
@@ -1468,9 +1467,7 @@ function Report() {
             // most metrics only need this week; custom mode needs exactly
             // the chosen range since both windows collapse onto it.
             const fetchStart = hasCustomRange ? rangeStart : defaultSixtyDaysAgo;
-            const fetchEnd = hasCustomRange ? rangeEnd : now;
             const fetchStartISO = fetchStart.toISOString();
-            const fetchEndISO = fetchEnd.toISOString();
 
             const inThisWeek = (d) => {
                 const dt = new Date(d);
@@ -1485,55 +1482,92 @@ function Report() {
 
             // Pipeline = genuinely PENDING work, same definition as the FOS
             // Report tab -- see the comment there. Zero tracker activity
-            // still counts as pending; only an explicit yes/no removes it.
+            // still counts as pending; only an explicit yes/no/hold removes it.
             const isPendingRows = (rows) => {
                 const hasYes = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "yes");
                 const hasNo = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "no");
-                return !hasYes && !hasNo;
+                const hasHold = rows.some(t => String(t.is_order_received_status || "").trim().toLowerCase() === "hold");
+                return !hasYes && !hasNo && !hasHold;
+            };
+
+            // Per-record facts for one section (leads or enquiries), then
+            // summed per SC column by computeGroupMetrics. Same definitions
+            // as the Calling Data / FOS tabs:
+            //  - Total Enquiries: records created in range.
+            //  - Quotation Value: latest revision of each quotation family
+            //    made (make-quotation tracker row) in range.
+            //  - Pipeline Value: records created in the pipeline window that
+            //    have no yes/no on any tracker row (neither converted nor
+            //    lost) -> latest revision per family of their make-quotation
+            //    rows.
+            //  - Orders Converted: records with an is_order_received_status
+            //    = yes tracker row in range; Converted Order Value = value of
+            //    the exact quotation revision that was ordered.
+            const buildRecordMetrics = async (records, trackerRows, idCol, trackerTable) => {
+                const trackersByRecord = new Map();
+                (trackerRows || []).forEach(t => {
+                    if (!t[idCol]) return;
+                    if (!trackersByRecord.has(t[idCol])) trackersByRecord.set(t[idCol], []);
+                    trackersByRecord.get(t[idCol]).push(t);
+                });
+
+                const facts = new Map();
+                records.forEach(rec => {
+                    facts.set(rec.id, { created: inThisWeek(rec.created_at), quotationValue: 0, pipelineValue: 0, ordered: false, orderValue: 0 });
+                });
+
+                // Quotation Value
+                const quotationsInRange = (trackerRows || []).filter(t => t.current_stage === "make-quotation" && inThisWeek(t.created_at));
+                latestQuotationPerFamily(quotationsInRange, idCol).forEach(q => {
+                    const f = facts.get(q[idCol]);
+                    if (f) f.quotationValue += parseMoney(q.quotation_value_without_tax);
+                });
+
+                // Orders Converted + Converted Order Value
+                const latestYesByRecord = new Map();
+                (trackerRows || []).forEach(t => {
+                    if (!t[idCol] || !isYes(t.is_order_received_status) || !inThisWeek(t.created_at)) return;
+                    const cur = latestYesByRecord.get(t[idCol]);
+                    if (!cur || new Date(t.created_at) > new Date(cur.created_at)) latestYesByRecord.set(t[idCol], t);
+                });
+                const orderValueByNo = await fetchOrderQuotationValues(trackerTable, [...latestYesByRecord.values()]);
+                latestYesByRecord.forEach((t, id) => {
+                    const f = facts.get(id);
+                    if (!f) return;
+                    f.ordered = true;
+                    f.orderValue = orderValueByNo.get(String(t.quotation_number || "").trim()) || 0;
+                });
+
+                // Pipeline Value
+                const pipelineQuotations = [];
+                records.forEach(rec => {
+                    if (!inLast60Days(rec.created_at)) return;
+                    const rows = trackersByRecord.get(rec.id) || [];
+                    if (!isPendingRows(rows)) return;
+                    rows.forEach(t => { if (t.current_stage === "make-quotation") pipelineQuotations.push(t); });
+                });
+                latestQuotationPerFamily(pipelineQuotations, idCol).forEach(q => {
+                    const f = facts.get(q[idCol]);
+                    if (f) f.pipelineValue += parseMoney(q.quotation_value_without_tax);
+                });
+                return facts;
             };
 
             // For one filtered slice of records (already scoped to a single
-            // SC+category, or a team-total group), compute all 8 metrics.
-            const computeGroupMetrics = (records, trackerByRecordId) => {
-                let enquiries = 0, enquiryValue = 0, pipelineValue = 0, noOrder = 0, billValue = 0;
-
+            // SC+category, or a team-total group), sum the per-record facts.
+            const computeGroupMetrics = (records, facts) => {
+                let enquiries = 0, quotationValue = 0, pipelineValue = 0, ordersConverted = 0, orderConvertedValue = 0;
                 records.forEach(rec => {
-                    const trackerRows = trackerByRecordId.get(rec.id) || [];
-
-                    // Latest row that actually HAS a quotation value -- see
-                    // the identical fix/comment in fetchFosMetrics above.
-                    let latestValueRow = null;
-                    trackerRows.forEach(t => {
-                        if (t.quotation_value_without_tax === null || t.quotation_value_without_tax === undefined) return;
-                        if (!latestValueRow || new Date(t.created_at) > new Date(latestValueRow.created_at)) latestValueRow = t;
-                    });
-                    const latestQuotationValue = latestValueRow ? parseMoney(latestValueRow.quotation_value_without_tax) : 0;
-
-                    if (inThisWeek(rec.created_at)) {
-                        enquiries++;
-                        enquiryValue += latestQuotationValue;
-                    }
-                    if (inLast60Days(rec.created_at) && isPendingRows(trackerRows)) {
-                        pipelineValue += latestQuotationValue;
-                    }
-
-                    // Orders converted THIS WEEK specifically (the tracker row
-                    // recording "yes" was itself created this week) -- counted
-                    // once per record even if (unexpectedly) more than one
-                    // such row exists, using the latest one's bill value.
-                    const yesThisWeekRows = trackerRows.filter(t => isYes(t.is_order_received_status) && inThisWeek(t.created_at));
-                    if (yesThisWeekRows.length > 0) {
-                        noOrder++;
-                        const latestYes = yesThisWeekRows.reduce((a, b) => (new Date(a.created_at) > new Date(b.created_at) ? a : b));
-                        billValue += parseMoney(latestYes.amount_with_tax);
-                    }
+                    const f = facts.get(rec.id);
+                    if (!f) return;
+                    if (f.created) enquiries++;
+                    quotationValue += f.quotationValue;
+                    pipelineValue += f.pipelineValue;
+                    if (f.ordered) { ordersConverted++; orderConvertedValue += f.orderValue; }
                 });
-
                 return {
-                    enquiries, enquiryValue, pipelineValue, noOrder, billValue,
-                    engConv: enquiries > 0 ? (noOrder / enquiries) * 100 : 0,
-                    valueConv: enquiryValue > 0 ? (billValue / enquiryValue) * 100 : 0,
-                    avgTicket: noOrder > 0 ? billValue / noOrder : 0,
+                    enquiries, quotationValue, pipelineValue, ordersConverted, orderConvertedValue,
+                    avgTicket: ordersConverted > 0 ? orderConvertedValue / ordersConverted : 0,
                 };
             };
 
@@ -1542,70 +1576,54 @@ function Report() {
             // enquiries. `multiScs`/`nbdOnlyScs` come from scPipelinePersons
             // (data-driven -- see fetchScPipelinePersons) rather than a fixed
             // list, but the two-tier shape itself is unchanged.
-            const buildSection = (records, trackerByRecordId, scField, multiScs, nbdOnlyScs) => {
+            const buildSection = (records, facts, scField, multiScs, nbdOnlyScs) => {
                 const categoryGroups = ["CRR", "NBD_CRR"].map(category => {
                     const perSc = multiScs.map(sc => ({
                         key: `${sc}_${category}`, label: sc,
-                        metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === category), trackerByRecordId),
+                        metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === category), facts),
                     }));
                     const totalRecords = records.filter(r => multiScs.includes(r[scField]) && normalizeCategory(r.sales_type) === category);
                     return {
                         category,
-                        columns: [...perSc, { key: `TOTAL_${category}`, label: "TOTAL", isTotal: true, metrics: computeGroupMetrics(totalRecords, trackerByRecordId) }],
+                        columns: [...perSc, { key: `TOTAL_${category}`, label: "TOTAL", isTotal: true, metrics: computeGroupMetrics(totalRecords, facts) }],
                     };
                 });
                 const nbdColumns = nbdOnlyScs.map(sc => ({
                     key: sc, label: sc,
-                    metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === "NBD"), trackerByRecordId),
+                    metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === "NBD"), facts),
                 }));
                 return { categoryGroups, nbdColumns };
             };
 
             // ---- Leads ----
-            // Base records bounded to [fetchStart, fetchEnd] on both ends --
-            // that's the actual set of records this tab can ever show.
-            // Tracker rows bounded with a floor only (no upper bound): a
-            // tracker row can never predate the record it belongs to, so
-            // `created_at >= fetchStart` already captures every tracker row
-            // for any in-range record with zero risk of missing one, while
-            // deliberately NOT capping the upper end keeps "is it currently
-            // converted" correct even when fetchEnd is a past custom date
-            // (an order logged after that date still counts).
+            // Tracker rows are floored at fetchStart (a tracker row never predates
+            // its record, so every row of a record created inside the window is
+            // covered); no upper bound, so a later order still counts.
             // Leads are attributed by their own lead_receiver_name (same
             // field the Calling Data tab uses, and fetchScPipelinePersons'
             // classification above) -- NOT enquiry_assign_to_person via
             // lto_call_tracker_for_leads, which is only set once a call has
             // been logged for a lead (9 of 1188 leads in practice) and was
             // the reason this section used to come out all zero.
+            // Records are fetched with NO date bound: an order/quotation in
+            // range can belong to an older record, which still needs its SC.
             const [{ data: allLeads }, { data: allLeadTrackers }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_leads").select("id, sales_type, created_at, lead_receiver_name")
-                    .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
-                fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, created_at, is_order_received_status, quotation_value_without_tax, amount_with_tax")
+                fetchAllRows(() => supabase.from("lto_leads").select("id, sales_type, created_at, lead_receiver_name")),
+                fetchAllRows(() => supabase.from("lto_enquiry_tracker_for_leads").select("lead_id, created_at, current_stage, quotation_number, is_order_received_status, quotation_value_without_tax")
                     .gte("created_at", fetchStartISO)),
             ]);
-            const leadTrackerByLeadId = new Map();
-            (allLeadTrackers || []).forEach(t => {
-                if (!t.lead_id) return;
-                if (!leadTrackerByLeadId.has(t.lead_id)) leadTrackerByLeadId.set(t.lead_id, []);
-                leadTrackerByLeadId.get(t.lead_id).push(t);
-            });
             const leadRecordsWithPerson = (allLeads || []).map(l => ({ ...l, _assignedPerson: l.lead_receiver_name || null }));
-            const leadsSection = buildSection(leadRecordsWithPerson, leadTrackerByLeadId, "_assignedPerson", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
+            const leadFacts = await buildRecordMetrics(leadRecordsWithPerson, allLeadTrackers, "lead_id", "lto_enquiry_tracker_for_leads");
+            const leadsSection = buildSection(leadRecordsWithPerson, leadFacts, "_assignedPerson", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
 
             // ---- Enquiries ----
             const [{ data: allEnquiries }, { data: allEnquiryTrackers }] = await Promise.all([
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_assign_to_person, sales_type, created_at")
-                    .gte("created_at", fetchStartISO).lte("created_at", fetchEndISO)),
-                fetchAllRows(() => supabase.from("lto_enquiry_tracker").select("enquiry_id, created_at, is_order_received_status, quotation_value_without_tax, amount_with_tax")
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_assign_to_person, sales_type, created_at")),
+                fetchAllRows(() => supabase.from("lto_enquiry_tracker").select("enquiry_id, created_at, current_stage, quotation_number, is_order_received_status, quotation_value_without_tax")
                     .gte("created_at", fetchStartISO)),
             ]);
-            const enquiryTrackerByEnquiryId = new Map();
-            (allEnquiryTrackers || []).forEach(t => {
-                if (!t.enquiry_id) return;
-                if (!enquiryTrackerByEnquiryId.has(t.enquiry_id)) enquiryTrackerByEnquiryId.set(t.enquiry_id, []);
-                enquiryTrackerByEnquiryId.get(t.enquiry_id).push(t);
-            });
-            const enquiriesSection = buildSection(allEnquiries || [], enquiryTrackerByEnquiryId, "enquiry_assign_to_person", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
+            const enquiryFacts = await buildRecordMetrics(allEnquiries || [], allEnquiryTrackers, "enquiry_id", "lto_enquiry_tracker");
+            const enquiriesSection = buildSection(allEnquiries || [], enquiryFacts, "enquiry_assign_to_person", scPipelinePersons.multi, scPipelinePersons.nbdOnly);
 
             // A newer call for this tab has since started (e.g. the date
             // filter changed again while this one was still fetching) --
@@ -1914,7 +1932,7 @@ function Report() {
                         <p className="text-sm text-muted-foreground mb-3 flex items-center gap-2">
                             {scPipelineFilters.startDate || scPipelineFilters.endDate
                                 ? "Custom date range applies to every metric below, including Pipeline Value."
-                                : "This week (Monday through today) for Enquiries/Orders columns; Pipeline Value looks back 60 days at non-converted work."}
+                                : "This week (Monday through today) for Enquiries, Quotation Value and Orders; Pipeline Value looks back 60 days at enquiries that are neither converted, lost nor on hold."}
                             {!isAdmin() && " You're seeing only your own column(s)."}
                             {isLoading && <Spinner className="h-3.5 w-3.5 text-primary" />}
                         </p>

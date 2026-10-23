@@ -2694,14 +2694,16 @@ const handleSaveClick = async () => {
   );
 
   // ─── CSV export ──────────────────────────────────────────────────────────
-  // First `limit` rows of the current tab + filters, visible columns only,
+  // ALL rows of the current tab + filters (loaded in chunks), visible columns only,
   // same labels/order as the table (and the admin-only Person column rule).
   const [isExporting, setIsExporting] = useState(false);
-  const handleExport = async (limit) => {
+  const [exportLoaded, setExportLoaded] = useState(0);
+  const handleExport = async () => {
     setIsExporting(true);
+    setExportLoaded(0);
     try {
       const rawRows = await fetchEnquiryExportRows(activeTab, {
-        limit,
+        onProgress: setExportLoaded,
         searchTerm,
         currentStageFilter,
         itemFilter,
@@ -2800,6 +2802,7 @@ const handleSaveClick = async () => {
         exportTotal={activeEnquiryQuery.data?.totalCount || 0}
         onExport={handleExport}
         exporting={isExporting}
+        exportLoaded={exportLoaded}
       />
 
       <div className="flex-1 flex flex-col min-h-0 mt-1">
