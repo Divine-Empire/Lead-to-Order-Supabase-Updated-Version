@@ -24,7 +24,8 @@ import useDialogBehavior from "../../components/useDialogBehavior";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import MakeQuotationForm from "../../components/enquiry-tracker/MakeQuotationFrom";
 import { compressImageFile, validateFileSize } from "../../utils/imageCompression";
-import { usePendingEnquiries, useHistoryEnquiries, useItemNameOptions, CURRENT_STAGE_OPTIONS } from "./queries";
+import { usePendingEnquiries, useHistoryEnquiries, useItemNameOptions, fetchEnquiryExportRows, CURRENT_STAGE_OPTIONS } from "./queries";
+import { downloadCsv } from "./exportCsv";
 
 const columnsConfig = [
   { key: "timestamp", label: "Timestamp" },
@@ -257,6 +258,8 @@ function EnquiryTracker() {
   // Item filter: selected item names (any-of); matched against the views'
   // item_qty column server-side -- see applySharedFilters in queries.js.
   const [itemFilter, setItemFilter] = useState([]);
+  // Pending tab only: "blank" = rows with no quotation copy. Ignored on History.
+  const [quotationCopyFilter, setQuotationCopyFilter] = useState("");
   const [scNameFilter] = useState("all");
 
 
@@ -1716,6 +1719,7 @@ const handleSaveClick = async () => {
     searchTerm,
     currentStageFilter,
     itemFilter,
+    quotationCopyFilter,
     valueFilter,
     callingDaysFilter,
     scNameFilter,
@@ -2249,7 +2253,7 @@ const handleSaveClick = async () => {
     setHasMorePending(true);
     setHasMoreHistory(true);
     setHasMoreDirectEnquiry(true);
-  }, [activeTab, searchTerm, callingDaysFilter, valueFilter, currentStageFilter, itemFilter]);
+  }, [activeTab, searchTerm, callingDaysFilter, valueFilter, currentStageFilter, itemFilter, quotationCopyFilter]);
 
   const fetchCallingDaysCounts = async () => {
     try {
@@ -2482,12 +2486,10 @@ const handleSaveClick = async () => {
   };
 
   // ─── Row render helpers ───────────────────────────────────────────────────
-  const renderRowCells = (tracker, visibleState, config = columnsConfig) => {
-    return config.map(opt => {
-      if (!visibleState[opt.key]) return null;
-      if (opt.key === "salespersonName" && !isAdmin()) return null;
-
-      const val = tracker[opt.key] ??
+  // Raw value for one column of one row -- shared by the table cells and the
+  // CSV export so both always show the same thing.
+  const resolveCellValue = (tracker, opt) =>
+      tracker[opt.key] ??
         tracker[opt.key.replace(/([A-Z])/g, '_$1').toLowerCase()] ??
         (opt.key.startsWith("itemQty") && opt.key.length === 8 ? (tracker[`quantity${opt.key.slice(-1)}`] || tracker[`Quantity${opt.key.slice(-1)}`]) : null) ??
         (opt.key === "leadId" ? (tracker.leadNo || tracker.lead_no || tracker.enquiryNo || tracker.enquiry_no || tracker.leadId) : null) ??
@@ -2500,6 +2502,13 @@ const handleSaveClick = async () => {
         (opt.key === "leadSource" ? (tracker.Lead_Source || tracker.lead_source || tracker.leadSource) : null) ??
         (opt.key === "currentStage" ? (tracker.Current_Stage || tracker.current_stage || tracker.currentStage) : null) ??
         "—";
+
+  const renderRowCells = (tracker, visibleState, config = columnsConfig) => {
+    return config.map(opt => {
+      if (!visibleState[opt.key]) return null;
+      if (opt.key === "salespersonName" && !isAdmin()) return null;
+
+      const val = resolveCellValue(tracker, opt);
 
       let cellContent = val !== undefined && val !== null ? String(val) : "—";
 
@@ -2519,7 +2528,7 @@ const handleSaveClick = async () => {
             {val}
           </span>
         ) : "—";
-      } else if (opt.key === "shippingAddress") {
+      } else if (opt.key === "shippingAddress" || opt.key === "billingAddress") {
         cellContent = (
           <div className="max-w-[200px] truncate" title={val}>
             {val || "—"}
@@ -2684,6 +2693,49 @@ const handleSaveClick = async () => {
     </div>
   );
 
+  // ─── CSV export ──────────────────────────────────────────────────────────
+  // First `limit` rows of the current tab + filters, visible columns only,
+  // same labels/order as the table (and the admin-only Person column rule).
+  const [isExporting, setIsExporting] = useState(false);
+  const handleExport = async (limit) => {
+    setIsExporting(true);
+    try {
+      const rawRows = await fetchEnquiryExportRows(activeTab, {
+        limit,
+        searchTerm,
+        currentStageFilter,
+        itemFilter,
+        quotationCopyFilter: activeTab === "pending" ? quotationCopyFilter : "",
+        valueFilter,
+        callingDaysFilter,
+        scNameFilter,
+        isAdmin: isAdmin(),
+        usernamesToFilter,
+        leadSourceRestriction,
+      });
+      const rows = rawRows.map(activeTab === "pending" ? mapPendingRow : mapHistoryRow);
+      const config = activeTab === "pending" ? columnsConfig : historyColumnsConfig;
+      const visibleState = activeTab === "pending" ? visiblePendingColumns : visibleColumns;
+      const columns = config
+        .filter(opt => visibleState[opt.key])
+        .filter(opt => opt.key !== "salespersonName" || isAdmin())
+        .map(opt => ({
+          label: opt.label,
+          get: (row) => {
+            const v = resolveCellValue(row, opt);
+            return v === "—" ? "" : v;
+          },
+        }));
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadCsv(`enquiry-tracker-${activeTab}-${stamp}.csv`, columns, rows);
+    } catch (error) {
+      console.error("Enquiry tracker export failed:", error);
+      alert("Export failed. Please try again.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   // ─── Headers ─────────────────────────────────────────────────────────────
   const getHeaders = () => {
     if (activeTab === "pending") {
@@ -2727,6 +2779,8 @@ const handleSaveClick = async () => {
         setCurrentStageFilter={setCurrentStageFilter}
         itemFilter={itemFilter}
         setItemFilter={setItemFilter}
+        quotationCopyFilter={quotationCopyFilter}
+        setQuotationCopyFilter={setQuotationCopyFilter}
         itemOptions={itemNameOptions}
         filterCounts={filterCounts}
         showColumnDropdown={showColumnDropdown}
@@ -2743,6 +2797,9 @@ const handleSaveClick = async () => {
         pendingCallTrackers={mergedPending}
         historyCallTrackers={historyData}
         currentStageOptions={CURRENT_STAGE_OPTIONS}
+        exportTotal={activeEnquiryQuery.data?.totalCount || 0}
+        onExport={handleExport}
+        exporting={isExporting}
       />
 
       <div className="flex-1 flex flex-col min-h-0 mt-1">

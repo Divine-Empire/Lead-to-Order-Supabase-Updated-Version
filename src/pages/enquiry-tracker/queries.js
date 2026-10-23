@@ -339,12 +339,42 @@ function applyHistoryCallingDaysFilter(query, callingDaysFilter) {
   return query.or(clauses.join(","));
 }
 
+// Pending "Quotation Copy: blank" filter. A blank copy is judged on the value
+// the table actually shows -- the merged tracker value with the latest
+// lto_make_quotations PDF overlaid (attachLatestQuotations) -- which no view
+// column holds, so it can't be a plain WHERE clause. Pending is small (~800
+// rows), so this loads every pending row matching the other filters, enriches
+// them in chunks (keeps the .in() URLs short) and keeps the ones with no copy.
+// Callers paginate the result themselves.
+const ENRICH_CHUNK = 100;
+
+async function fetchPendingWithoutCopy(params) {
+  const { data, error } = await fetchAllRows(() => {
+    let q = supabase
+      .from("enquiry_pending_view")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .order("record_id", { ascending: true });
+    q = applySharedFilters(q, params);
+    return applyPendingCallingDaysFilter(q, params.callingDaysFilter);
+  });
+  if (error) throw error;
+
+  const chunks = [];
+  for (let i = 0; i < (data || []).length; i += ENRICH_CHUNK) chunks.push(data.slice(i, i + ENRICH_CHUNK));
+  const enriched = (await Promise.all(
+    chunks.map(async (chunk) => attachLatestQuotations(await attachMergedTrackerFields(chunk)))
+  )).flat();
+  return enriched.filter((r) => !String(r.quotation_upload || "").trim());
+}
+
 export function usePendingEnquiries({
   page,
   itemsPerPage,
   searchTerm,
   currentStageFilter,
   itemFilter,
+  quotationCopyFilter,
   valueFilter,
   callingDaysFilter,
   scNameFilter,
@@ -362,6 +392,7 @@ export function usePendingEnquiries({
       searchTerm,
       currentStageFilter,
       itemFilter,
+      quotationCopyFilter,
       valueFilter,
       callingDaysFilter,
       scNameFilter,
@@ -372,6 +403,12 @@ export function usePendingEnquiries({
     queryFn: async () => {
       const from = (page - 1) * itemsPerPage;
       const to = from + itemsPerPage - 1;
+
+      if (quotationCopyFilter === "blank") {
+        const blankRows = await fetchPendingWithoutCopy({ searchTerm, currentStageFilter, itemFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+        const pageRows = await attachBillingAddress(blankRows.slice(from, to + 1));
+        return { rows: pageRows, totalCount: blankRows.length };
+      }
 
       let query = supabase
         .from("enquiry_pending_view")
@@ -493,8 +530,45 @@ export function useItemNameOptions() {
 // is fixing, just relocated to a dropdown.
 export const CURRENT_STAGE_OPTIONS = [
   "make-quotation",
-  "quotation-validation",
   "order-expected",
   "order-status",
-  "Unknown",
 ];
+
+// Export: the first `limit` rows of the CURRENT tab + filters, in the same
+// order as the table (created_at desc), fetched in 1000-row batches
+// (PostgREST's per-request cap) and enriched exactly like the paged queries.
+// Returns raw view rows -- the caller maps them with its own row mappers.
+const EXPORT_BATCH = 1000;
+
+export async function fetchEnquiryExportRows(tab, { limit, searchTerm, currentStageFilter, itemFilter, quotationCopyFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction }) {
+  const isPending = tab === "pending";
+  if (isPending && quotationCopyFilter === "blank") {
+    const blankRows = await fetchPendingWithoutCopy({ searchTerm, currentStageFilter, itemFilter, valueFilter, callingDaysFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+    return attachBillingAddress(blankRows.slice(0, limit));
+  }
+  const all = [];
+  for (let from = 0; from < limit; from += EXPORT_BATCH) {
+    const to = Math.min(from + EXPORT_BATCH, limit) - 1;
+    let query = supabase
+      .from(isPending ? "enquiry_pending_view" : "enquiry_history_view")
+      .select("*")
+      // record_id as a tie-breaker keeps batch boundaries stable.
+      .order("created_at", { ascending: false })
+      .order("record_id", { ascending: true })
+      .range(from, to);
+    query = applySharedFilters(query, { searchTerm, currentStageFilter, itemFilter, valueFilter, scNameFilter, isAdmin, usernamesToFilter, leadSourceRestriction });
+    query = isPending
+      ? applyPendingCallingDaysFilter(query, callingDaysFilter)
+      : applyHistoryCallingDaysFilter(query, callingDaysFilter);
+    const { data, error } = await query;
+    if (error) throw error;
+    all.push(...(data || []));
+    if (!data || data.length < to - from + 1) break;
+  }
+  if (isPending) {
+    const merged = await attachMergedTrackerFields(all);
+    const withQuotations = await attachLatestQuotations(merged);
+    return attachBillingAddress(withQuotations);
+  }
+  return attachQuotationPdfsByExactNumber(all);
+}
