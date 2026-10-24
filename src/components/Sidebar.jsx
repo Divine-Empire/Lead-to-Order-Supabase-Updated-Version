@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom"
 import { HomeIcon, UsersIcon, PhoneCallIcon, BarChartIcon, FileTextIcon, ShieldIcon, LogoutIcon, DatabaseIcon, SettingsIcon } from "./Icons"
 import { useContext, useState, useEffect } from "react"
+import { ChevronsLeft, ChevronsRight } from "lucide-react"
 import { AuthContext } from "../App"
 import supabase from "../utils/supabase"
 import { fetchClosedIdSet, countOpenRows } from "../utils/pendingStatus"
@@ -161,6 +162,21 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     const isMasterRoute = location.pathname.startsWith("/master");
     const [masterExpanded, setMasterExpanded] = useState(() => isMasterRoute);
 
+    // Desktop-only icon-rail mode (md and up). Remembered per browser; the
+    // mobile drawer is always full width.
+    const [collapsed, setCollapsed] = useState(() => {
+        try { return localStorage.getItem("sidebarCollapsed") === "1" } catch { return false }
+    });
+    const toggleCollapsed = () => {
+        setCollapsed((prev) => {
+            const next = !prev;
+            try { localStorage.setItem("sidebarCollapsed", next ? "1" : "0") } catch { /* storage unavailable */ }
+            return next;
+        });
+    };
+    const hideWhenCollapsed = collapsed ? "md:hidden" : "";
+    const centerWhenCollapsed = collapsed ? "md:justify-center md:px-0" : "";
+
     useEffect(() => {
         if (location.pathname.startsWith("/master")) {
             setMasterExpanded(true);
@@ -214,12 +230,12 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
 
             <aside
                 aria-label="Sidebar"
-                className={`fixed inset-y-0 left-0 z-50 flex w-56 shrink-0 transform flex-col border-r bg-card transition-transform duration-300 ease-in-out md:static md:inset-auto md:translate-x-0 2xl:w-60 ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full"}`}
+                className={`fixed inset-y-0 left-0 z-50 flex w-56 shrink-0 transform flex-col border-r bg-card transition-[transform,width] duration-300 ease-in-out md:static md:inset-auto md:translate-x-0 ${collapsed ? "md:w-14 2xl:w-14" : "2xl:w-60"} ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full"}`}
             >
-                <div className="flex h-14 shrink-0 items-center border-b px-4">
+                <div className={`flex h-14 shrink-0 items-center border-b px-4 ${centerWhenCollapsed}`}>
                     <Link to="/" className="flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
                         <img src="/divine-logo.svg" alt="Divine" className="h-8 w-auto shrink-0" />
-                        <div className="leading-tight">
+                        <div className={`leading-tight ${hideWhenCollapsed}`}>
                             <p className="text-sm font-semibold">Divine</p>
                             <p className="text-xs text-muted-foreground">Lead to Order</p>
                         </div>
@@ -235,9 +251,14 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                                 <div key="master-data-collapsible" className="flex flex-col">
                                     <button
                                         type="button"
-                                        onClick={() => setMasterExpanded((prev) => !prev)}
+                                        onClick={() => {
+                                            // The rail has no room for sub-items: expand it first.
+                                            if (collapsed) { toggleCollapsed(); setMasterExpanded(true); return; }
+                                            setMasterExpanded((prev) => !prev);
+                                        }}
+                                        title={collapsed ? item.label : undefined}
                                         aria-expanded={masterExpanded}
-                                        className={`relative flex h-9 w-full items-center justify-between rounded-md px-3 text-sm transition-colors ${
+                                        className={`relative flex h-9 w-full items-center justify-between rounded-md px-3 text-sm transition-colors ${centerWhenCollapsed} ${
                                             isMasterActive
                                                 ? "bg-accent font-medium text-foreground before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-brand-lime"
                                                 : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -245,7 +266,7 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                                     >
                                         <span className="flex min-w-0 items-center gap-3">
                                             <Icon className={`h-4 w-4 shrink-0 ${isMasterActive ? "text-primary" : ""}`} />
-                                            <span className="truncate">{item.label}</span>
+                                            <span className={`truncate ${hideWhenCollapsed}`}>{item.label}</span>
                                         </span>
                                         <svg
                                             xmlns="http://www.w3.org/2000/svg"
@@ -257,14 +278,14 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                                             strokeWidth="2"
                                             strokeLinecap="round"
                                             strokeLinejoin="round"
-                                            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${masterExpanded ? "rotate-180" : ""}`}
+                                            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${masterExpanded ? "rotate-180" : ""} ${hideWhenCollapsed}`}
                                             aria-hidden="true"
                                         >
                                             <polyline points="6 9 12 15 18 9"></polyline>
                                         </svg>
                                     </button>
 
-                                    {masterExpanded && (
+                                    {masterExpanded && !collapsed && (
                                         <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
                                             {visibleMasterSubStages.map((sub) => {
                                                 const isSubActive = location.pathname === sub.href || 
@@ -309,7 +330,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                                 to={item.href}
                                 onClick={() => setMobileMenuOpen(false)}
                                 aria-current={active ? "page" : undefined}
-                                className={`relative flex h-9 items-center justify-between rounded-md px-3 text-sm transition-colors ${
+                                title={collapsed ? item.label : undefined}
+                                className={`relative flex h-9 items-center justify-between rounded-md px-3 text-sm transition-colors ${centerWhenCollapsed} ${
                                     active
                                         ? "bg-accent font-medium text-foreground before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-brand-lime"
                                         : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -317,10 +339,10 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                             >
                                 <span className="flex min-w-0 items-center gap-3">
                                     <Icon className={`h-4 w-4 shrink-0 ${active ? "text-primary" : ""}`} />
-                                    <span className="truncate">{item.label}</span>
+                                    <span className={`truncate ${hideWhenCollapsed}`}>{item.label}</span>
                                 </span>
                                 {count !== null && (
-                                    <span className="ml-2 shrink-0 rounded bg-primary/10 px-1.5 text-xs font-semibold tabular-nums text-brand-700">
+                                    <span className={`ml-2 shrink-0 rounded bg-primary/10 px-1.5 text-xs font-semibold tabular-nums text-brand-700 ${hideWhenCollapsed}`}>
                                         {count}
                                     </span>
                                 )}
@@ -331,11 +353,23 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
 
                 <div className="shrink-0 border-t p-2">
                     <button
+                        type="button"
+                        onClick={toggleCollapsed}
+                        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                        aria-expanded={!collapsed}
+                        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                        className={`hidden h-9 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground md:flex ${centerWhenCollapsed}`}
+                    >
+                        {collapsed ? <ChevronsRight className="h-4 w-4 shrink-0" /> : <ChevronsLeft className="h-4 w-4 shrink-0" />}
+                        <span className={hideWhenCollapsed}>Collapse</span>
+                    </button>
+                    <button
                         onClick={logout}
-                        className="flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        title={collapsed ? "Log out" : undefined}
+                        className={`flex h-9 w-full items-center gap-3 rounded-md px-3 text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive ${centerWhenCollapsed}`}
                     >
                         <LogoutIcon className="h-4 w-4 shrink-0" />
-                        <span>Log out</span>
+                        <span className={hideWhenCollapsed}>Log out</span>
                     </button>
                 </div>
             </aside>

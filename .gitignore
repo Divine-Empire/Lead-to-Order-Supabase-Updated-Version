@@ -26,7 +26,7 @@ dist-ssr
 *.sw?
 
 .claude
-apps-script
+graphify-out
 sql
 Order-Received-Data
 schema.txt

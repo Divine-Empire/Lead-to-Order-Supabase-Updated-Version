@@ -2,13 +2,25 @@ import React, { useState, useRef } from 'react';
 
 /**
  * Horizontally/vertically scrolling container with mouse drag-to-scroll on desktop.
- * It is keyboard focusable (arrow keys scroll) and announced as a labelled region.
+ * Drag-to-scroll only starts from the header row (or empty space around the table,
+ * or with Alt held), so text in the body cells stays selectable with a normal
+ * text cursor. It is keyboard focusable (arrow keys scroll) and announced as a labelled region.
  */
 const DragScrollTable = ({ children, className = "", ariaLabel = "Scrollable table" }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [startX, setStartX] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
   const containerRef = useRef(null);
+
+  // Where a drag may start: thead / empty space, never on body text or controls.
+  const canStartDrag = (e) => {
+    if (e.button !== 0) return false;
+    if (e.altKey) return true;
+    const target = e.target;
+    if (!(target instanceof Element)) return false;
+    if (target.closest("a, button, input, select, textarea, label")) return false;
+    return target === containerRef.current || !!target.closest("thead");
+  };
 
   const handleMouseDown = (e) => {
     setIsDragging(true);
@@ -48,12 +60,13 @@ const DragScrollTable = ({ children, className = "", ariaLabel = "Scrollable tab
       tabIndex={0}
       onMouseDown={(e) => {
         if (window.matchMedia("(pointer: coarse)").matches) return;
+        if (!canStartDrag(e)) return;
         handleMouseDown(e);
       }}
       onMouseLeave={handleMouseLeave}
       onMouseUp={handleMouseUp}
       onMouseMove={handleMouseMove}
-      className={`overflow-x-auto overflow-y-auto flex-1 min-h-0 scrollbar-hide ${isDragging ? 'cursor-grabbing select-none' : 'cursor-grab'} ${className}`}
+      className={`overflow-x-auto overflow-y-auto flex-1 min-h-0 scrollbar-hide ${isDragging ? 'cursor-grabbing select-none' : '[&_thead]:cursor-grab'} ${className}`}
       style={{ WebkitOverflowScrolling: 'touch' }}
     >
       {children}
