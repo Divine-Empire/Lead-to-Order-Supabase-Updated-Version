@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, createContext, lazy, Suspense } from "react"
+import { useState, useEffect, useRef, createContext, lazy, Suspense } from "react"
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom"
 import Login from "./pages/auth/Login"
 import MainNav from "./components/MainNav"
@@ -67,6 +67,20 @@ function App() {
     }
   })
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  // A stored session is re-checked against the login table before any page
+  // renders (see below); until then the routes are held back.
+  const [sessionChecked, setSessionChecked] = useState(() => localStorage.getItem("isAuthenticated") !== "true")
+  // Latest values for the background re-check (its listeners outlive renders).
+  const currentUserRef = useRef(currentUser)
+  const userTypeRef = useRef(userType)
+  useEffect(() => { currentUserRef.current = currentUser }, [currentUser])
+  useEffect(() => { userTypeRef.current = userType }, [userType])
+
+  // Drops a session whose user/role can't be confirmed in the login table.
+  const endInvalidSession = () => {
+    logoutRef.current?.("Your session is no longer valid. Please log in again.")
+  }
+  const logoutRef = useRef(null)
 
   // Check if user is already logged in and fetch latest alternate_access from database
   useEffect(() => {
@@ -86,11 +100,23 @@ function App() {
         try {
           const { data, error } = await supabase
             .from('login')
-            .select('alternate_access, full_name, restricted_lead_sources')
+            .select('usertype, alternate_access, full_name, restricted_lead_sources')
             .eq('username', parsedUser.username)
-            .single()
+            .maybeSingle()
+
+          // The stored username isn't in the login table (e.g. edited in
+          // DevTools, or the account was deleted): don't trust the session.
+          if (!error && !data) {
+            endInvalidSession()
+            return
+          }
 
           if (!error && data) {
+            // The role always comes from the DB, never from localStorage.
+            const verifiedUserType = data.usertype || null
+            setUserType(verifiedUserType)
+            if (verifiedUserType) localStorage.setItem("userType", verifiedUserType)
+            else localStorage.removeItem("userType")
             const latestAlternateAccess = data.alternate_access || null
             const latestFullName = data.full_name || parsedUser.fullName || null
             const latestRestrictedLeadSources = data.restricted_lead_sources || []
@@ -101,7 +127,7 @@ function App() {
             localStorage.setItem("restrictedLeadSources", JSON.stringify(latestRestrictedLeadSources))
             localStorage.setItem("currentUser", JSON.stringify({ ...parsedUser, fullName: latestFullName }))
             // Fetch data with latest alternate_access, scoped by full_name (matches SC Assigned)
-            fetchUserData(latestFullName, storedUserType, latestAlternateAccess, latestRestrictedLeadSources)
+            fetchUserData(latestFullName, verifiedUserType, latestAlternateAccess, latestRestrictedLeadSources)
           } else {
             // Fallback to stored value if database fetch fails
             const storedAlternateAccess = localStorage.getItem("alternateAccess")
@@ -123,9 +149,48 @@ function App() {
         }
       }
 
-      fetchLatestAlternateAccess()
+      fetchLatestAlternateAccess().finally(() => setSessionChecked(true))
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Re-check username + role against the login table while the app is open
+  // (tab regains focus, and every 5 minutes), so a role/account changed in
+  // the DB -- or a localStorage role edited by hand -- doesn't survive.
+  // A failed request (offline etc.) never logs anyone out.
+  useEffect(() => {
+    if (!isAuthenticated) return undefined
+    const verifySession = async () => {
+      const username = currentUserRef.current?.username
+      if (!username) return
+      try {
+        const { data, error } = await supabase
+          .from('login')
+          .select('usertype')
+          .eq('username', username)
+          .maybeSingle()
+        if (error) return
+        if (!data) {
+          endInvalidSession()
+        } else if ((data.usertype || null) !== userTypeRef.current) {
+          setUserType(data.usertype || null)
+          if (data.usertype) localStorage.setItem("userType", data.usertype)
+          else localStorage.removeItem("userType")
+        }
+      } catch {
+        /* ignore: keep the current session */
+      }
+    }
+    const onVisible = () => { if (document.visibilityState === "visible") verifySession() }
+    document.addEventListener("visibilitychange", onVisible)
+    window.addEventListener("focus", verifySession)
+    const timer = setInterval(verifySession, 5 * 60 * 1000)
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible)
+      window.removeEventListener("focus", verifySession)
+      clearInterval(timer)
+    }
+  }, [isAuthenticated])
 
   // Function to fetch data based on user type FROM SUPABASE.
   // For non-admins, `fullName` (the user's Full Name, matched against the
@@ -289,7 +354,10 @@ function App() {
     }
   }
 
-  const logout = () => {
+  // May be passed straight to an onClick (then `message` is an event, not text).
+  const logout = (reason) => {
+    const message = typeof reason === "string" ? reason : "Logged out successfully";
+    setSessionChecked(true);
     setIsAuthenticated(false);
     setCurrentUser(null);
     setUserType(null);
@@ -302,8 +370,9 @@ function App() {
     localStorage.removeItem("alternateAccess");
     localStorage.removeItem("restrictedLeadSources");
     localStorage.removeItem('quotation_auto_save');
-    showNotification("Logged out successfully", "success");
+    showNotification(message, message === "Logged out successfully" ? "success" : "error");
   }
+  logoutRef.current = logout
 
   // Each call pushes its OWN toast onto a stack, keyed by a unique id --
   // duration is in ms; pass 0 (or null) to keep that specific toast up
@@ -424,6 +493,7 @@ function App() {
               )}
 
               <main className={`flex-1 overflow-auto ${isAuthenticated ? 'p-4 md:p-6' : ''}`}>
+                {isAuthenticated && !sessionChecked ? <RouteFallback /> : (
                 <Suspense fallback={<RouteFallback />}>
                 <Routes>
                   <Route path="/login" element={!isAuthenticated ? <Login /> : <Navigate to="/" />} />
@@ -567,6 +637,7 @@ function App() {
                   <Route path="*" element={<Navigate to="/" />} />
                 </Routes>
                 </Suspense>
+                )}
               </main>
               {isAuthenticated && <Footer />}
             </div>
