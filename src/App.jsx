@@ -23,6 +23,7 @@ const CallTrackerForm = lazy(() => import("./pages/call-tracker/CallTrackerForm"
 const EnquiryTracker = lazy(() => import("./pages/enquiry-tracker/EnquiryTracker"))
 const EnquiryTrackerForm = lazy(() => import("./pages/enquiry-tracker/EnquiryTrackerForm"))
 const Quotation = lazy(() => import("./pages/Quotation/Quotation"))
+const QuotationBeta = lazy(() => import("./pages/quotation_beta/Quotation"))
 const Report = lazy(() => import("./pages/report/Report"))
 const LostDetailsPage = lazy(() => import("./pages/report/LostDetailsPage"))
 const Master = lazy(() => import("./pages/Master/Master"))
@@ -502,6 +503,14 @@ function App() {
                     element={
                       <ProtectedRoute>
                         <Quotation key="quotation" />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/quotation-beta"
+                    element={
+                      <ProtectedRoute adminOnly={true}>
+                        <QuotationBeta key="quotation-beta" />
                       </ProtectedRoute>
                     }
                   />

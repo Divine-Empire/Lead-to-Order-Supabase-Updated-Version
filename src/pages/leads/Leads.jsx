@@ -933,17 +933,44 @@ function Leads() {
       // post-insert update (further down) checks before writing back.
       let finalSalesType = formData.salesType ? formData.salesType.trim() : "";
       let existingClientSalesType = null;
+      const clientMasterBackfill = {};
       const compNameTrimmed = (formData.companyName || "").trim();
       if (compNameTrimmed) {
         const { data: existingClient, error: clientCheckErr } = await supabase
           .from("lto_client_master")
-          .select("uuid, company_name, sales_type")
+          .select("uuid, company_name, sales_type, sc_name, crm_name, company_group_name")
           .ilike("company_name", compNameTrimmed)
           .maybeSingle();
 
         if (!clientCheckErr && existingClient) {
           existingClientSalesType = existingClient.sales_type ? existingClient.sales_type.trim() : "";
           if (!finalSalesType && existingClientSalesType) finalSalesType = existingClientSalesType;
+
+          // Existing company (e.g. added manually via Master > Add Client)
+          // may still have no SC/CRM. Same rule as a brand-new company:
+          // real group -> copy the group's SC+CRM; OTHER CLIENTS/no group
+          // -> sc_distribution round-robin for SC only (CRM comes later,
+          // at order conversion).
+          if (existingClient.sc_name) {
+            assignedScName = assignedScName || existingClient.sc_name;
+          }
+          assignedCrmName = existingClient.crm_name || null;
+          if (!existingClient.sc_name) {
+            const resolved = await resolveScAndCreForNewCompany({
+              groupName: existingClient.company_group_name || formData.groupName,
+              salesType: finalSalesType,
+              leadSource: formData.source,
+              nob: formData.nob,
+            });
+            if (resolved.scName) {
+              assignedScName = resolved.scName;
+              clientMasterBackfill.sc_name = resolved.scName;
+            }
+            if (!existingClient.crm_name && resolved.crmName) {
+              assignedCrmName = resolved.crmName;
+              clientMasterBackfill.crm_name = resolved.crmName;
+            }
+          }
         }
 
         if (!clientCheckErr && !existingClient) {
@@ -1065,6 +1092,7 @@ function Leads() {
 
       if (compNameTrimmed) {
         const clientMasterUpdate = {
+          ...clientMasterBackfill,
           already_in_tracker: `Call-Tracker (${authoritiveLeadNo})`,
           // A new lead just came in for this company -- re-engaged,
           // regardless of what this lead's own outcome later becomes.

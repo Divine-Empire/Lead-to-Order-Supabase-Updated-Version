@@ -11,6 +11,8 @@ import { TABLES, COLUMNS } from "../../constants/dbSchema";
 import { AuthContext } from "../../App";
 import useConfirmDialog from "../../components/useConfirmDialog";
 import { getStateCodeFromName } from "../../utils/gstStateCodes";
+import { isOtherClientsGroup } from "../../utils/scAssignment";
+import { fetchAllRows } from "../../utils/fetchAllRows";
 
 // Read-only view (Database/04_client_master_open_work_view.sql) adding
 // has_open_work on top of every lto_client_master column -- used for every
@@ -110,6 +112,71 @@ function ClientMaster() {
 
   const fetchIdRef = useRef(0);
 
+  // Options for the Add/Edit modal's State and Company Group dropdowns.
+  const [stateOptions, setStateOptions] = useState([]);
+  const [groupOptions, setGroupOptions] = useState([]);
+  const [scOptions, setScOptions] = useState([]);
+  const [crmOptions, setCrmOptions] = useState([]);
+  useEffect(() => {
+    if (!isAdmin()) return;
+    (async () => {
+      try {
+        const { data: states } = await supabase.from("lto_dropdown").select("value").eq("category", "state");
+        setStateOptions((states || []).map((r) => (r.value || "").trim()).filter(Boolean).sort());
+        // SC / CRM names that exist in the distribution rules.
+        const [{ data: scRules }, { data: crmRules }] = await Promise.all([
+          supabase.from("lto_sc_distribution").select("sc_name"),
+          supabase.from("lto_crm_distribution").select("crm_names"),
+        ]);
+        const uniq = (arr) => [...new Set(arr.map((v) => String(v || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+        setScOptions(uniq((scRules || []).map((r) => r.sc_name)));
+        setCrmOptions(uniq((crmRules || []).flatMap((r) => (Array.isArray(r.crm_names) ? r.crm_names : []))));
+        const { data: rows } = await fetchAllRows(() => supabase.from(TABLES.CLIENT_MASTER).select("company_group_name").not("company_group_name", "is", null));
+        const seen = new Map();
+        (rows || []).forEach((r) => {
+          const g = (r.company_group_name || "").trim();
+          if (g && !seen.has(g.toLowerCase())) seen.set(g.toLowerCase(), g);
+        });
+        setGroupOptions([...seen.values()].sort((a, b) => a.localeCompare(b)));
+      } catch (err) {
+        console.error("Error loading State/Group options:", err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Add mode + a real group: SC/CRM are pre-selected from the group and
+  // locked. OTHER CLIENTS (or no group): admin picks from the rules' lists.
+  const groupLocksScCrm =
+    modalMode === "add" && !!formData.companyGroupName.trim() && !isOtherClientsGroup(formData.companyGroupName);
+
+  const handleGroupChange = async (group) => {
+    const trimmed = group.trim();
+    setFormData((prev) => ({ ...prev, companyGroupName: group, ...(modalMode === "add" ? { scName: "", crmName: "" } : {}) }));
+    if (modalMode !== "add" || !trimmed || isOtherClientsGroup(trimmed)) return;
+    try {
+      const { data } = await supabase
+        .from(TABLES.CLIENT_MASTER)
+        .select("sc_name, crm_name")
+        .ilike("company_group_name", trimmed)
+        .not("sc_name", "is", null)
+        .neq("sc_name", "")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      const sibling = data && data[0];
+      if (sibling) {
+        setFormData((prev) =>
+          prev.companyGroupName === group ? { ...prev, scName: sibling.sc_name || "", crmName: sibling.crm_name || "" } : prev
+        );
+      }
+    } catch (err) {
+      console.error("Error fetching group's SC/CRM:", err);
+    }
+  };
+
+  // Keep the current value selectable even if it isn't in the master lists.
+  const withCurrent = (options, current) =>
+    current && !options.some((o) => o.toLowerCase() === current.toLowerCase()) ? [current, ...options] : options;
+
   // Applies the search/company/state/relevance filters shared by the main
   // page query and the tab-count queries.
   const applyCommonFilters = (query) => {
@@ -157,9 +224,12 @@ function ClientMaster() {
       return query.not("client_code", "is", null).neq("client_code", "");
     }
     const noCode = query.or("client_code.is.null,client_code.eq.");
+    // Unconverted = open work, or a fresh manual add that has never had any
+    // lead/enquiry; Lost = had work before, nothing open now
+    // (Database/15_client_master_manual_add_unconverted.sql).
     return tab === "unconverted"
-      ? noCode.eq("has_open_work", true)
-      : noCode.eq("has_open_work", false);
+      ? noCode.or("has_open_work.eq.true,has_any_work.eq.false")
+      : noCode.eq("has_open_work", false).eq("has_any_work", true);
   };
 
   const fetchClients = async () => {
@@ -339,6 +409,30 @@ function ClientMaster() {
         }
       } catch (groupCheckErr) {
         console.error("Error checking group's existing SC/CRM:", groupCheckErr);
+      }
+    }
+
+    // New client in a real group (not the OTHER CLIENTS catch-all): inherit
+    // the group's existing SC/CRM unless the admin typed their own. For
+    // OTHER CLIENTS / no group, SC is assigned by the distribution rules when
+    // its first lead/enquiry is created, and CRM at order conversion.
+    if (modalMode === "add" && newGroup && !isOtherClientsGroup(newGroup) && !scNameToSave) {
+      try {
+        const { data: groupSiblings } = await supabase
+          .from(TABLES.CLIENT_MASTER)
+          .select("sc_name, crm_name")
+          .ilike("company_group_name", newGroup)
+          .not("sc_name", "is", null)
+          .neq("sc_name", "")
+          .order("created_at", { ascending: false })
+          .limit(1);
+        const sibling = groupSiblings && groupSiblings[0];
+        if (sibling?.sc_name) {
+          scNameToSave = sibling.sc_name;
+          if (!crmNameToSave) crmNameToSave = sibling.crm_name || null;
+        }
+      } catch (groupErr) {
+        console.error("Error fetching group's SC/CRM for new client:", groupErr);
       }
     }
 
@@ -844,19 +938,31 @@ function ClientMaster() {
             </div>
             <div className="space-y-2">
               <label htmlFor="client-field-4" className="block text-sm font-medium text-foreground">Company Group Name</label>
-              <input id="client-field-4" value={formData.companyGroupName} onChange={e => setFormData({...formData, companyGroupName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
+              <select id="client-field-4" value={formData.companyGroupName} onChange={e => handleGroupChange(e.target.value)} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none">
+                <option value="">Select group</option>
+                {withCurrent(groupOptions, formData.companyGroupName).map((g) => <option key={g} value={g}>{g}</option>)}
+              </select>
             </div>
             <div className="space-y-2">
               <label htmlFor="client-field-5" className="block text-sm font-medium text-foreground">SC Name</label>
-              <input id="client-field-5" value={formData.scName} onChange={e => setFormData({...formData, scName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
+              <select id="client-field-5" value={formData.scName} disabled={groupLocksScCrm} onChange={e => setFormData({...formData, scName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none disabled:bg-muted disabled:cursor-not-allowed">
+                <option value="">{groupLocksScCrm ? "Same as group" : "Select SC"}</option>
+                {withCurrent(scOptions, formData.scName).map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
             </div>
             <div className="space-y-2">
               <label htmlFor="client-field-6" className="block text-sm font-medium text-foreground">CRM Name</label>
-              <input id="client-field-6" value={formData.crmName} onChange={e => setFormData({...formData, crmName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
+              <select id="client-field-6" value={formData.crmName} disabled={groupLocksScCrm} onChange={e => setFormData({...formData, crmName: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none disabled:bg-muted disabled:cursor-not-allowed">
+                <option value="">{groupLocksScCrm ? "Same as group" : "Select CRM"}</option>
+                {withCurrent(crmOptions, formData.crmName).map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
             </div>
             <div className="space-y-2">
               <label htmlFor="client-field-7" className="block text-sm font-medium text-foreground">State</label>
-              <input id="client-field-7" value={formData.state} onChange={e => setFormData({...formData, state: e.target.value})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none" />
+              <select id="client-field-7" value={formData.state} onChange={e => setFormData({...formData, state: e.target.value, stateCode: getStateCodeFromName(e.target.value) || formData.stateCode})} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none">
+                <option value="">Select state</option>
+                {withCurrent(stateOptions, formData.state).map((st) => <option key={st} value={st}>{st}</option>)}
+              </select>
             </div>
             <div className="space-y-2">
               <label htmlFor="client-field-8" className="block text-sm font-medium text-foreground">State Code</label>
