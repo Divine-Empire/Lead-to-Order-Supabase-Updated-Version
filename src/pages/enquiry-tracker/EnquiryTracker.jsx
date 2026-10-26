@@ -392,22 +392,24 @@ function EnquiryTracker() {
     fetchEditDropdowns();
   }, []);
 
-  // SC Name options for the Pending-tab edit modal -- there's no
-  // lto_dropdown category for this, so the distinct sc_name values already
-  // configured in lto_sc_distribution (the same round-robin rule table
-  // scAssignment.js uses to auto-assign SC Name on creation) serve as the
-  // canonical list of valid SC names.
+  // SC Name options for the Pending-tab edit modal: the Master > Dropdowns
+  // "sc_name" list, plus any SC named in lto_sc_distribution (the round-robin
+  // rule table scAssignment.js uses on creation). The rule table alone isn't
+  // enough -- it only holds SCs in the auto-assign rotation, so SCs assigned
+  // by hand (e.g. GEETA BHIWAGADE) were missing from this list.
   const [scNameOptions, setScNameOptions] = useState([]);
   useEffect(() => {
     const fetchScNameOptions = async () => {
       try {
-        const { data, error } = await supabase
-          .from("lto_sc_distribution")
-          .select("sc_name");
+        const [{ data: rules, error }, { data: listed }] = await Promise.all([
+          supabase.from("lto_sc_distribution").select("sc_name"),
+          supabase.from("lto_dropdown").select("value").eq("category", "sc_name"),
+        ]);
         if (error) throw error;
-        setScNameOptions(
-          Array.from(new Set((data || []).map((r) => r.sc_name).filter(Boolean))).sort()
-        );
+        const names = [...(rules || []).map((r) => r.sc_name), ...(listed || []).map((r) => r.value)]
+          .map((n) => (n || "").trim())
+          .filter(Boolean);
+        setScNameOptions(Array.from(new Set(names)).sort());
       } catch (err) {
         console.error("Error fetching SC Name options:", err);
       }
@@ -3076,12 +3078,16 @@ const handleSaveClick = async () => {
             <label htmlFor="pending-edit-12" className="block text-sm font-medium text-foreground">SC Name</label>
             <select
               id="pending-edit-12"
-              value={scNameOptions.includes(editedData.sc_name) ? editedData.sc_name : ""}
+              value={editedData.sc_name || ""}
               onChange={(e) => handleFieldChange("sc_name", e.target.value)}
               className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select SC name</option>
-              {scNameOptions.map((option) => (
+              {/* The record's current SC stays selectable even if it isn't in either list. */}
+              {(editedData.sc_name && !scNameOptions.includes(editedData.sc_name)
+                ? [editedData.sc_name, ...scNameOptions]
+                : scNameOptions
+              ).map((option) => (
                 <option key={option} value={option}>{option}</option>
               ))}
             </select>
