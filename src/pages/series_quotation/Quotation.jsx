@@ -13,6 +13,34 @@ import { useQuotationData } from "./use-quotation-data";
 import supabase from "../../utils/supabase";
 import { loadQuotationDataByNumber } from "../../utils/quotationDataLoader";
 import { putPackagingAndFreightLast } from "../../utils/quotationItemsOrder";
+import { SERIES, getSeries, isSimpleItem } from "./series-utils";
+
+const SERIES_TYPE = { lite: "lite_series", ultra: "ut_series" };
+
+// One lto_make_quotation_items row per item. Normal items are saved as the
+// series the customer chose (type + that series' spec / remarks / rate /
+// discounts, so a revision can show exactly what was quoted); items with no
+// chosen series are not part of the quotation. Freight and Packaging are
+// plain 'basic' rows.
+const toItemRow = (it) => {
+  if (isSimpleItem(it)) {
+    return {
+      item_code: it.code || null, item_name: it.name || "Item", technical_specs: it.description || null,
+      remarks: null, type: "basic", quantity: Number(it.qty) || 0, unit: it.units || "Nos",
+      rate: Number(it.rate) || 0, gst_percent: Number(it.gst) || 0, discount: Number(it.discount) || 0,
+      flat_discount: Number(it.flatDiscount) || 0, amount: Number(it.amount) || 0, is_freight: Boolean(it.isFreight),
+    };
+  }
+  const key = SERIES.map((s) => s.key).find((k) => getSeries(it, k).selected);
+  if (!key) return null;
+  const s = getSeries(it, key);
+  return {
+    item_code: it.code || null, item_name: it.name || "Item", technical_specs: s.spec || null,
+    remarks: s.remarks || null, type: SERIES_TYPE[key], quantity: Number(it.qty) || 0, unit: it.units || "Nos",
+    rate: Number(s.rate) || 0, gst_percent: Number(it.gst) || 0, discount: Number(s.discount) || 0,
+    flat_discount: Number(s.flatDiscount) || 0, amount: Number(s.amount) || 0, is_freight: false,
+  };
+};
 
 function Quotation() {
   const [activeTab, setActiveTab] = useState("edit");
@@ -383,12 +411,12 @@ function Quotation() {
     }
   };
 
-  // BETA: saving is paused -- this test version only previews and generates PDFs.
+  // Saving is paused for now -- this page only previews and generates PDFs.
   const SAVING_ENABLED = false;
 
   const handleSaveQuotation = async () => {
     if (!SAVING_ENABLED) {
-      alert("Saving is turned off in Quotation Beta. Use Preview or Generate PDF.");
+      alert("Saving is turned off in Series Quotation for now. Use Preview or Generate PDF.");
       return;
     }
     if (!quotationData.consigneeName) {
@@ -581,20 +609,12 @@ function Quotation() {
       if (authoritativeQuotationId) {
         const itemsPayload = putPackagingAndFreightLast(quotationData.items || [])
           .filter((it) => it && (it.name || it.code || Number(it.amount) > 0))
-          .map((it, index) => ({
+          .map(toItemRow)
+          .filter(Boolean)
+          .map((row, index) => ({
             quotation_id: authoritativeQuotationId,
             quotation_no: authoritativeQuotationNo,
-            item_code: it.code || null,
-            item_name: it.name || "Item",
-            description: it.description || null,
-            quantity: Number(it.qty) || 0,
-            unit: it.units || "Nos",
-            rate: Number(it.rate) || 0,
-            gst_percent: Number(it.gst) || 0,
-            discount: Number(it.discount) || 0,
-            flat_discount: Number(it.flatDiscount) || 0,
-            amount: Number(it.amount) || 0,
-            is_freight: Boolean(it.isFreight),
+            ...row,
             item_order: index,
           }));
 
@@ -783,7 +803,7 @@ function Quotation() {
             className="bg-primary hover:opacity-90 text-white px-4 py-2 rounded-md flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={handleSaveQuotation}
             disabled={!SAVING_ENABLED || isSubmitting || isGenerating}
-            title={SAVING_ENABLED ? undefined : "Saving is turned off in Quotation Beta"}
+            title={SAVING_ENABLED ? undefined : "Saving is turned off in Series Quotation for now"}
           >
             {isSubmitting ? (
               <>

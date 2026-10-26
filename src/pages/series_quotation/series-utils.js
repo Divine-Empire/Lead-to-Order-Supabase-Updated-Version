@@ -18,8 +18,8 @@ export const SERIES = [
 export const emptySeries = () => ({
   spec: "",
   remarks: "",
-  image: "", // photo link (sheet)
-  video: "", // video link (sheet)
+  image: "", // image link (item master)
+  video: "", // video link (item master)
   rate: 0,
   discount: 0,
   flatDiscount: 0,
@@ -49,9 +49,12 @@ export const getSeries = (item, key) => {
     block.amount = calcSeriesAmount(item.qty, block);
     return block;
   }
-  if (key === "lite" && item && !isSimpleItem(item) && num(item.rate) > 0) {
+  const savedKey = item?.seriesType === "ut_series" ? "ultra" : "lite";
+  if (key === savedKey && item && !isSimpleItem(item) && num(item.rate) > 0) {
     return {
       ...emptySeries(),
+      spec: item.description || "",
+      remarks: item.remarks || "",
       rate: item.rate,
       discount: item.discount,
       flatDiscount: item.flatDiscount,
@@ -89,9 +92,10 @@ export const updateSeriesField = (item, key, field, value) => {
 // Common qty changed: both series amounts follow it.
 export const updateItemQty = (item, qty) => withDerived({ ...item, qty });
 
-// Fill a row from a sheet item (see item-master-service.js). Both series are
-// pre-filled with the sheet's spec / rate / remarks; a series with no rate is
-// "not offered". Nothing is selected by default.
+// Fill a row from an item master item ({ name, code, unit, lite, ultra } --
+// see utils/itemCatalog.js). Both series are pre-filled with the item's spec /
+// rate / remarks / image / video; a series with no rate is "not offered".
+// GST stays whatever the user picked on the row. Nothing is selected by default.
 export const applySheetItemToRow = (row, sheetItem, { code, qty } = {}) => {
   const nextQty = qty ?? (num(row.qty) > 0 ? row.qty : 1);
   const build = (s) => {
@@ -109,14 +113,15 @@ export const applySheetItemToRow = (row, sheetItem, { code, qty } = {}) => {
   return withDerived({
     ...row,
     name: sheetItem.name,
-    code: code ?? row.code ?? "",
-    gst: sheetItem.gst ?? row.gst ?? 18,
+    code: code ?? sheetItem.code ?? row.code ?? "",
+    gst: row.gst ?? 18,
+    units: sheetItem.unit || row.units || "Nos",
     qty: nextQty,
     series: { lite: build(sheetItem.lite), ultra: build(sheetItem.ultra) },
   });
 };
 
-// Case-insensitive lookup of a sheet item by name.
+// Case-insensitive lookup of an item by name.
 export const findSheetItem = (sheetItems, name) => {
   const key = (name || "").toLowerCase().trim();
   if (!key) return null;
@@ -157,8 +162,8 @@ export const mergeSeriesSettings = (row, existing) => {
 };
 
 // A row for an item name coming from a lead / enquiry: matched against the
-// sheet (both series pre-filled, common qty = enquiry qty); if the sheet
-// doesn't know the item it becomes a manual row.
+// item master (both series pre-filled, common qty = enquiry qty); an item
+// that isn't in the item master becomes a manual row.
 export const buildRowFromName = ({ id, name, qty, code, sheetItems }) => {
   const base = { ...newSeriesItem(id), name, code: code || "", qty: qty || 1 };
   const sheetItem = findSheetItem(sheetItems, name);

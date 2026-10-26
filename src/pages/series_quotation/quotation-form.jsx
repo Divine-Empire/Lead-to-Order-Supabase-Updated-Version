@@ -12,7 +12,8 @@ import SpecialOfferSection from "./special-offer-section";
 import { getCompanyPrefix, getNextQuotationNumber, isValidSalesTypePrefix } from "./quotation-service";
 import { getStateCodeFromName } from "../../utils/gstStateCodes";
 import supabase from "../../utils/supabase";
-import { useItemMaster } from "./item-master-service";
+import { useItemMaster, loadItemsByName } from "./item-master-service";
+import { findCatalogItem } from "../../utils/itemCatalog";
 import { buildRowFromName, mergeSeriesSettings } from "./series-utils";
 
 const QuotationForm = ({
@@ -57,20 +58,12 @@ const QuotationForm = ({
     "Select Reference",
   ]);
   const [preparedByOptions, setPreparedByOptions] = useState([""]);
-  const [productCodes, setProductCodes] = useState([]);
-  const [productNames, setProductNames] = useState([]);
-  const [productData, setProductData] = useState({});
   const [isItemsLoading, setIsItemsLoading] = useState(false);
-  // item_master sheet (Lite Plus / Ultra Tough prices, specs, remarks)
+  // Item master (lto_items list; Lite / Ultra details from lto_item_specs)
   const itemMaster = useItemMaster();
 
-  // Item code from the existing item master (lto_items), matched by name.
-  const lookupCode = (name) => {
-    if (!name) return "";
-    if (productData[name]?.code) return productData[name].code;
-    const key = Object.keys(productData).find((k) => k.toLowerCase().trim() === name.toLowerCase().trim());
-    return key ? productData[key].code || "" : "";
-  };
+  // Item code from the item master, matched by name.
+  const lookupCode = (name) => findCatalogItem(itemMaster.items, name)?.code || "";
 
   // Lead number states
   const [showLeadNoDropdown, setShowLeadNoDropdown] = useState(false);
@@ -87,7 +80,6 @@ const QuotationForm = ({
   // Fetch data from dedicated tables:
   // - consignor_details → state/consignor info
   // - client_master     → consignee companies
-  // - items             → product codes, names, rates
   // - dropdown          → prepared_by names + reference (sp) info
   useEffect(() => {
     const fetchDropdownData = async () => {
@@ -132,45 +124,6 @@ const QuotationForm = ({
         }
       } catch (err) {
         console.error("Client master fetch exception:", err);
-      }
-
-      // ── 3. Fetch items from items table in chunks (with column fallback) ──────
-      let itemsData = [];
-      try {
-        let from = 0;
-        const step = 500;
-        let fetchMore = true;
-
-        while (fetchMore) {
-          let res = await supabase
-            .from("lto_items")
-            .select("item_code, item_name, description, rate, reseller_rate, warranty")
-            .range(from, from + step - 1);
-
-          // Fallback if reseller_rate or warranty columns don't exist yet in DB
-          if (res.error) {
-            console.warn("items query with reseller_rate/warranty failed, falling back to basic columns:", res.error.message);
-            res = await supabase
-              .from("lto_items")
-              .select("item_code, item_name, description, rate")
-              .range(from, from + step - 1);
-          }
-
-          if (res.error) {
-            console.error("Error fetching items chunk:", res.error);
-            break;
-          }
-
-          if (res.data && res.data.length > 0) {
-            itemsData = [...itemsData, ...res.data];
-            from += step;
-            if (res.data.length < step) fetchMore = false;
-          } else {
-            fetchMore = false;
-          }
-        }
-      } catch (err) {
-        console.error("Items fetch exception:", err);
       }
 
       // ── 4. Fetch prepared_by from dropdown table ──────────────────────────────
@@ -277,40 +230,11 @@ const QuotationForm = ({
         });
       }
 
-      // ── Build product codes/names from items table ──────────────────────────
-      const codes = ["Select Code"];
-      const names = ["Select Product"];
-      const productDataMap = {};
-
-      if (itemsData && itemsData.length > 0) {
-        itemsData.forEach((row) => {
-          const code = row.item_code;
-          const name = row.item_name;
-          const description = row.description || "";
-          const rate = parseFloat(row.rate) || 0;
-          const reseller_rate = parseFloat(row.reseller_rate) || 0;
-          const warranty = row.warranty || "";
-
-          if (code && !codes.includes(code)) codes.push(code);
-          if (name && !names.includes(name)) names.push(name);
-
-          if (code) {
-            productDataMap[code] = { name, description, rate, reseller_rate, warranty };
-          }
-          if (name) {
-            productDataMap[name] = { code, description, rate, reseller_rate, warranty };
-          }
-        });
-      }
-
       // ── Apply all state updates ─────────────────────────────────────────────
       setStateOptions(stateOptionsData);
       setCompanyOptions(companyOptionsData);
       setReferenceOptions(referenceOptionsData);
       setPreparedByOptions(preparedByOptionsData);
-      setProductCodes(codes);
-      setProductNames(names);
-      setProductData(productDataMap);
 
       setDropdownData({
         states: stateDetailsMap,
@@ -562,7 +486,7 @@ const QuotationForm = ({
 
       if (isValidSalesTypePrefix(ownSalesType)) {
         companyPrefix = ownSalesType.trim().toUpperCase();
-        // BETA is read-only against the database: the client_master sales-type
+        // Series Quotation is read-only against the database: the client_master sales-type
         // sync (a write) that the live Quotation page does here is skipped.
       } else {
         companyPrefix = (await getCompanyPrefix(companyName)) || "NBD";
@@ -638,9 +562,16 @@ const QuotationForm = ({
       if (key) existingItemsByName.set(key, it);
     });
 
-    // Helper: map a raw item {name, qty} to a full quotation row with product lookup
+    // Lite / Ultra details for every item on the lead/enquiry, one request.
+    let fullItems = [];
+    try {
+      fullItems = await loadItemsByName(itemMaster.items, autoItems.map((i) => i.name));
+    } catch (specErr) {
+      console.error("Error loading item details:", specErr);
+    }
+
     // Helper: map a raw item {name, qty} to a full two-series quotation row.
-    // Rates, specs and remarks come from the item_master sheet; the user's
+    // Rates, specs and remarks come from the item master; the user's
     // existing discounts / selection (same item name) are carried over.
     const mapItemToQuotationRow = (item, index) => {
       if (item.name === "Freight") {
@@ -654,7 +585,7 @@ const QuotationForm = ({
         name: item.name,
         qty: item.qty,
         code: lookupCode(item.name),
-        sheetItems: itemMaster.items,
+        sheetItems: fullItems,
       });
       return mergeSeriesSettings(row, existingItemsByName.get((item.name || "").toLowerCase().trim()));
     };
@@ -891,6 +822,7 @@ const QuotationForm = ({
         if (hasOnlyDefaultItems || quotationData.items.length === 0) {
 
           // Clear existing items and add new ones
+          const fullItems = await loadItemsByName(itemMaster.items, autoItems.map((i) => i.name));
           const newItems = autoItems.map((item, index) =>
             item.name === "Freight"
               ? {
@@ -902,7 +834,7 @@ const QuotationForm = ({
                   name: item.name,
                   qty: item.qty,
                   code: lookupCode(item.name),
-                  sheetItems: itemMaster.items,
+                  sheetItems: fullItems,
                 })
           );
 
@@ -977,9 +909,6 @@ const QuotationForm = ({
         handleSpecialDiscountChange={handleSpecialDiscountChangeWrapper}
         specialDiscount={specialDiscount}
         setSpecialDiscount={setSpecialDiscount}
-        productCodes={productCodes}
-        productNames={productNames}
-        productData={productData}
         setQuotationData={setQuotationData}
         isLoading={isItemsLoading}
         hiddenColumns={hiddenColumns}

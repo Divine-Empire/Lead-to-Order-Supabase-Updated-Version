@@ -23,10 +23,11 @@ const CallTrackerForm = lazy(() => import("./pages/call-tracker/CallTrackerForm"
 const EnquiryTracker = lazy(() => import("./pages/enquiry-tracker/EnquiryTracker"))
 const EnquiryTrackerForm = lazy(() => import("./pages/enquiry-tracker/EnquiryTrackerForm"))
 const Quotation = lazy(() => import("./pages/Quotation/Quotation"))
-const QuotationBeta = lazy(() => import("./pages/quotation_beta/Quotation"))
+const SeriesQuotation = lazy(() => import("./pages/series_quotation/Quotation"))
 const Report = lazy(() => import("./pages/report/Report"))
 const LostDetailsPage = lazy(() => import("./pages/report/LostDetailsPage"))
 const Master = lazy(() => import("./pages/Master/Master"))
+const ItemDetails = lazy(() => import("./pages/Master/ItemDetails"))
 const Setting = lazy(() => import("./pages/Setting/Setting"))
 
 const RouteFallback = () => (
@@ -507,13 +508,14 @@ function App() {
                     }
                   />
                   <Route
-                    path="/quotation-beta"
+                    path="/series-quotation"
                     element={
-                      <ProtectedRoute adminOnly={true}>
-                        <QuotationBeta key="quotation-beta" />
+                      <ProtectedRoute>
+                        <SeriesQuotation key="series-quotation" />
                       </ProtectedRoute>
                     }
                   />
+                  <Route path="/quotation-beta" element={<Navigate to="/series-quotation" replace />} />
                   <Route
                     path="/report"
                     element={
@@ -543,6 +545,14 @@ function App() {
                     element={
                       <ProtectedRoute>
                         <Master />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/master/items/:id"
+                    element={
+                      <ProtectedRoute adminOnly={true}>
+                        <ItemDetails />
                       </ProtectedRoute>
                     }
                   />

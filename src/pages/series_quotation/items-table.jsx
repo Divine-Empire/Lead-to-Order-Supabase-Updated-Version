@@ -3,6 +3,8 @@ import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useCompressedImage, imageCandidates, isHttpUrl } from "./image-service";
 import { PlusIcon, TrashIcon } from "../../components/Icons";
+import { ITEM_UNITS } from "../../utils/itemCatalog";
+import { loadFullItem } from "./item-master-service";
 import {
   SERIES,
   getSeries,
@@ -17,7 +19,7 @@ import {
 const W_SNO = 48;
 const W_CODE = 112;
 
-const UNITS = ["Nos", "Kg", "Roll", "Rmt", "Ltr", "Bag", "Pair", "Set", "Mtr", "sqmtr", "Box", "Pc"];
+const UNITS = ITEM_UNITS;
 
 // Band colours: Lite Plus uses the brand tint, Ultra Tough a light green.
 const BAND = {
@@ -78,28 +80,35 @@ const blockArrowKeys = (e) => {
   if (e.key === "ArrowUp" || e.key === "ArrowDown") e.preventDefault();
 };
 
-// Type-ahead picker over the item_master sheet. The list is positioned with
+// Type-ahead picker over the item master (name or code). The list is positioned with
 // `fixed` and mounted on document.body: the sticky table cells each create
 // their own stacking context, so a list left inside its cell is painted
 // BEHIND the sticky cells of the rows below it.
 function SheetItemPicker({ item, sheetItems, disabled, onType, onPick }) {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState(null);
+  const [picking, setPicking] = useState(false);
 
   const matches = useMemo(() => {
     const tokens = (item.name || "").toLowerCase().split(/\s+/).filter(Boolean);
     const list = tokens.length
       ? sheetItems.filter((s) => {
-          const hay = s.name.toLowerCase();
+          const hay = `${s.name} ${s.code}`.toLowerCase();
           return tokens.every((t) => hay.includes(t));
         })
       : sheetItems;
     return list.slice(0, 60);
   }, [item.name, sheetItems]);
 
-  const pick = (sheetItem) => {
+  // Selecting loads that item's Lite / Ultra details (one request).
+  const pick = async (entry) => {
     setOpen(false);
-    onPick(sheetItem);
+    setPicking(true);
+    try {
+      await onPick(entry);
+    } finally {
+      setPicking(false);
+    }
   };
 
   return (
@@ -114,8 +123,8 @@ function SheetItemPicker({ item, sheetItems, disabled, onType, onPick }) {
           if (e.key === "Enter" && open && matches.length > 0) { e.preventDefault(); pick(matches[0]); }
         }}
         className="p-1 w-full rounded-md border border-gray-300 focus:border-primary focus:outline-none"
-        placeholder="Search item from sheet"
-        disabled={disabled}
+        placeholder={picking ? "Loading item..." : "Search item by name or code"}
+        disabled={disabled || picking}
         autoComplete="off"
         role="combobox"
         aria-expanded={open}
@@ -133,10 +142,10 @@ function SheetItemPicker({ item, sheetItems, disabled, onType, onPick }) {
             }}
           >
             {matches.length === 0 && (
-              <li className="px-3 py-2 text-sm text-gray-500">No matching item in the sheet</li>
+              <li className="px-3 py-2 text-sm text-gray-500">No matching item in the item master</li>
             )}
             {matches.map((s) => (
-              <li key={s.name}>
+              <li key={s.uuid}>
                 <button
                   type="button"
                   role="option"
@@ -144,11 +153,7 @@ function SheetItemPicker({ item, sheetItems, disabled, onType, onPick }) {
                   className="block w-full px-3 py-2 text-left hover:bg-primary/5 focus:bg-primary/5 focus:outline-none"
                 >
                   <span className="block text-sm text-gray-900">{s.name}</span>
-                  <span className="block text-xs text-gray-500">
-                    Lite {s.lite.rate > 0 ? `₹${money(s.lite.rate)}` : "not offered"}
-                    {" · "}
-                    Ultra {s.ultra.rate > 0 ? `₹${money(s.ultra.rate)}` : "not offered"}
-                  </span>
+                  {s.code && <span className="block text-xs font-mono text-gray-500">{s.code}</span>}
                 </button>
               </li>
             ))}
@@ -469,7 +474,15 @@ const ItemsTable = ({
                 sheetItems={itemMaster.items}
                 disabled={isLoading}
                 onType={(value) => handleItemChange(item.id, "name", value)}
-                onPick={(sheetItem) => handleApplySheetItem(item.id, sheetItem, { code: lookupCode(sheetItem.name) })}
+                onPick={async (entry) => {
+                  try {
+                    const full = await loadFullItem(entry);
+                    if (full) handleApplySheetItem(item.id, full, { code: full.code || lookupCode(full.name) });
+                  } catch (err) {
+                    console.error("Error loading item details:", err);
+                    alert("Couldn't load this item's details. Please try again.");
+                  }
+                }}
               />
             )}
           </td>
@@ -589,11 +602,11 @@ const ItemsTable = ({
           <div>
             <h3 className="text-lg font-medium">Items</h3>
             <p className="text-xs text-gray-500" role="status">
-              {itemMaster.loading && "Loading items from the sheet..."}
-              {!itemMaster.loading && !itemMaster.error && `${itemMaster.items.length} items loaded from the sheet`}
+              {itemMaster.loading && "Loading items..."}
+              {!itemMaster.loading && !itemMaster.error && `${itemMaster.items.length} items in the item master`}
               {itemMaster.error && (
                 <span className="text-destructive">
-                  Couldn't load the item sheet: {itemMaster.error}{" "}
+                  Couldn't load items: {itemMaster.error}{" "}
                   <button type="button" className="underline" onClick={itemMaster.reload}>Retry</button>
                 </span>
               )}
@@ -887,8 +900,8 @@ function HeaderSet({ seriesKey, cols }) {
   );
 }
 
-// One item row. (Remarks come from the sheet and are printed in the preview /
-// PDF under the technical spec; they are not edited here.)
+// One item row. (Spec, rate and remarks are pre-filled from the item master and
+// can be edited per quotation; edits are not written back to the item master.)
 function ItemRows({ item, index, renderLeadingCells, renderSeriesCells, onRemove, canRemove }) {
   return (
     <tr>

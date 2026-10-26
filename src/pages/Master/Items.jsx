@@ -1,43 +1,35 @@
-﻿import { useState, useEffect, useRef, useContext, useMemo, useCallback } from "react";
-import { Plus, Pencil, Trash2, RefreshCw } from "lucide-react";
-import ColumnSelector from "../../components/ColumnSelector";
+﻿import { useState, useEffect, useRef, useContext, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { Plus, Trash2, RefreshCw, ArrowRight } from "lucide-react";
 import { FilterSearch } from "../../components/FilterBar";
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
 import supabase from "../../utils/supabase";
 import { AuthContext } from "../../App";
 import useConfirmDialog from "../../components/useConfirmDialog";
+import { ITEM_UNITS, addItem, itemErrorMessage } from "../../utils/itemCatalog";
 
+const EMPTY_FORM = { item_name: "", item_code: "", unit: "Nos" };
+const HEADERS = ["Item Code", { label: "Item Name", className: "!text-left" }, "Actions"];
+
+// Master > Items: list + Add Item. Full details (Basic / Lite / UT series)
+// are edited on the item's own page, /master/items/:id (ItemDetails.jsx).
 function Items() {
-  const { showNotification } = useContext(AuthContext) || {};
+  const { showNotification, currentUser } = useContext(AuthContext) || {};
   const { askConfirm, confirmDialog } = useConfirmDialog();
+  const navigate = useNavigate();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [itemsData, setItemsData] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState("add"); // "add" or "edit"
-  const [currentItem, setCurrentItem] = useState(null);
+  const [formData, setFormData] = useState(EMPTY_FORM);
 
-  // Column Visibility State
-  const [showColumnToggle, setShowColumnToggle] = useState(false);
-  const columnToggleRef = useRef(null);
-  const [hiddenColumns, setHiddenColumns] = useState([]);
-
-  // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [totalResults, setTotalResults] = useState(0);
-
-  // Form State
-  const [formData, setFormData] = useState({
-    item_name: "",
-    item_code: "",
-    rate: "",
-    description: ""
-  });
 
   const fetchIdRef = useRef(0);
 
@@ -48,36 +40,21 @@ function Items() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (columnToggleRef.current && !columnToggleRef.current.contains(event.target)) {
-        setShowColumnToggle(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  // True server-side paginated + filtered fetch (only the current page's rows
-  // ever land in memory, replacing the old "load all 3,500+ rows" approach).
+  // Server-side paginated + filtered fetch (only the current page is loaded).
   const fetchItems = useCallback(async () => {
     fetchIdRef.current += 1;
     const currentFetchId = fetchIdRef.current;
-
     setIsLoading(true);
 
     try {
       const from = (currentPage - 1) * itemsPerPage;
       const to = from + itemsPerPage - 1;
 
-      let query = supabase.from("lto_items").select("*", { count: "exact" });
-
+      let query = supabase.from("lto_items").select("uuid, item_name, item_code", { count: "exact" });
       if (debouncedSearch) {
         const term = `%${debouncedSearch}%`;
-        // rate is numeric and can't take ilike, so text search covers name/code/description only
-        query = query.or(`item_name.ilike.${term},item_code.ilike.${term},description.ilike.${term}`);
+        query = query.or(`item_name.ilike.${term},item_code.ilike.${term}`);
       }
-
       query = query.order("item_name", { ascending: true }).range(from, to);
 
       const { data, error, count } = await query;
@@ -88,13 +65,9 @@ function Items() {
       setTotalResults(count || 0);
     } catch (error) {
       console.error("Error fetching items:", error);
-      if (showNotification) {
-        showNotification("Failed to fetch items: " + error.message, "error");
-      }
+      showNotification?.("Failed to fetch items: " + error.message, "error");
     } finally {
-      if (currentFetchId === fetchIdRef.current) {
-        setIsLoading(false);
-      }
+      if (currentFetchId === fetchIdRef.current) setIsLoading(false);
     }
   }, [showNotification, currentPage, itemsPerPage, debouncedSearch]);
 
@@ -102,255 +75,126 @@ function Items() {
     fetchItems();
   }, [fetchItems]);
 
-  // Reset to page 1 whenever the search term changes
   useEffect(() => {
     setCurrentPage(1);
   }, [debouncedSearch]);
 
-  const handleOpenModal = useCallback((mode, item = null) => {
-    setModalMode(mode);
-    setCurrentItem(item);
-    if (item && mode === "edit") {
-      setFormData({
-        item_name: item.item_name || "",
-        item_code: item.item_code || "",
-        rate: item.rate !== null && item.rate !== undefined ? String(item.rate) : "",
-        description: item.description || ""
-      });
-    } else {
-      setFormData({
-        item_name: "",
-        item_code: "",
-        rate: "",
-        description: ""
-      });
-    }
-    setIsModalOpen(true);
-  }, []);
-
   const handleCloseModal = useCallback(() => {
     setIsModalOpen(false);
-    setCurrentItem(null);
-    setFormData({
-      item_name: "",
-      item_code: "",
-      rate: "",
-      description: ""
-    });
+    setFormData(EMPTY_FORM);
   }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.item_name.trim()) {
-      if (showNotification) showNotification("Item Name is required", "error");
+    const name = formData.item_name.trim();
+    const code = formData.item_code.trim();
+    if (!name || !code) {
+      showNotification?.("Item Name and Item Code are required", "error");
       return;
     }
 
-    // Edit mode must always operate on a specific, known uuid -- never fall
-    // back to name/code matching, since duplicate names can exist in the data.
-    if (modalMode === "edit" && !currentItem?.uuid) {
-      if (showNotification) showNotification("Cannot save: this item has no uuid. Please refresh and try again.", "error");
-      return;
-    }
-
-    setIsLoading(true);
-    const payload = {
-      item_name: formData.item_name.trim(),
-      item_code: formData.item_code.trim() || null,
-      rate: formData.rate !== "" && formData.rate !== null ? parseFloat(formData.rate) : null,
-      description: formData.description.trim() || null
-    };
-
+    setIsSaving(true);
     try {
-      if (modalMode === "add") {
-        const { data, error } = await supabase.from("lto_items").insert([payload]).select().single();
-        if (error) throw error;
-        if (!data) throw new Error("Insert did not return the new row.");
-        if (showNotification) showNotification("Item added successfully", "success");
-      } else {
-        // Re-check the row still exists at this uuid before updating, so a
-        // stale/deleted currentItem can't silently update the wrong record.
-        const { data: existing, error: checkError } = await supabase
-          .from("lto_items")
-          .select("uuid")
-          .eq("uuid", currentItem.uuid)
-          .maybeSingle();
-        if (checkError) throw checkError;
-        if (!existing) {
-          throw new Error("This item no longer exists in the database (it may have been deleted). Please refresh.");
-        }
-
-        const { data, error } = await supabase
-          .from("lto_items")
-          .update(payload)
-          .eq("uuid", currentItem.uuid)
-          .select()
-          .single();
-        if (error) throw error;
-        if (!data) throw new Error("Update did not affect any row.");
-        if (showNotification) showNotification("Item updated successfully", "success");
-      }
-
-      await fetchItems();
+      await addItem({ name, code, unit: formData.unit, updatedBy: currentUser?.fullName || currentUser?.username });
+      showNotification?.("Item added successfully", "success");
       handleCloseModal();
+      await fetchItems();
     } catch (err) {
-      console.error("Error saving item:", err);
-      const message = err?.code === "23505"
-        ? `An item named "${payload.item_name}" already exists. Choose a different name.`
-        : (err.message || String(err));
-      if (showNotification) {
-        showNotification("Failed to save item: " + message, "error");
-      } else {
-        showNotification("Failed to save item: " + message, "error");
-      }
-      setIsLoading(false);
+      console.error("Error adding item:", err);
+      showNotification?.("Failed to add item: " + itemErrorMessage(err), "error");
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const handleDelete = useCallback(async (item) => {
-    if (!item?.uuid) {
-      if (showNotification) showNotification("Cannot delete: this item has no uuid.", "error");
-      return;
-    }
-    askConfirm({ title: "Delete item?", message: `Are you sure you want to delete ${item.item_name}?`, confirmText: "Delete" }, async () => {
-      setIsLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from("lto_items")
-          .delete()
-          .eq("uuid", item.uuid)
-          .select()
-          .maybeSingle();
-        if (error) throw error;
-        if (!data) {
-          throw new Error("This item was already removed (no matching uuid found).");
+  const handleDelete = useCallback((item) => {
+    if (!item?.uuid) return;
+    askConfirm(
+      {
+        title: "Delete item?",
+        message: `Are you sure you want to delete ${item.item_name}? Its Lite / UT series details will be deleted too.`,
+        confirmText: "Delete",
+      },
+      async () => {
+        setIsLoading(true);
+        try {
+          const { data, error } = await supabase.from("lto_items").delete().eq("uuid", item.uuid).select("uuid").maybeSingle();
+          if (error) throw error;
+          if (!data) throw new Error("This item was already removed.");
+          showNotification?.("Item deleted successfully", "success");
+          await fetchItems();
+        } catch (err) {
+          console.error("Error deleting item:", err);
+          showNotification?.("Failed to delete item: " + (err.message || err), "error");
+          setIsLoading(false);
         }
-        if (showNotification) showNotification("Item deleted successfully", "success");
-        await fetchItems();
-      } catch (err) {
-        console.error("Error deleting item:", err);
-        if (showNotification) showNotification("Failed to delete item: " + (err.message || err), "error");
-        setIsLoading(false);
       }
-    });
-  }, [showNotification, fetchItems]);
-
-  // Header column configuration
-  const allHeaders = useMemo(() => [
-    { key: "actions", label: "Actions" },
-    { key: "item_name", label: "Item Name" },
-    { key: "item_code", label: "Item Code" },
-    { key: "rate", label: "Rate (₹)" },
-    { key: "description", label: "Description" }
-  ], []);
-
-  const visibleHeaders = useMemo(() => allHeaders.filter(col => !hiddenColumns.includes(col.key)), [allHeaders, hiddenColumns]);
-  const headers = useMemo(() => visibleHeaders.map(col => col.label), [visibleHeaders]);
-
-  const renderRow = useCallback((row, index) => {
-    const columnCells = {
-      actions: (
-        <td key="actions" className="px-4 py-3 whitespace-nowrap text-sm text-center">
-          <div className="flex items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={() => handleOpenModal("edit", row)}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-info transition-colors hover:bg-accent"
-              aria-label={`Edit ${row.item_name}`}
-              title="Edit Item"
-            >
-              <Pencil size={16} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDelete(row)}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-destructive transition-colors hover:bg-destructive/10"
-              aria-label={`Delete ${row.item_name}`}
-              title="Delete Item"
-            >
-              <Trash2 size={16} aria-hidden="true" />
-            </button>
-          </div>
-        </td>
-      ),
-      item_name: (
-        <td key="item_name" className="px-4 py-3 whitespace-nowrap text-sm font-semibold text-gray-900 text-center">
-          {row.item_name}
-        </td>
-      ),
-      item_code: (
-        <td key="item_code" className="px-4 py-3 whitespace-nowrap text-sm font-semibold text-primary text-center">
-          {row.item_code ? (
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary text-xs font-mono font-semibold">
-              {row.item_code}
-            </span>
-          ) : (
-            <span className="text-gray-400 font-normal italic">-</span>
-          )}
-        </td>
-      ),
-      rate: (
-        <td key="rate" className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900 text-center">
-          {row.rate !== null && row.rate !== undefined ? (
-            <span>₹{Number(row.rate).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-          ) : (
-            <span className="text-gray-400 font-normal italic">-</span>
-          )}
-        </td>
-      ),
-      description: (
-        <td key="description" className="px-4 py-3 text-sm text-gray-600 min-w-[200px] truncate max-w-xs text-center" title={row.description}>
-          {row.description || <span className="text-gray-400 font-normal italic">-</span>}
-        </td>
-      )
-    };
-
-    return (
-      <tr key={row.uuid || index}>
-        {visibleHeaders.map(col => columnCells[col.key])}
-      </tr>
     );
-  }, [visibleHeaders, handleOpenModal, handleDelete]);
+  }, [askConfirm, showNotification, fetchItems]);
 
-  const renderCard = useCallback((item, index) => {
-    return (
-      <div key={item.uuid || index} className="bg-card p-4 rounded-lg border">
-        <div className="flex justify-between items-start mb-2">
-          <div className="flex flex-col">
-            <span className="font-semibold text-gray-800">{item.item_name}</span>
-            {item.item_code && (
-              <span className="text-xs font-semibold font-mono text-primary mt-0.5">
-                Code: {item.item_code}
-              </span>
-            )}
-          </div>
-          <span className="text-sm font-bold text-gray-900">
-            {item.rate !== null && item.rate !== undefined ? `₹${Number(item.rate).toLocaleString('en-IN')}` : "-"}
-          </span>
-        </div>
-        {item.description && (
-          <div className="text-sm text-gray-600 mb-3 line-clamp-2">
-            {item.description}
-          </div>
-        )}
-        <div className="flex justify-end gap-2 mt-2 pt-2 border-t">
-          <button type="button" onClick={() => handleOpenModal("edit", item)} className="flex h-8 w-8 items-center justify-center rounded-md text-info hover:bg-accent" aria-label={`Edit ${item.item_name}`}><Pencil size={16} aria-hidden="true" /></button>
-          <button type="button" onClick={() => handleDelete(item)} className="flex h-8 w-8 items-center justify-center rounded-md text-destructive hover:bg-destructive/10" aria-label={`Delete ${item.item_name}`}><Trash2 size={16} aria-hidden="true" /></button>
-        </div>
+  const openItem = useCallback((item) => navigate(`/master/items/${item.uuid}`), [navigate]);
+
+  const codeBadge = (code) =>
+    code ? (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary text-xs font-mono font-semibold">
+        {code}
+      </span>
+    ) : (
+      <span className="text-gray-400 font-normal italic">-</span>
+    );
+
+  const actionButtons = (item) => (
+    <div className="flex items-center justify-center gap-2">
+      <button
+        type="button"
+        onClick={() => handleDelete(item)}
+        className="flex h-8 w-8 items-center justify-center rounded-md text-destructive transition-colors hover:bg-destructive/10"
+        aria-label={`Delete ${item.item_name}`}
+        title="Delete item"
+      >
+        <Trash2 size={16} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        onClick={() => openItem(item)}
+        className="flex h-8 w-8 items-center justify-center rounded-md text-primary transition-colors hover:bg-primary/10"
+        aria-label={`Open details of ${item.item_name}`}
+        title="Open item details"
+      >
+        <ArrowRight size={16} aria-hidden="true" />
+      </button>
+    </div>
+  );
+
+  const renderRow = (row, index) => (
+    <tr key={row.uuid || index}>
+      <td className="px-4 py-3 whitespace-nowrap text-sm text-center w-40">{codeBadge(row.item_code)}</td>
+      <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-left whitespace-normal break-words">{row.item_name}</td>
+      <td className="px-4 py-3 whitespace-nowrap text-sm text-center w-32">{actionButtons(row)}</td>
+    </tr>
+  );
+
+  const renderCard = (item, index) => (
+    <div key={item.uuid || index} className="bg-card p-4 rounded-lg border">
+      <div className="flex flex-col gap-1">
+        <span className="font-semibold text-gray-800 break-words">{item.item_name}</span>
+        <span>{codeBadge(item.item_code)}</span>
       </div>
-    );
-  }, [handleOpenModal, handleDelete]);
+      <div className="flex justify-end gap-2 mt-2 pt-2 border-t">{actionButtons(item)}</div>
+    </div>
+  );
+
+  const inputClass = "h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none";
 
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 gap-3">
-      {/* Top Filter & Controls Section */}
       <div className="flex flex-wrap items-center gap-2 shrink-0 w-full">
         <h2 className="mr-2 text-base font-semibold text-foreground shrink-0">Items Master</h2>
 
         <FilterSearch
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Search items by name, code, rate..."
+          placeholder="Search items by name or code..."
           className="max-w-[320px]"
         />
 
@@ -375,26 +219,9 @@ function Items() {
             <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} aria-hidden="true" />
           </button>
 
-          {/* Column visibility */}
-          <div ref={columnToggleRef}>
-            <ColumnSelector
-              idPrefix="items-col"
-              options={allHeaders}
-              visible={Object.fromEntries(allHeaders.map((col) => [col.key, !hiddenColumns.includes(col.key)]))}
-              onToggle={(key) =>
-                setHiddenColumns((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
-              }
-              onSelectAll={() =>
-                setHiddenColumns(hiddenColumns.length === 0 ? allHeaders.map((col) => col.key) : [])
-              }
-              open={showColumnToggle}
-              onOpenChange={setShowColumnToggle}
-            />
-          </div>
-
           <button
             type="button"
-            onClick={() => handleOpenModal("add")}
+            onClick={() => setIsModalOpen(true)}
             className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             <Plus size={16} aria-hidden="true" />
@@ -403,17 +230,16 @@ function Items() {
         </div>
       </div>
 
-      {/* Main Table Area */}
       <div className="flex-1 min-h-0 overflow-hidden relative">
         <DataTable
           ariaLabel="Items"
           emptyTitle="No items found"
           emptyDescription="Add an item or adjust your search."
-          headers={headers}
+          headers={HEADERS}
           data={itemsData}
           renderRow={renderRow}
           renderCard={renderCard}
-          minWidth="1000px"
+          minWidth="min-w-0"
           currentPage={currentPage}
           totalPages={Math.ceil(totalResults / itemsPerPage) || 1}
           itemsPerPage={itemsPerPage}
@@ -424,63 +250,47 @@ function Items() {
         />
       </div>
 
-      {/* Add / Edit Modal */}
       <ModalForm
         isOpen={isModalOpen}
         onClose={handleCloseModal}
-        title={modalMode === "add" ? "Add Item" : "Edit Item"}
+        title="Add Item"
         onSubmit={handleSubmit}
+        submitText={isSaving ? "Adding..." : "Add Item"}
+        submitDisabled={isSaving}
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-2 col-span-1 md:col-span-2">
-            <label htmlFor="item-field-1" className="block text-sm font-medium text-foreground">Item Name *</label>
+          <div className="space-y-2 md:col-span-2">
+            <label htmlFor="item-field-name" className="block text-sm font-medium text-foreground">Item Name *</label>
             <input
-              id="item-field-1"
+              id="item-field-name"
               type="text"
               required
-              placeholder="e.g. Solar Panel 400W"
               value={formData.item_name}
               onChange={(e) => setFormData({ ...formData, item_name: e.target.value })}
-              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+              className={inputClass}
             />
           </div>
-
           <div className="space-y-2">
-            <label htmlFor="item-field-2" className="block text-sm font-medium text-foreground">Item Code</label>
+            <label htmlFor="item-field-code" className="block text-sm font-medium text-foreground">Item Code *</label>
             <input
-              id="item-field-2"
+              id="item-field-code"
               type="text"
-              placeholder="e.g. ITM-001"
+              required
               value={formData.item_code}
               onChange={(e) => setFormData({ ...formData, item_code: e.target.value })}
-              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+              className={inputClass}
             />
           </div>
-
           <div className="space-y-2">
-            <label htmlFor="item-field-3" className="block text-sm font-medium text-foreground">Rate (₹)</label>
-            <input
-              id="item-field-3"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="e.g. 1500.00"
-              value={formData.rate}
-              onChange={(e) => setFormData({ ...formData, rate: e.target.value })}
-              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
-            />
-          </div>
-
-          <div className="space-y-2 col-span-1 md:col-span-2">
-            <label htmlFor="item-field-4" className="block text-sm font-medium text-foreground">Description</label>
-            <textarea
-              id="item-field-4"
-              rows={3}
-              placeholder="Enter additional details or specifications..."
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              className="w-full rounded-md border border-input bg-card px-3 py-2 text-sm focus:border-primary focus:outline-none resize-none"
-            />
+            <label htmlFor="item-field-unit" className="block text-sm font-medium text-foreground">Unit</label>
+            <select
+              id="item-field-unit"
+              value={formData.unit}
+              onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+              className={inputClass}
+            >
+              {ITEM_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
           </div>
         </div>
       </ModalForm>

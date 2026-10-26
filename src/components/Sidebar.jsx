@@ -199,7 +199,7 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     );
 
     // Exact match or a sub-path -- plain startsWith would light up both
-    // "/quotation" and "/quotation-beta".
+    // "/quotation" and a longer path that starts with it.
     const isActive = (item) => (item.href === "/" ? location.pathname === "/" : location.pathname === item.href || location.pathname.startsWith(`${item.href}/`))
     const countFor = (href) =>
         href === "/call-tracker" ? counts.callTracker : href === "/enquiry-tracker" ? counts.enquiryTracker : null
@@ -212,8 +212,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         { href: "/call-tracker", label: "Call Tracker", icon: PhoneCallIcon },
         { href: "/enquiry-tracker", label: "Enquiry Tracker", icon: BarChartIcon },
         { href: "/quotation", label: "Quotation", icon: FileTextIcon },
-        // Beta (admin only): local test version of the landscape two-series quotation.
-        ...(isAdmin && isAdmin() ? [{ href: "/quotation-beta", label: "Quotation Beta", icon: FileTextIcon }] : []),
+        // Landscape two-series (Lite Plus / Ultra Tough) quotation.
+        { href: "/series-quotation", label: "Series Quotation", icon: FileTextIcon },
         { href: "/report", label: "Report", icon: ShieldIcon },
         { isMaster: true, label: "Master Data", icon: DatabaseIcon },
     ];

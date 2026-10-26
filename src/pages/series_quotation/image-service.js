@@ -1,4 +1,4 @@
-// Item photos for the beta quotation. The sheet holds a link per series; the
+// Item photos for Series Quotation. The item master holds a link per series; the
 // image is downloaded in the browser and shrunk hard (small JPEG data URL) so
 // the form, the preview and the generated PDF stay light. The original link is
 // always kept: clicking a thumbnail opens it in a new tab.

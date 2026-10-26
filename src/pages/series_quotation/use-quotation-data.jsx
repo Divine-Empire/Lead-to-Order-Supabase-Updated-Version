@@ -363,7 +363,7 @@ export const useQuotationData = (initialSpecialDiscount = 0) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [specialDiscount]);
 
-  // Fill a row from an item_master sheet item.
+  // Fill a row from an item master item.
   const handleApplySheetItem = useCallback((id, sheetItem, options) => {
     setQuotationData((prev) =>
       withRecalculatedTotals(

@@ -119,7 +119,8 @@ const QuotationForm = ({
         console.error("Client master fetch exception:", err);
       }
 
-      // ── 3. Fetch items from items table in chunks (with column fallback) ──────
+      // ── 3. Fetch items + their 'basic' spec row (rate / reseller rate /
+      //       technical specs) in chunks -- see Database/17_item_specs.sql ──
       let itemsData = [];
       try {
         let from = 0;
@@ -127,19 +128,11 @@ const QuotationForm = ({
         let fetchMore = true;
 
         while (fetchMore) {
-          let res = await supabase
+          const res = await supabase
             .from("lto_items")
-            .select("item_code, item_name, description, rate, reseller_rate, warranty")
+            .select("item_code, item_name, lto_item_specs(rate, reseller_rate, technical_specs)")
+            .eq("lto_item_specs.type", "basic")
             .range(from, from + step - 1);
-
-          // Fallback if reseller_rate or warranty columns don't exist yet in DB
-          if (res.error) {
-            console.warn("items query with reseller_rate/warranty failed, falling back to basic columns:", res.error.message);
-            res = await supabase
-              .from("lto_items")
-              .select("item_code, item_name, description, rate")
-              .range(from, from + step - 1);
-          }
 
           if (res.error) {
             console.error("Error fetching items chunk:", res.error);
@@ -147,7 +140,19 @@ const QuotationForm = ({
           }
 
           if (res.data && res.data.length > 0) {
-            itemsData = [...itemsData, ...res.data];
+            itemsData = [
+              ...itemsData,
+              ...res.data.map(({ lto_item_specs: specs, ...row }) => {
+                const basic = (specs && specs[0]) || {};
+                return {
+                  ...row,
+                  description: basic.technical_specs || "",
+                  rate: basic.rate,
+                  reseller_rate: basic.reseller_rate,
+                  warranty: "",
+                };
+              }),
+            ];
             from += step;
             if (res.data.length < step) fetchMore = false;
           } else {

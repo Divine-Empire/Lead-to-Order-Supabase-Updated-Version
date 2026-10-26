@@ -99,7 +99,9 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
         const isFreight = item.is_freight || item.isFreight || item.item_name === "Freight" || item.name === "Freight";
         const itemName = item.item_name || item.name || "";
         const itemCode = item.item_code || item.code || "";
-        const desc = item.description || "";
+        const desc = item.technical_specs ?? item.description ?? "";
+        const remarks = item.remarks || "";
+        const seriesType = item.type || "basic";
         const qty = item.quantity !== undefined ? item.quantity : (item.qty !== undefined ? item.qty : 1);
         const units = item.unit || item.units || "Nos";
         const rate = item.rate || 0;
@@ -139,6 +141,8 @@ export const loadQuotationDataByNumber = async (quotationNo) => {
           flatDiscount,
           amount,
           isFreight: false,
+          remarks,
+          seriesType,
         };
       });
     }
