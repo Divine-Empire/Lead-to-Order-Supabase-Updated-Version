@@ -1,13 +1,14 @@
 ﻿import { useState, useEffect, useRef, useContext, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Trash2, RefreshCw, ArrowRight } from "lucide-react";
+import { Plus, Trash2, RefreshCw, ArrowRight, Download, Upload, Loader2 } from "lucide-react";
 import { FilterSearch } from "../../components/FilterBar";
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
 import supabase from "../../utils/supabase";
 import { AuthContext } from "../../App";
 import useConfirmDialog from "../../components/useConfirmDialog";
-import { ITEM_UNITS, addItem, itemErrorMessage } from "../../utils/itemCatalog";
+import { ITEM_UNITS, addItem, itemErrorMessage, fetchItemCatalog } from "../../utils/itemCatalog";
+import { buildTemplateCsv, downloadCsvText, analyzeImport, applyImport } from "../../utils/itemSpecsCsv";
 
 const EMPTY_FORM = { item_name: "", item_code: "", unit: "Nos" };
 const HEADERS = ["Item Code", { label: "Item Name", className: "!text-left" }, "Actions"];
@@ -32,6 +33,13 @@ function Items() {
   const [totalResults, setTotalResults] = useState(0);
 
   const fetchIdRef = useRef(0);
+
+  // Template export / CSV import (Lite Plus + Ultra Tough details)
+  const fileInputRef = useRef(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isReading, setIsReading] = useState(false);
+  const [importPlan, setImportPlan] = useState(null); // { fileName, entries, errors, skipped, rowCount }
+  const [importProgress, setImportProgress] = useState(null); // { done, total } while writing
 
   // Debounce search input so we don't fire a query per keystroke
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -132,6 +140,59 @@ function Items() {
     );
   }, [askConfirm, showNotification, fetchItems]);
 
+  const handleExportTemplate = async () => {
+    setIsExporting(true);
+    try {
+      const { csv, count } = await buildTemplateCsv();
+      downloadCsvText("item_series_template.csv", csv);
+      showNotification?.(`Template downloaded (${count} items)`, "success");
+    } catch (err) {
+      console.error("Template export failed:", err);
+      showNotification?.("Could not create the template: " + (err.message || err), "error");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleFilePicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setIsReading(true);
+    try {
+      const plan = await analyzeImport(await file.text());
+      setImportPlan({ fileName: file.name, ...plan });
+    } catch (err) {
+      console.error("Import read failed:", err);
+      showNotification?.("Could not read the file: " + (err.message || err), "error");
+    } finally {
+      setIsReading(false);
+    }
+  };
+
+  const closeImport = () => { if (!importProgress) setImportPlan(null); };
+
+  const handleConfirmImport = async (e) => {
+    e.preventDefault();
+    if (!importPlan?.entries.length) return;
+    setImportProgress({ done: 0, total: importPlan.entries.length });
+    try {
+      await applyImport(
+        importPlan.entries,
+        currentUser?.fullName || currentUser?.username,
+        (done, total) => setImportProgress({ done, total })
+      );
+      fetchItemCatalog({ force: true }).catch(() => {}); // drop cached series details
+      showNotification?.(`Imported ${importPlan.entries.length} series rows`, "success");
+      setImportPlan(null);
+    } catch (err) {
+      console.error("Import failed:", err);
+      showNotification?.("Import failed: " + (err.message || err), "error");
+    } finally {
+      setImportProgress(null);
+    }
+  };
+
   const openItem = useCallback((item) => navigate(`/master/items/${item.uuid}`), [navigate]);
 
   const codeBadge = (code) =>
@@ -221,6 +282,29 @@ function Items() {
 
           <button
             type="button"
+            onClick={handleExportTemplate}
+            disabled={isExporting}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+            title="Download the Lite Plus / Ultra Tough CSV template (pre-filled with current values)"
+          >
+            {isExporting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+            Template
+          </button>
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isReading}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+            title="Import a filled template CSV"
+          >
+            {isReading ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Upload size={16} aria-hidden="true" />}
+            Import
+          </button>
+          <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleFilePicked} />
+
+          <button
+            type="button"
             onClick={() => setIsModalOpen(true)}
             className="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
@@ -293,6 +377,41 @@ function Items() {
             </select>
           </div>
         </div>
+      </ModalForm>
+      <ModalForm
+        isOpen={Boolean(importPlan)}
+        onClose={closeImport}
+        title="Import Lite / UT series details"
+        onSubmit={handleConfirmImport}
+        submitText={importProgress ? `Importing ${importProgress.done}/${importProgress.total}...` : `Import ${importPlan?.entries.length || 0} rows`}
+        submitDisabled={Boolean(importProgress) || !importPlan?.entries.length}
+        maxHeight="75vh"
+      >
+        {importPlan && (
+          <div className="space-y-3 text-sm">
+            <p className="text-muted-foreground break-all">{importPlan.fileName}</p>
+            <ul className="grid grid-cols-2 gap-2">
+              <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.entries.filter((x) => x.isNew).length}</span>new series rows</li>
+              <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.entries.filter((x) => !x.isNew).length}</span>existing rows updated</li>
+              <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.skipped}</span>blank series skipped</li>
+              <li className={`rounded-md border px-3 py-2 ${importPlan.errors.length ? "border-destructive/40 bg-destructive/5 text-destructive" : "bg-card"}`}><span className="block text-lg font-semibold">{importPlan.errors.length}</span>rows with problems (not imported)</li>
+            </ul>
+            <p className="text-muted-foreground">
+              A series that is completely blank is skipped when the item has no details yet; if it already has details, blank cells clear them. Images are never changed by an import.
+            </p>
+            {importPlan.errors.length > 0 && (
+              <div>
+                <p className="mb-1 font-medium text-foreground">Problems</p>
+                <ul className="max-h-48 space-y-1 overflow-y-auto rounded-md border bg-card p-2 text-xs">
+                  {importPlan.errors.slice(0, 100).map((er, i) => (
+                    <li key={i}><span className="font-mono text-muted-foreground">Line {er.line}:</span> {er.message}</li>
+                  ))}
+                  {importPlan.errors.length > 100 && <li className="text-muted-foreground">...and {importPlan.errors.length - 100} more</li>}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </ModalForm>
       {confirmDialog}
     </div>
