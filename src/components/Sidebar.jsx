@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom"
 import { HomeIcon, UsersIcon, PhoneCallIcon, BarChartIcon, FileTextIcon, ShieldIcon, LogoutIcon, DatabaseIcon, SettingsIcon } from "./Icons"
 import { useContext, useState, useEffect } from "react"
-import { ChevronsLeft, ChevronsRight } from "lucide-react"
+import { ChevronsLeft, ChevronsRight, MapPin } from "lucide-react"
 import { AuthContext } from "../App"
 import supabase from "../utils/supabase"
 import { fetchClosedIdSet, countOpenRows } from "../utils/pendingStatus"
@@ -214,6 +214,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         { href: "/quotation", label: "Quotation", icon: FileTextIcon },
         // Landscape two-series (Lite Plus / Ultra Tough) quotation.
         { href: "/series-quotation", label: "Series Quotation", icon: FileTextIcon },
+        // Read-only list of field sales visit submissions (field_sales_form).
+        { href: "/field-sales-logs", label: "Field Sales Logs", icon: MapPin },
         { href: "/report", label: "Report", icon: ShieldIcon },
         { isMaster: true, label: "Master Data", icon: DatabaseIcon },
     ];

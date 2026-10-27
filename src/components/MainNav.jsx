@@ -35,6 +35,14 @@ function MainNav({ setMobileMenuOpen }) {
       title: "Quotation",
       description: "Create and manage quotations for your leads"
     }
+    if (path.startsWith("/series-quotation")) return {
+      title: "Series Quotation",
+      description: "Create Lite Plus and Ultra Tough series quotations"
+    }
+    if (path.startsWith("/field-sales-logs")) return {
+      title: "Field Sales Logs",
+      description: "Browse field sales visit logs and export them"
+    }
     if (path.startsWith("/report")) return {
       title: "Reports",
       description: "View sales performance reports and charts"

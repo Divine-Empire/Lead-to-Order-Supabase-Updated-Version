@@ -25,6 +25,7 @@ const EnquiryTrackerForm = lazy(() => import("./pages/enquiry-tracker/EnquiryTra
 const Quotation = lazy(() => import("./pages/Quotation/Quotation"))
 const SeriesQuotation = lazy(() => import("./pages/series_quotation/Quotation"))
 const Report = lazy(() => import("./pages/report/Report"))
+const FieldSalesLogs = lazy(() => import("./pages/field-sales-logs/field_sales_logs"))
 const LostDetailsPage = lazy(() => import("./pages/report/LostDetailsPage"))
 const Master = lazy(() => import("./pages/Master/Master"))
 const ItemDetails = lazy(() => import("./pages/Master/ItemDetails"))
@@ -586,6 +587,14 @@ function App() {
                     }
                   />
                   <Route path="/quotation-beta" element={<Navigate to="/series-quotation" replace />} />
+                  <Route
+                    path="/field-sales-logs"
+                    element={
+                      <ProtectedRoute>
+                        <FieldSalesLogs key="field-sales-logs" />
+                      </ProtectedRoute>
+                    }
+                  />
                   <Route
                     path="/report"
                     element={

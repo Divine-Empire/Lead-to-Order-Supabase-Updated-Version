@@ -26,6 +26,7 @@ import MakeQuotationForm from "../../components/enquiry-tracker/MakeQuotationFro
 import { compressImageFile, validateFileSize } from "../../utils/imageCompression";
 import { usePendingEnquiries, useHistoryEnquiries, useItemNameOptions, fetchEnquiryExportRows, CURRENT_STAGE_OPTIONS } from "./queries";
 import { downloadCsv } from "./exportCsv";
+import { usePersistedFilter } from "./filterPersistence";
 
 const columnsConfig = [
   { key: "timestamp", label: "Timestamp" },
@@ -251,15 +252,17 @@ function EnquiryTracker() {
   const [newEnquiryPrefill, setNewEnquiryPrefill] = useState(null);
   const [showPopup, setShowPopup] = useState(false);
   const [selectedTracker, setSelectedTracker] = useState(null);
-  const [callingDaysFilter, setCallingDaysFilter] = useState([]);
+  // These five filters live in a module-level store (filterPersistence.js) so
+  // they survive leaving this page for a form and coming back.
+  const [callingDaysFilter, setCallingDaysFilter] = usePersistedFilter("callingDays");
   // Value filter over "Quotation Value Without Tax": "" (all) | "gte100000" | "lt100000"
-  const [valueFilter, setValueFilter] = useState("");
-  const [currentStageFilter, setCurrentStageFilter] = useState([]);
+  const [valueFilter, setValueFilter] = usePersistedFilter("value");
+  const [currentStageFilter, setCurrentStageFilter] = usePersistedFilter("stage");
   // Item filter: selected item names (any-of); matched against the views'
   // item_qty column server-side -- see applySharedFilters in queries.js.
-  const [itemFilter, setItemFilter] = useState([]);
+  const [itemFilter, setItemFilter] = usePersistedFilter("item");
   // Pending tab only: "blank" = rows with no quotation copy. Ignored on History.
-  const [quotationCopyFilter, setQuotationCopyFilter] = useState("");
+  const [quotationCopyFilter, setQuotationCopyFilter] = usePersistedFilter("copy");
   const [scNameFilter] = useState("all");
 
 
