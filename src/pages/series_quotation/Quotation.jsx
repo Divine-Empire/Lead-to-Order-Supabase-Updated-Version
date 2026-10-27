@@ -13,6 +13,8 @@ import { useQuotationData } from "./use-quotation-data";
 import supabase from "../../utils/supabase";
 import { loadQuotationDataByNumber } from "../../utils/quotationDataLoader";
 import { putPackagingAndFreightLast } from "../../utils/quotationItemsOrder";
+import ModalAlert from "../../components/ModalAlert";
+import LoadingSpinner from "../../components/LoadingSpinner";
 import { SERIES, getSeries, isSimpleItem } from "./series-utils";
 
 const SERIES_TYPE = { lite: "lite_series", ultra: "ut_series" };
@@ -46,6 +48,9 @@ function Quotation() {
   const [activeTab, setActiveTab] = useState("edit");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Centered result popup (replaces the browser alert()): { type, title, message }
+  const [popup, setPopup] = useState(null);
+  const showPopup = (type, title, message) => setPopup({ type, title, message });
   const [quotationLink, setQuotationLink] = useState("");
   const [pdfUrl, setPdfUrl] = useState("");
   const [isRevising, setIsRevising] = useState(false);
@@ -311,7 +316,7 @@ function Quotation() {
       const result = await loadQuotationDataByNumber(quotationNo);
 
       if (!result) {
-        alert("Failed to load quotation data");
+        showPopup("error", "Could not load quotation", "Failed to load the quotation data. Please try again.");
         return;
       }
 
@@ -335,7 +340,7 @@ function Quotation() {
       handleInputChange("items", items);
     } catch (error) {
       console.error("Error fetching quotation data:", error);
-      alert("Failed to load quotation data");
+      showPopup("error", "Could not load quotation", "Failed to load the quotation data. Please try again.");
     } finally {
       setIsLoadingQuotation(false);
     }
@@ -381,10 +386,10 @@ function Quotation() {
       URL.revokeObjectURL(link.href);
 
       setIsGenerating(false);
-      alert("PDF generated and downloaded successfully!");
+      showPopup("success", "PDF downloaded", "The quotation PDF has been downloaded.");
     } catch (error) {
       console.error("Error generating PDF:", error);
-      alert("Failed to generate PDF: " + error.message);
+      showPopup("error", "PDF not generated", "Failed to generate PDF: " + error.message);
       setIsGenerating(false);
     }
   };
@@ -401,12 +406,10 @@ function Quotation() {
       setQuotationLink(localLink);
       setIsGenerating(false);
 
-      alert(
-        "Quotation link has been successfully generated and is ready to share."
-      );
+      showPopup("success", "Link generated", "The quotation link is ready to share.");
     } catch (error) {
       console.error("Error generating link:", error);
-      alert("Failed to generate link: " + error.message);
+      showPopup("error", "Link not generated", "Failed to generate link: " + error.message);
       setIsGenerating(false);
     }
   };
@@ -416,16 +419,16 @@ function Quotation() {
 
   const handleSaveQuotation = async () => {
     if (!SAVING_ENABLED) {
-      alert("Saving is turned off in Series Quotation for now. Use Preview or Generate PDF.");
+      showPopup("warning", "Saving is turned off", "Saving is turned off in Series Quotation for now. Use Preview or Generate PDF.");
       return;
     }
     if (!quotationData.consigneeName) {
-      alert("Please select a company name");
+      showPopup("warning", "Company name missing", "Please select a company name.");
       return;
     }
 
     if (!quotationData.preparedBy) {
-      alert("Please enter prepared by name");
+      showPopup("warning", "Prepared by missing", "Please enter the prepared by name.");
       return;
     }
 
@@ -683,9 +686,9 @@ function Quotation() {
       }
 
       if (uploadedPdfUrl) {
-        alert("Quotation saved successfully with PDF uploaded to Supabase!");
+        showPopup("success", "Quotation submitted", `Quotation ${authoritativeQuotationNo} was saved and its PDF uploaded.`);
       } else {
-        alert("Quotation saved to database successfully! (Note: PDF storage upload failed or bucket permissions restricted)");
+        showPopup("warning", "Quotation saved, PDF missing", `Quotation ${authoritativeQuotationNo} was saved, but its PDF could not be uploaded.`);
       }
 
       // Reset form for new quotation
@@ -700,7 +703,7 @@ function Quotation() {
       setHiddenColumns(DEFAULT_HIDDEN_COLUMNS);
     } catch (error) {
       console.error("Error in handleSaveQuotation:", error);
-      alert("Error: " + error.message);
+      showPopup("error", "Quotation NOT submitted", error.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -837,6 +840,19 @@ function Quotation() {
           </div>
         </div>
       )}
+
+      {/* Full-screen loader while a quotation is being saved (number, DB rows, PDF, upload). */}
+      {isSubmitting && (
+        <LoadingSpinner fullPage message="Saving quotation and generating its PDF. Please don't close or refresh this page." />
+      )}
+
+      <ModalAlert
+        isOpen={Boolean(popup)}
+        type={popup?.type}
+        title={popup?.title}
+        message={popup?.message}
+        onClose={() => setPopup(null)}
+      />
     </div>
   );
 }

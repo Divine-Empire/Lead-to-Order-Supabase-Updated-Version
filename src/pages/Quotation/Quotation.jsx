@@ -8,7 +8,9 @@ import QuotationHeader from "./quotation-header";
 import QuotationForm from "./quotation-form";
 import QuotationPreview from "./quotation-preview";
 import { generatePDFFromData } from "./pdf-generator";
-import { getNextQuotationNumber, getNextRevisionNo } from "./quotation-service";
+import { getNextQuotationNumber, isQuotationNoTaken, insertQuotationWithFreshNumber } from "./quotation-service";
+import ModalAlert from "../../components/ModalAlert";
+import LoadingSpinner from "../../components/LoadingSpinner";
 import { useQuotationData } from "./use-quotation-data";
 import supabase from "../../utils/supabase";
 import { loadQuotationDataByNumber } from "../../utils/quotationDataLoader";
@@ -18,6 +20,9 @@ function Quotation() {
   const [activeTab, setActiveTab] = useState("edit");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Centered result popup (replaces the browser alert()): { type, title, message }
+  const [popup, setPopup] = useState(null);
+  const showPopup = (type, title, message) => setPopup({ type, title, message });
   const [quotationLink, setQuotationLink] = useState("");
   const [pdfUrl, setPdfUrl] = useState("");
   const [isRevising, setIsRevising] = useState(false);
@@ -225,6 +230,50 @@ function Quotation() {
     initializeQuotationNumber();
   }, [setQuotationData]); // Stabilized: only runs when setQuotationData (stable) or mount
 
+  // A page left open for a while can hold a number that another quotation has
+  // taken since. When the tab comes back into focus, re-check it and move to
+  // the next free number (with a notice) instead of failing later on Submit.
+  const quotationNoRef = useRef(quotationData.quotationNo);
+  useEffect(() => {
+    quotationNoRef.current = quotationData.quotationNo;
+  }, [quotationData.quotationNo]);
+  const isSubmittingRef = useRef(false);
+  useEffect(() => {
+    isSubmittingRef.current = isSubmitting;
+  }, [isSubmitting]);
+
+  useEffect(() => {
+    if (isRevising || isViewMode) return undefined;
+    let busy = false;
+    const check = async () => {
+      if (busy || isSubmittingRef.current || document.visibilityState === "hidden") return;
+      busy = true;
+      try {
+        const current = quotationNoRef.current;
+        const prefix = (current ? current.split("-")[0] : "") || "NBD";
+        if (!current) {
+          const fresh = await getNextQuotationNumber(prefix);
+          setQuotationData((prev) => (prev.quotationNo ? prev : { ...prev, quotationNo: fresh }));
+        } else if (await isQuotationNoTaken(current)) {
+          const fresh = await getNextQuotationNumber(prefix);
+          if (isSubmittingRef.current) return; // a save started while we were checking
+          setQuotationData((prev) => (prev.quotationNo === current ? { ...prev, quotationNo: fresh } : prev));
+          showPopup("warning", "Quotation number updated", `${current} was already used by another quotation. This quotation now uses ${fresh}.`);
+        }
+      } catch (error) {
+        console.error("Quotation number check failed:", error);
+      } finally {
+        busy = false;
+      }
+    };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [isRevising, isViewMode, setQuotationData]);
+
   // Load quotation data from URL if in view mode
   useEffect(() => {
     const viewId = params.get("view");
@@ -279,7 +328,7 @@ function Quotation() {
       const result = await loadQuotationDataByNumber(quotationNo);
 
       if (!result) {
-        alert("Failed to load quotation data");
+        showPopup("error", "Could not load quotation", "Failed to load the quotation data. Please try again.");
         return;
       }
 
@@ -303,9 +352,26 @@ function Quotation() {
       handleInputChange("items", items);
     } catch (error) {
       console.error("Error fetching quotation data:", error);
-      alert("Failed to load quotation data");
+      showPopup("error", "Could not load quotation", "Failed to load the quotation data. Please try again.");
     } finally {
       setIsLoadingQuotation(false);
+    }
+  };
+
+  // A new (non-revision) quotation's number is picked when the page loads, so
+  // it can go stale if other quotations were saved meanwhile. Re-checks it
+  // against the DB and, if it's already used, switches the form to the next
+  // free number. Returns the number to use.
+  const ensureFreshQuotationNo = async () => {
+    const current = quotationData.quotationNo;
+    try {
+      if (current && !(await isQuotationNoTaken(current))) return current;
+      const fresh = await getNextQuotationNumber((current ? current.split("-")[0] : "") || "NBD");
+      setQuotationData((prev) => ({ ...prev, quotationNo: fresh }));
+      return fresh;
+    } catch (error) {
+      console.error("Could not verify the quotation number:", error);
+      return current;
     }
   };
 
@@ -314,10 +380,12 @@ function Quotation() {
 
     try {
       // Prefer backend number if present, otherwise fall back
-      const preferredNo =
+      const existingNo =
         quotationData.Quotation_No ||
         quotationData.finalQuotationNo ||
         quotationData.quotationNo;
+      const preferredNo = isRevising || isViewMode ? existingNo : await ensureFreshQuotationNo();
+      const numberChanged = preferredNo && preferredNo !== existingNo;
 
       const pdfDataUri = await generatePDFFromData(
         { ...quotationData, Quotation_No: preferredNo },
@@ -349,10 +417,18 @@ function Quotation() {
       URL.revokeObjectURL(link.href);
 
       setIsGenerating(false);
-      alert("PDF generated and downloaded successfully!");
+      if (numberChanged) {
+        showPopup(
+          "warning",
+          "PDF downloaded with a new number",
+          `${existingNo} was already used by another quotation, so this PDF (and the form) now use ${preferredNo}.`
+        );
+      } else {
+        showPopup("success", "PDF downloaded", `Quotation_${preferredNo}.pdf has been downloaded.`);
+      }
     } catch (error) {
       console.error("Error generating PDF:", error);
-      alert("Failed to generate PDF: " + error.message);
+      showPopup("error", "PDF not generated", "Failed to generate PDF: " + error.message);
       setIsGenerating(false);
     }
   };
@@ -369,28 +445,28 @@ function Quotation() {
       setQuotationLink(localLink);
       setIsGenerating(false);
 
-      alert(
-        "Quotation link has been successfully generated and is ready to share."
-      );
+      showPopup("success", "Link generated", "The quotation link is ready to share.");
     } catch (error) {
       console.error("Error generating link:", error);
-      alert("Failed to generate link: " + error.message);
+      showPopup("error", "Link not generated", "Failed to generate link: " + error.message);
       setIsGenerating(false);
     }
   };
 
   const handleSaveQuotation = async () => {
     if (!quotationData.consigneeName) {
-      alert("Please select a company name");
+      showPopup("warning", "Company name missing", "Please select a company name.");
       return;
     }
 
     if (!quotationData.preparedBy) {
-      alert("Please enter prepared by name");
+      showPopup("warning", "Prepared by missing", "Please enter the prepared by name.");
       return;
     }
 
     setIsSubmitting(true);
+    let insertedNo = null; // set once the quotation row exists in the DB
+    let itemsProblem = null; // set if the line items could not be saved
 
     try {
       // Calculate grand total
@@ -412,19 +488,6 @@ function Quotation() {
 
       const finalGrandTotal = Math.max(0, grandTotal).toFixed(2);
 
-      // Helper to create next revision value based on a base number
-      const nextRevision = (baseNo) => {
-        const parts = baseNo.split("-");
-        if (parts.length === 5) {
-          const last = parts[4];
-          const next = (parseInt(last, 10) + 1).toString().padStart(2, "0");
-          parts[4] = next;
-          return parts.join("-");
-        }
-        if (parts.length === 4) return `${baseNo}-01`;
-        return `${baseNo}-01`;
-      };
-
       // Convert special offers array to string for database storage
       const specialOffersString = quotationData.specialOffers
         ? quotationData.specialOffers.filter((offer) => offer.trim()).join("|")
@@ -433,7 +496,6 @@ function Quotation() {
       // Try insert with retries on unique constraint (concurrent save)
       let authoritativeQuotationNo = null;
       let authoritativeQuotationId = null;
-      let lastError = null;
 
       // Look up consignor and consignee UUIDs.
       // consignor_id must point at the real consignor/branch entity (the one
@@ -473,40 +535,24 @@ function Quotation() {
         return quotationNo.split("-")[0]; // fallback to first part
       };
 
-      // Initialize candidate number
-      let candidateNo = quotationData.quotationNo;
+      // The number shown in the form was picked when the page loaded (or after
+      // the previous save) and may be stale by now -- other quotations can have
+      // been saved since. So the number actually used is always read from the
+      // DB at submit time; the form's number only supplies the prefix.
+      let candidateNo = quotationData.quotationNo || (await getNextQuotationNumber());
       const currentPrefix = extractPrefix(candidateNo);
+      const prefixCode = currentPrefix.split("-")[0] || "NBD";
 
-      if (isRevising && selectedQuotation) {
-        // Computed from the true max revision in the DB, not from whichever
-        // revision the user picked as the base -- the "Select Quotation to
-        // Revise" dropdown lists every past revision individually, so
-        // picking an older one here (not necessarily the latest) used to
-        // make the retry loop below increment from that stale base and
-        // collide with every already-used suffix ahead of it.
-        candidateNo = await getNextRevisionNo(candidateNo);
-      }
-
-      for (let attempt = 0; attempt < 5; attempt++) {
-        if (attempt > 0) {
-          if (isRevising && selectedQuotation) {
-            candidateNo = nextRevision(candidateNo);
-          } else {
-            const parts = candidateNo.split("-");
-            if (parts.length === 4) {
-              const lastNumber = parseInt(parts[3], 10);
-              const newNumber = (lastNumber + 1).toString().padStart(3, "0");
-              candidateNo = `${currentPrefix}-${newNumber}`;
-            } else {
-              candidateNo = await getNextQuotationNumber(currentPrefix.split("-")[0]);
-            }
-          }
-        }
-
-        // Prepare snake_case data for refactored make_quotations table
+      // Number allocation + insert in one place (quotation-service.jsx): the
+      // number is read from the DB now, and a conflict re-reads it. For a
+      // revision the true max revision is used, not the one picked in the list.
+      const { data: insertedRow, quotationNo: finalNo } = await insertQuotationWithFreshNumber({
+        prefixCode,
+        revisingFrom: isRevising && selectedQuotation ? candidateNo : null,
+        buildRecord: (quotationNo) => {
         const quotationRecord = {
           enquiry_reference_no: quotationData.enquiryReferenceNo || null,
-          quotation_no: candidateNo,
+          quotation_no: quotationNo,
           quotation_date: convertDateToISO(quotationData.date),
           prepared_by: quotationData.preparedBy || null,
           consignor_id: consignorId,
@@ -532,32 +578,12 @@ function Quotation() {
           grand_total: parseFloat(finalGrandTotal) || 0,
         };
 
-        const { data, error } = await supabase
-          .from("lto_make_quotations")
-          .insert([quotationRecord])
-          .select();
-
-        if (!error && data && data.length > 0) {
-          authoritativeQuotationNo = data[0].quotation_no || candidateNo;
-          authoritativeQuotationId = data[0].id || null;
-          break;
-        }
-
-        lastError = error;
-        const isUniqueViolation =
-          (error?.code && error.code === "23505") ||
-          (error?.message && error.message.toLowerCase().includes("duplicate key value")) ||
-          (error?.message && error.message.includes("quotation_no_unique"));
-        if (!isUniqueViolation) {
-          throw new Error("Error saving quotation: " + (error?.message || "Database insert failed"));
-        }
-
-        await new Promise((res) => setTimeout(res, 100 + Math.random() * 200));
-      }
-
-      if (!authoritativeQuotationNo) {
-        throw new Error("Error saving quotation: " + (lastError?.message || "unique constraint conflict"));
-      }
+          return quotationRecord;
+        },
+      });
+      authoritativeQuotationNo = insertedRow.quotation_no || finalNo;
+      authoritativeQuotationId = insertedRow.id || null;
+      insertedNo = authoritativeQuotationNo;
 
       // Insert line items into make_quotation_items. item_order persists the
       // exact save-time position (lto_make_quotation_items has no ordering
@@ -595,11 +621,17 @@ function Quotation() {
 
           if (itemsError) {
             console.error("Error saving quotation line items:", itemsError.message);
+            itemsProblem = itemsError.message;
           }
         }
       }
 
-      // Now generate PDF using the authoritative number
+      // Now generate PDF using the authoritative number. The quotation row is
+      // already saved at this point, so a PDF problem is reported as such (not
+      // as a failed submission) and the form is still reset below.
+      let uploadedPdfUrl = null;
+      let pdfProblem = null;
+      try {
       const pdfDataUri = await generatePDFFromData(
         { ...quotationData, Quotation_No: authoritativeQuotationNo, quotation_no: authoritativeQuotationNo },
         selectedReferences,
@@ -628,12 +660,15 @@ function Quotation() {
       const pdfBlob = new Blob([bytes], { type: "application/pdf" });
 
       // Upload PDF to Supabase bucket with authoritative number in filename
-      let uploadedPdfUrl = null;
       try {
         const fileName = `Quotation_${authoritativeQuotationNo}.pdf`;
         uploadedPdfUrl = await uploadPDFToSupabase(pdfBlob, fileName);
       } catch (pdfErr) {
         console.warn("PDF Storage upload failed, proceeding with DB save:", pdfErr);
+      }
+      } catch (pdfFlowErr) {
+        console.error("PDF generation failed after the quotation was saved:", pdfFlowErr);
+        pdfProblem = pdfFlowErr.message || "the PDF could not be generated";
       }
 
       if (uploadedPdfUrl) {
@@ -652,14 +687,14 @@ function Quotation() {
         }));
       }
 
-      if (uploadedPdfUrl) {
-        alert("Quotation saved successfully with PDF uploaded to Supabase!");
-      } else {
-        alert("Quotation saved to database successfully! (Note: PDF storage upload failed or bucket permissions restricted)");
+      // Reset form for new quotation. If the next number can't be read right
+      // now it is left empty and picked at submit time (never a made-up one).
+      let nextQuotationNumber = "";
+      try {
+        nextQuotationNumber = await getNextQuotationNumber();
+      } catch (numErr) {
+        console.error("Could not read the next quotation number:", numErr);
       }
-
-      // Reset form for new quotation
-      const nextQuotationNumber = await getNextQuotationNumber();
       resetQuotationData(nextQuotationNumber);
       setSpecialDiscount(0);
       setSelectedReferences([]);
@@ -668,9 +703,41 @@ function Quotation() {
       // quotation must not silently carry into the next one typed in the
       // same sitting.
       setHiddenColumns(DEFAULT_HIDDEN_COLUMNS);
+
+      if (itemsProblem) {
+        showPopup(
+          "error",
+          "Quotation saved WITHOUT its items",
+          `Quotation ${authoritativeQuotationNo} was saved, but its line items could not be saved (${itemsProblem}). Please check it and re-create the quotation if needed.`
+        );
+      } else if (uploadedPdfUrl && !pdfProblem) {
+        showPopup("success", "Quotation submitted", `Quotation ${authoritativeQuotationNo} was saved and its PDF uploaded.`);
+      } else {
+        showPopup(
+          "warning",
+          "Quotation saved, PDF missing",
+          `Quotation ${authoritativeQuotationNo} was saved, but its PDF could not be ${pdfProblem ? "generated" : "uploaded"}` +
+            `${pdfProblem ? ` (${pdfProblem})` : ""}. Load it from Revise to download the PDF again.`
+        );
+      }
     } catch (error) {
       console.error("Error in handleSaveQuotation:", error);
-      alert("Error: " + error.message);
+      if (insertedNo) {
+        showPopup("warning", "Quotation saved, but something failed", `Quotation ${insertedNo} is saved. Afterwards: ${error.message}`);
+      } else {
+        showPopup("error", "Quotation NOT submitted", error.message);
+      }
+      // Whatever went wrong, don't leave the form holding a used / stale number.
+      if (!isRevising) {
+        try {
+          const fresh = await getNextQuotationNumber(
+            (quotationData.quotationNo ? quotationData.quotationNo.split("-")[0] : "") || "NBD"
+          );
+          setQuotationData((prev) => ({ ...prev, quotationNo: fresh }));
+        } catch (numErr) {
+          console.error("Could not refresh the quotation number:", numErr);
+        }
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -803,6 +870,19 @@ function Quotation() {
           </div>
         </div>
       )}
+
+      {/* Full-screen loader while a quotation is being saved (number, DB rows, PDF, upload). */}
+      {isSubmitting && (
+        <LoadingSpinner fullPage message="Saving quotation and generating its PDF. Please don't close or refresh this page." />
+      )}
+
+      <ModalAlert
+        isOpen={Boolean(popup)}
+        type={popup?.type}
+        title={popup?.title}
+        message={popup?.message}
+        onClose={() => setPopup(null)}
+      />
     </div>
   );
 }

@@ -94,8 +94,11 @@ export const getNextQuotationNumber = async (prefix = "NBD") => {
         .range(from, from + step - 1);
 
       if (error) {
+        // Never fall back to a made-up "-001": it already exists, so the form
+        // would end up holding a number that can't be saved. Callers keep
+        // their current number / stop with a clear message instead.
         console.error("Error fetching latest quotations:", error);
-        return `${yearPrefix}-001`; // Start from 001
+        throw new Error("Could not read the latest quotation numbers: " + error.message);
       }
 
       if (page && page.length > 0) {
@@ -135,9 +138,20 @@ export const getNextQuotationNumber = async (prefix = "NBD") => {
 
   } catch (error) {
     console.error("Error generating quotation number:", error);
-    const financialYear = getCurrentFinancialYear();
-    return `${prefix}-${financialYear.start}-${financialYear.end}-001`;
+    throw error;
   }
+};
+
+// True when a quotation with exactly this number is already saved.
+export const isQuotationNoTaken = async (quotationNo) => {
+  if (!quotationNo) return false;
+  const { data, error } = await supabase
+    .from("lto_make_quotations")
+    .select("id")
+    .eq("quotation_no", quotationNo)
+    .limit(1);
+  if (error) throw error;
+  return Boolean(data && data.length > 0);
 };
 
 // The only prefix codes a quotation number is allowed to be built from.

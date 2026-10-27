@@ -94,8 +94,11 @@ export const getNextQuotationNumber = async (prefix = "NBD") => {
         .range(from, from + step - 1);
 
       if (error) {
+        // Never fall back to a made-up "-001": it already exists, so the form
+        // would end up holding a number that can't be saved. Callers keep
+        // their current number / stop with a clear message instead.
         console.error("Error fetching latest quotations:", error);
-        return `${yearPrefix}-001`; // Start from 001
+        throw new Error("Could not read the latest quotation numbers: " + error.message);
       }
 
       if (page && page.length > 0) {
@@ -135,9 +138,20 @@ export const getNextQuotationNumber = async (prefix = "NBD") => {
 
   } catch (error) {
     console.error("Error generating quotation number:", error);
-    const financialYear = getCurrentFinancialYear();
-    return `${prefix}-${financialYear.start}-${financialYear.end}-001`;
+    throw error;
   }
+};
+
+// True when a quotation with exactly this number is already saved.
+export const isQuotationNoTaken = async (quotationNo) => {
+  if (!quotationNo) return false;
+  const { data, error } = await supabase
+    .from("lto_make_quotations")
+    .select("id")
+    .eq("quotation_no", quotationNo)
+    .limit(1);
+  if (error) throw error;
+  return Boolean(data && data.length > 0);
 };
 
 // The only prefix codes a quotation number is allowed to be built from.
@@ -275,3 +289,51 @@ export const syncClientMasterSalesType = async (companyName, salesType) => {
 };
 
 
+
+// Inserts a quotation under a number read from the DB right now, retrying on
+// a unique-number conflict (someone saved the same number a moment ago) with
+// a fresh DB read each time -- never "old guess + 1" -- so a gap of any size
+// closes in one retry. `buildRecord(quotationNo)` returns the row to insert.
+// New quotation: pass prefixCode. Revision: pass revisingFrom (any revision of
+// it; the true max revision is read from the DB). `deps` is for tests only.
+// Resolves { data, quotationNo } (data = the inserted row); throws on a
+// non-conflict error or when every attempt hit a conflict.
+export const insertQuotationWithFreshNumber = async ({
+  buildRecord,
+  prefixCode = "NBD",
+  revisingFrom = null,
+  maxAttempts = 8,
+  deps = {},
+}) => {
+  const nextNo = deps.nextNo || getNextQuotationNumber;
+  const nextRev = deps.nextRev || getNextRevisionNo;
+  const insert =
+    deps.insert || ((record) => supabase.from("lto_make_quotations").insert([record]).select());
+  const wait = deps.wait || ((ms) => new Promise((res) => setTimeout(res, ms)));
+
+  const pickNumber = (previous) => (revisingFrom ? nextRev(previous || revisingFrom) : nextNo(prefixCode));
+
+  let candidateNo = await pickNumber(null);
+  let lastError = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) candidateNo = await pickNumber(candidateNo);
+
+    const { data, error } = await insert(buildRecord(candidateNo));
+    if (!error && data && data.length > 0) {
+      return { data: data[0], quotationNo: data[0].quotation_no || candidateNo };
+    }
+
+    lastError = error;
+    const isUniqueViolation =
+      (error?.code && error.code === "23505") ||
+      (error?.message && error.message.toLowerCase().includes("duplicate key value")) ||
+      (error?.message && error.message.includes("quotation_no_unique"));
+    if (!isUniqueViolation) {
+      throw new Error("Error saving quotation: " + (error?.message || "Database insert failed"));
+    }
+    await wait(100 + Math.random() * 200);
+  }
+
+  throw new Error("Error saving quotation: " + (lastError?.message || "unique constraint conflict"));
+};

@@ -930,9 +930,7 @@ const QuotationForm = ({
 
           // Update quotation data with new items
           handleInputChange("items", newItems);
-        } else {
         }
-      } else {
       }
     } catch (error) {
       console.error("Error auto-filling items:", error);
