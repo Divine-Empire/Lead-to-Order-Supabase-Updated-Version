@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom"
 import { HomeIcon, UsersIcon, PhoneCallIcon, BarChartIcon, FileTextIcon, ShieldIcon, LogoutIcon, DatabaseIcon, SettingsIcon } from "./Icons"
 import { useContext, useState, useEffect } from "react"
-import { ChevronsLeft, ChevronsRight, MapPin } from "lucide-react"
+import { ChevronsLeft, ChevronsRight, MapPin, X } from "lucide-react"
 import { AuthContext } from "../App"
 import supabase from "../utils/supabase"
 import { fetchClosedIdSet, countOpenRows } from "../utils/pendingStatus"
@@ -238,17 +238,25 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                 aria-label="Sidebar"
                 className={`fixed inset-y-0 left-0 z-50 flex w-56 shrink-0 transform flex-col border-r bg-card transition-[transform,width] duration-300 ease-in-out md:static md:inset-auto md:translate-x-0 ${collapsed ? "md:w-14 2xl:w-14" : "2xl:w-60"} ${mobileMenuOpen ? "translate-x-0" : "-translate-x-full"}`}
             >
-                <div className={`flex h-14 shrink-0 items-center border-b px-4 ${centerWhenCollapsed}`}>
-                    <Link to="/" className="flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
+                <div className={`flex shrink-0 items-center justify-between border-b border-[#eaf0f5] p-4 ${centerWhenCollapsed}`}>
+                    <Link to="/" className="flex min-w-0 items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
                         <img src="/divine-logo.svg" alt="Divine" className="h-8 w-auto shrink-0" />
-                        <div className={`leading-tight ${hideWhenCollapsed}`}>
-                            <p className="text-sm font-semibold">Divine</p>
-                            <p className="text-xs text-muted-foreground">Lead to Order</p>
+                        <div className={`min-w-0 leading-tight ${hideWhenCollapsed}`}>
+                            <p className="text-base font-bold tracking-tight text-[#263241]">Lead to Order</p>
+                            <p className="text-xs text-[#64748b]">Divine Empire</p>
                         </div>
                     </Link>
+                    <button
+                        type="button"
+                        aria-label="Close menu"
+                        onClick={() => setMobileMenuOpen(false)}
+                        className="rounded-lg p-1.5 transition-colors hover:bg-accent md:hidden"
+                    >
+                        <X size={18} className="text-[#64748b]" aria-hidden="true" />
+                    </button>
                 </div>
 
-                <nav aria-label="Main" className="flex flex-1 flex-col gap-1 overflow-y-auto px-2 py-3">
+                <nav aria-label="Main" className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-3">
                     {navItems.map((item) => {
                         if (item.isMaster) {
                             const isMasterActive = location.pathname.startsWith("/master");
@@ -264,14 +272,14 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                                         }}
                                         title={collapsed ? item.label : undefined}
                                         aria-expanded={masterExpanded}
-                                        className={`relative flex h-9 w-full items-center justify-between rounded-md px-3 text-sm transition-colors ${centerWhenCollapsed} ${
+                                        className={`group flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm transition-colors duration-150 ${centerWhenCollapsed} ${
                                             isMasterActive
-                                                ? "bg-accent font-medium text-foreground before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-brand-lime"
-                                                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                                                ? "bg-[#f0f6fc] font-semibold text-[#1b5e98]"
+                                                : "font-medium text-[#4b5a6e] hover:bg-[#f4f7fa] hover:text-[#263241]"
                                         }`}
                                     >
                                         <span className="flex min-w-0 items-center gap-3">
-                                            <Icon className={`h-4 w-4 shrink-0 ${isMasterActive ? "text-primary" : ""}`} />
+                                            <Icon className={`h-[17px] w-[17px] shrink-0 ${isMasterActive ? "text-[#2274b8]" : "text-[#8a9bb0] group-hover:text-[#4b5a6e]"}`} />
                                             <span className={`truncate ${hideWhenCollapsed}`}>{item.label}</span>
                                         </span>
                                         <svg
@@ -284,7 +292,7 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                                             strokeWidth="2"
                                             strokeLinecap="round"
                                             strokeLinejoin="round"
-                                            className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${masterExpanded ? "rotate-180" : ""} ${hideWhenCollapsed}`}
+                                            className={`h-4 w-4 shrink-0 text-[#8a9bb0] transition-transform duration-200 ${masterExpanded ? "rotate-180" : ""} ${hideWhenCollapsed}`}
                                             aria-hidden="true"
                                         >
                                             <polyline points="6 9 12 15 18 9"></polyline>
@@ -303,14 +311,14 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                                                         to={sub.href}
                                                         onClick={() => setMobileMenuOpen(false)}
                                                         aria-current={isSubActive ? "page" : undefined}
-                                                        className={`relative flex h-8 items-center justify-between rounded-md px-2.5 text-xs transition-colors ${
+                                                        className={`relative flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors duration-150 ${
                                                             isSubActive
-                                                                ? "bg-accent font-medium text-brand-800"
-                                                                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                                                                ? "bg-[#f0f6fc] font-semibold text-[#1b5e98]"
+                                                                : "font-medium text-[#4b5a6e] hover:bg-[#f4f7fa] hover:text-[#263241]"
                                                         }`}
                                                     >
                                                         <span className="flex items-center gap-2 truncate">
-                                                            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${isSubActive ? "bg-brand-lime" : "bg-muted-foreground/40"}`} />
+                                                            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${isSubActive ? "bg-[#3b8ad0]" : "bg-[#c3cedb]"}`} />
                                                             <span className="truncate">{sub.label}</span>
                                                         </span>
                                                         {subCount !== null && (
@@ -337,27 +345,30 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                                 onClick={() => setMobileMenuOpen(false)}
                                 aria-current={active ? "page" : undefined}
                                 title={collapsed ? item.label : undefined}
-                                className={`relative flex h-9 items-center justify-between rounded-md px-3 text-sm transition-colors ${centerWhenCollapsed} ${
+                                className={`group flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm transition-colors duration-150 ${centerWhenCollapsed} ${
                                     active
-                                        ? "bg-accent font-medium text-foreground before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-brand-lime"
-                                        : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                                        ? "bg-[#f0f6fc] font-semibold text-[#1b5e98]"
+                                        : "font-medium text-[#4b5a6e] hover:bg-[#f4f7fa] hover:text-[#263241]"
                                 }`}
                             >
                                 <span className="flex min-w-0 items-center gap-3">
-                                    <Icon className={`h-4 w-4 shrink-0 ${active ? "text-primary" : ""}`} />
+                                    <Icon className={`h-[17px] w-[17px] shrink-0 ${active ? "text-[#2274b8]" : "text-[#8a9bb0] group-hover:text-[#4b5a6e]"}`} />
                                     <span className={`truncate ${hideWhenCollapsed}`}>{item.label}</span>
                                 </span>
-                                {count !== null && (
-                                    <span className={`ml-2 shrink-0 rounded bg-primary/10 px-1.5 text-xs font-semibold tabular-nums text-brand-700 ${hideWhenCollapsed}`}>
-                                        {count}
-                                    </span>
-                                )}
+                                <span className={`flex shrink-0 items-center gap-2 ${hideWhenCollapsed}`}>
+                                    {count !== null && (
+                                        <span className="rounded bg-primary/10 px-1.5 text-xs font-semibold tabular-nums text-brand-700">
+                                            {count}
+                                        </span>
+                                    )}
+                                    {active && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b8ad0]" />}
+                                </span>
                             </Link>
                         );
                     })}
                 </nav>
 
-                <div className="shrink-0 border-t p-2">
+                <div className="shrink-0 border-t border-[#eaf0f5] p-2">
                     <button
                         type="button"
                         onClick={toggleCollapsed}
