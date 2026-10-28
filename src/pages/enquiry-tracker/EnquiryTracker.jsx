@@ -906,6 +906,12 @@ const handleSaveClick = async () => {
             sc_name: editedData.sc_name,
           };
 
+      // Assign to Person is only written when the user changed it, so an
+      // untouched (or blank-looking) field can never overwrite the saved value.
+      const assignToPersonChanged =
+        (editedData.enquiryAssignToProject ?? "") !== (originalEditData.enquiryAssignToProject ?? "");
+      if (!assignToPersonChanged) delete updatePayload.enquiry_assign_to_person;
+
       Object.keys(updatePayload).forEach((key) => {
         if (updatePayload[key] === undefined) {
           delete updatePayload[key];
@@ -974,10 +980,10 @@ const handleSaveClick = async () => {
       // latest lto_call_tracker_for_leads row instead of on lto_leads
       // itself -- update that row if one exists, else create a new one
       // (a brand-new pending lead may not have any call-tracker row yet).
-      if (!isEnquiryRecord && (editedData.enquiryApproach !== undefined || editedData.enquiryAssignToProject !== undefined)) {
+      if (!isEnquiryRecord && (editedData.enquiryApproach !== undefined || assignToPersonChanged)) {
         const trackerPayload = {};
         if (editedData.enquiryApproach !== undefined) trackerPayload.enquiry_approach = editedData.enquiryApproach;
-        if (editedData.enquiryAssignToProject !== undefined) trackerPayload.enquiry_assign_to_person = editedData.enquiryAssignToProject;
+        if (assignToPersonChanged) trackerPayload.enquiry_assign_to_person = editedData.enquiryAssignToProject;
 
         const { data: latestTrackerRows, error: latestTrackerError } = await supabase
           .from("lto_call_tracker_for_leads")
@@ -3067,11 +3073,15 @@ const handleSaveClick = async () => {
             <label htmlFor="pending-edit-11" className="block text-sm font-medium text-foreground">Enquiry Assign to Person</label>
             <select
               id="pending-edit-11"
-              value={assignToPersonOptions.includes(editedData.enquiryAssignToProject) ? editedData.enquiryAssignToProject : ""}
+              value={editedData.enquiryAssignToProject || ""}
               onChange={(e) => handleFieldChange("enquiryAssignToProject", e.target.value)}
               className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
             >
               <option value="">Select person</option>
+              {/* A saved person who is no longer in the dropdown list is still shown. */}
+              {editedData.enquiryAssignToProject && !assignToPersonOptions.includes(editedData.enquiryAssignToProject) && (
+                <option value={editedData.enquiryAssignToProject}>{editedData.enquiryAssignToProject}</option>
+              )}
               {assignToPersonOptions.map((option) => (
                 <option key={option} value={option}>{option}</option>
               ))}
