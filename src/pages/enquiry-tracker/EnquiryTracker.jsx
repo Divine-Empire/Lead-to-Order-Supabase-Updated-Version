@@ -26,6 +26,8 @@ import MakeQuotationForm from "../../components/enquiry-tracker/MakeQuotationFro
 import { compressImageFile, validateFileSize } from "../../utils/imageCompression";
 import { usePendingEnquiries, useHistoryEnquiries, useItemNameOptions, fetchEnquiryExportRows, CURRENT_STAGE_OPTIONS } from "./queries";
 import { downloadCsv } from "./exportCsv";
+import SearchableDropdown from "../../components/SearchableDropdown";
+import { toPersonList, formatPersons, toDbPersons, samePersons } from "../../utils/assignToPerson";
 import { usePersistedFilter } from "./filterPersistence";
 
 const columnsConfig = [
@@ -307,11 +309,12 @@ function EnquiryTracker() {
   const PENDING_EDIT_FIELDS = [
     "companyName", "phoneNumber", "salespersonName", "shippingAddress",
     "gstNumber", "enquiryState", "billingAddress", "salesType", "leadSource",
-    "enquiryReceiverName", "enquiryApproach", "enquiryAssignToProject", "sc_name",
+    "enquiryReceiverName", "enquiryApproach", "sc_name",
   ];
-  const isPendingEditDirty = PENDING_EDIT_FIELDS.some(
-    (f) => (editedData[f] ?? "") !== (originalEditData[f] ?? "")
-  );
+  // enquiryAssignToPersons is a multi-select (array): compared by content.
+  const isPendingEditDirty =
+    PENDING_EDIT_FIELDS.some((f) => (editedData[f] ?? "") !== (originalEditData[f] ?? "")) ||
+    !samePersons(editedData.enquiryAssignToPersons, originalEditData.enquiryAssignToPersons);
 
   // Valid-value option lists for the inline Pending-row edit -- same
   // lto_dropdown categories CallTrackerForm.jsx/MakeQuotationForm.jsx use,
@@ -889,7 +892,7 @@ const handleSaveClick = async () => {
             lead_source: editedData.leadSource,
             enquiry_receiver_name: editedData.enquiryReceiverName,
             enquiry_approach: editedData.enquiryApproach,
-            enquiry_assign_to_person: editedData.enquiryAssignToProject,
+            enquiry_assign_to_person: toDbPersons(editedData.enquiryAssignToPersons),
             sales_coordinator_name: editedData.sc_name,
           }
         : {
@@ -908,8 +911,7 @@ const handleSaveClick = async () => {
 
       // Assign to Person is only written when the user changed it, so an
       // untouched (or blank-looking) field can never overwrite the saved value.
-      const assignToPersonChanged =
-        (editedData.enquiryAssignToProject ?? "") !== (originalEditData.enquiryAssignToProject ?? "");
+      const assignToPersonChanged = !samePersons(editedData.enquiryAssignToPersons, originalEditData.enquiryAssignToPersons);
       if (!assignToPersonChanged) delete updatePayload.enquiry_assign_to_person;
 
       Object.keys(updatePayload).forEach((key) => {
@@ -983,7 +985,7 @@ const handleSaveClick = async () => {
       if (!isEnquiryRecord && (editedData.enquiryApproach !== undefined || assignToPersonChanged)) {
         const trackerPayload = {};
         if (editedData.enquiryApproach !== undefined) trackerPayload.enquiry_approach = editedData.enquiryApproach;
-        if (assignToPersonChanged) trackerPayload.enquiry_assign_to_person = editedData.enquiryAssignToProject;
+        if (assignToPersonChanged) trackerPayload.enquiry_assign_to_person = toDbPersons(editedData.enquiryAssignToPersons);
 
         const { data: latestTrackerRows, error: latestTrackerError } = await supabase
           .from("lto_call_tracker_for_leads")
@@ -1045,7 +1047,7 @@ const handleSaveClick = async () => {
         email: editedData.email,
         shipping_address: editedData.shipping_address,
         enquiry_receiver_name: editedData.enquiry_receiver_name,
-        enquiry_assign_to_person: editedData.enquiry_assign_to_person,
+        enquiry_assign_to_person: toDbPersons(editedData.enquiry_assign_to_person),
         gst_number: editedData.gst_number,
         enquiry_date: editedData.enquiry_date,
         enquiry_for_state: editedData.enquiry_for_state,
@@ -1812,7 +1814,8 @@ const handleSaveClick = async () => {
       totalQty: row.total_qty || "",
       shippingAddress: row.shipping_address || "",
       enquiryReceiverName: row.enquiry_receiver_name || "",
-      enquiryAssignToProject: row.enquiry_assign_to_person || "",
+      enquiryAssignToProject: formatPersons(row.enquiry_assign_to_person),
+      enquiryAssignToPersons: toPersonList(row.enquiry_assign_to_person),
       gstNumber: row.gst_number || "",
       enquiryDate: row.enquiry_date ? formatDateToDDMMYYYY(row.enquiry_date) : "",
       enquiryState: row.enquiry_for_state || "",
@@ -1871,7 +1874,8 @@ const handleSaveClick = async () => {
     totalQty: row.total_qty || "",
     shippingAddress: row.shipping_address || "",
     enquiryReceiverName: row.enquiry_receiver_name || "",
-    enquiryAssignToProject: row.enquiry_assign_to_person || "",
+    enquiryAssignToProject: formatPersons(row.enquiry_assign_to_person),
+    enquiryAssignToPersons: toPersonList(row.enquiry_assign_to_person),
     gstNumber: row.gst_number || "",
     enquiryDate: row.enquiry_date ? formatDateToDDMMYYYY(row.enquiry_date) : "",
     enquiryState: row.enquiry_for_state || "",
@@ -2047,7 +2051,7 @@ const handleSaveClick = async () => {
         email: item.email || "",
         shipping_address: item.shipping_address || "",
         enquiry_receiver_name: item.enquiry_receiver_name || "",
-        enquiry_assign_to_person: item.enquiry_assign_to_person || "",
+        enquiry_assign_to_person: toPersonList(item.enquiry_assign_to_person),
         gst_number: item.gst_number || "",
         enquiry_date: item.enquiry_date || "",
         enquiry_for_state: item.enquiry_for_state || "",
@@ -3070,22 +3074,15 @@ const handleSaveClick = async () => {
             </select>
           </div>
           <div className="space-y-2">
-            <label htmlFor="pending-edit-11" className="block text-sm font-medium text-foreground">Enquiry Assign to Person</label>
-            <select
-              id="pending-edit-11"
-              value={editedData.enquiryAssignToProject || ""}
-              onChange={(e) => handleFieldChange("enquiryAssignToProject", e.target.value)}
-              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
-            >
-              <option value="">Select person</option>
-              {/* A saved person who is no longer in the dropdown list is still shown. */}
-              {editedData.enquiryAssignToProject && !assignToPersonOptions.includes(editedData.enquiryAssignToProject) && (
-                <option value={editedData.enquiryAssignToProject}>{editedData.enquiryAssignToProject}</option>
-              )}
-              {assignToPersonOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
+            <span className="block text-sm font-medium text-foreground">Enquiry Assign to Person</span>
+            <SearchableDropdown
+              isMulti
+              /* A saved person who is no longer in the dropdown list is still shown. */
+              options={[...new Set([...assignToPersonOptions, ...toPersonList(editedData.enquiryAssignToPersons)])].map((p) => ({ value: p, label: p }))}
+              value={toPersonList(editedData.enquiryAssignToPersons)}
+              onChange={(persons) => handleFieldChange("enquiryAssignToPersons", persons)}
+              placeholder="Select person(s)"
+            />
           </div>
           <div className="space-y-2">
             <label htmlFor="pending-edit-12" className="block text-sm font-medium text-foreground">SC Name</label>

@@ -4,6 +4,8 @@ import { useState, useContext, useEffect } from "react"
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import { AuthContext } from "../../App"
 import supabase from "../../utils/supabase"
+import SearchableDropdown from "../../components/SearchableDropdown"
+import { toDbPersons } from "../../utils/assignToPerson"
 
 function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose }) {
   const navigate = useNavigate()
@@ -39,7 +41,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
   const [emailAddress, setEmailAddress] = useState("")
   const [shippingAddress, setShippingAddress] = useState("")
   const [enquiryReceiverName, setEnquiryReceiverName] = useState("")
-  const [enquiryAssignToProject, setEnquiryAssignToProject] = useState("")
+  const [enquiryAssignToProject, setEnquiryAssignToProject] = useState([]) // multi-select: array of names
   const [gstNumber, setGstNumber] = useState("")
   const [enquiryDate, setEnquiryDate] = useState(() => {
     const today = new Date();
@@ -332,6 +334,10 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
       showNotification("Please select an Enquiry Received Status", "error")
       return
     }
+    if (enquiryStatus === "yes" && enquiryAssignToProject.length === 0) {
+      showNotification("Please select at least one person in Enquiry Assign to Person", "error")
+      return
+    }
 
     setIsSubmitting(true)
 
@@ -370,7 +376,7 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
         insertData.project_name = projectName || null;
         insertData.enquiry_type = salesType || null;
         insertData.enquiry_approach = enquiryApproach || null;
-        insertData.enquiry_assign_to_person = enquiryAssignToProject || null;
+        insertData.enquiry_assign_to_person = toDbPersons(enquiryAssignToProject);
 
         // Calculate planned_at using tat_config for stage 'Enquiry Tracker for Leads'
         try {
@@ -871,23 +877,16 @@ function NewCallTracker({ initialLeadId, initialLeadNo, isModal = false, onClose
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="enquiryAssignToProject" className="block text-sm font-medium text-foreground">
+                    <span className="block text-sm font-medium text-foreground">
                       Enquiry Assign to Person
-                      <span className="text-destructive">*</span></label>
-                    <select
-                      id="enquiryAssignToProject"
-                      className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                      <span className="text-destructive">*</span></span>
+                    <SearchableDropdown
+                      isMulti
+                      options={assignToProjectOptions.map((project) => ({ value: project, label: project }))}
                       value={enquiryAssignToProject}
-                      onChange={(e) => setEnquiryAssignToProject(e.target.value)}
-                      required
-                    >
-                      <option value="">Select person</option>
-                      {assignToProjectOptions.map((project, index) => (
-                        <option key={index} value={project}>
-                          {project}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={setEnquiryAssignToProject}
+                      placeholder="Select person(s)"
+                    />
                   </div>
 
                   <div className="space-y-2">

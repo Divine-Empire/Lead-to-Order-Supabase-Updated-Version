@@ -4,6 +4,7 @@ import StatusTabs from "../../components/StatusTabs";
 import { AuthContext } from "../../App";
 import supabase from "../../utils/supabase";
 import { fetchAllRows } from "../../utils/fetchAllRows";
+import { toPersonList } from "../../utils/assignToPerson";
 import { fetchLostDetails, isLostStatus, parseMoney } from "./lostDetailsData";
 import { latestQuotationPerFamily, fetchOrderQuotationValues } from "./quotationMetrics";
 import * as XLSX from "xlsx";
@@ -950,7 +951,8 @@ function Report() {
             };
 
             (leadsData || []).forEach(l => classify(l.lead_receiver_name, l.sales_type));
-            (enqData || []).forEach(e => classify(e.enquiry_assign_to_person, e.sales_type));
+            // enquiry_assign_to_person is multi-select: each assigned person is classified.
+            (enqData || []).forEach(e => toPersonList(e.enquiry_assign_to_person).forEach(p => classify(p, e.sales_type)));
 
             // A curated person with literally zero matching records yet
             // (e.g. newly added, hasn't handled anything of this kind) would
@@ -1190,14 +1192,18 @@ function Report() {
 
             // Total Enquiries: all-time, no date filter. Incoming/Outgoing
             // use enquiry_approach of enquiries created in the range.
+            // enquiry_assign_to_person is multi-select: an enquiry assigned to
+            // several people counts in full for each of them.
             (allEnquiries || []).forEach(e => {
-                const person = e.enquiry_assign_to_person;
-                if (!person || !enquiryStats[person]) return;
-                enquiryStats[person].totalEnquiries++;
-                if (!inThisWeek(e.created_at)) return;
+                const inRange = inThisWeek(e.created_at);
                 const approach = String(e.enquiry_approach || "").trim().toUpperCase();
-                if (approach === "INCOMING") enquiryStats[person].incoming++;
-                if (approach === "OUTGOING") enquiryStats[person].outgoing++;
+                toPersonList(e.enquiry_assign_to_person).forEach(person => {
+                    if (!enquiryStats[person]) return;
+                    enquiryStats[person].totalEnquiries++;
+                    if (!inRange) return;
+                    if (approach === "INCOMING") enquiryStats[person].incoming++;
+                    if (approach === "OUTGOING") enquiryStats[person].outgoing++;
+                });
             });
 
             const orderedEnquiryIds = new Set();
@@ -1205,21 +1211,23 @@ function Report() {
                 if (!row.enquiry_id || orderedEnquiryIds.has(row.enquiry_id)) return;
                 orderedEnquiryIds.add(row.enquiry_id);
                 const e = enquiryById.get(row.enquiry_id);
-                const person = e?.enquiry_assign_to_person;
-                if (person && enquiryStats[person]) {
+                const orderValue = enquiryOrderValueByQuotationNo.get(String(row.quotation_number || "").trim()) || 0;
+                toPersonList(e?.enquiry_assign_to_person).forEach(person => {
+                    if (!enquiryStats[person]) return;
                     enquiryStats[person].orderConverted++;
-                    enquiryStats[person].orderValue += enquiryOrderValueByQuotationNo.get(String(row.quotation_number || "").trim()) || 0;
-                }
+                    enquiryStats[person].orderValue += orderValue;
+                });
             });
 
             // Quotations: same family rule as Leads, credited to the
             // enquiry's enquiry_assign_to_person.
             enquiryQuotationFamilies.forEach(q => {
-                const person = enquiryById.get(q.enquiry_id)?.enquiry_assign_to_person;
-                if (person && enquiryStats[person]) {
+                const amount = parseMoney(q.quotation_value_without_tax);
+                toPersonList(enquiryById.get(q.enquiry_id)?.enquiry_assign_to_person).forEach(person => {
+                    if (!enquiryStats[person]) return;
                     enquiryStats[person].quotations++;
-                    enquiryStats[person].quotationAmount += parseMoney(q.quotation_value_without_tax);
-                }
+                    enquiryStats[person].quotationAmount += amount;
+                });
             });
 
             setEnquiriesReportRows(visiblePersons.map(name => enquiryStats[name]));
@@ -1580,9 +1588,10 @@ function Report() {
                 const categoryGroups = ["CRR", "NBD_CRR"].map(category => {
                     const perSc = multiScs.map(sc => ({
                         key: `${sc}_${category}`, label: sc,
-                        metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === category), facts),
+                        metrics: computeGroupMetrics(records.filter(r => toPersonList(r[scField]).includes(sc) && normalizeCategory(r.sales_type) === category), facts),
                     }));
-                    const totalRecords = records.filter(r => multiScs.includes(r[scField]) && normalizeCategory(r.sales_type) === category);
+                    // TOTAL: a multi-person record is counted once, not once per person.
+                    const totalRecords = records.filter(r => toPersonList(r[scField]).some(p => multiScs.includes(p)) && normalizeCategory(r.sales_type) === category);
                     return {
                         category,
                         columns: [...perSc, { key: `TOTAL_${category}`, label: "TOTAL", isTotal: true, metrics: computeGroupMetrics(totalRecords, facts) }],
@@ -1590,7 +1599,7 @@ function Report() {
                 });
                 const nbdColumns = nbdOnlyScs.map(sc => ({
                     key: sc, label: sc,
-                    metrics: computeGroupMetrics(records.filter(r => r[scField] === sc && normalizeCategory(r.sales_type) === "NBD"), facts),
+                    metrics: computeGroupMetrics(records.filter(r => toPersonList(r[scField]).includes(sc) && normalizeCategory(r.sales_type) === "NBD"), facts),
                 }));
                 return { categoryGroups, nbdColumns };
             };

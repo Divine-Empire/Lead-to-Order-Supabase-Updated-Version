@@ -1,6 +1,16 @@
 import supabase from "../../utils/supabase";
 import { fetchAllRows } from "../../utils/fetchAllRows";
 import { mergeRowsChronologically } from "../../utils/mergeTrackerRows";
+import { toPersonList } from "../../utils/assignToPerson";
+
+// SC of a lost enquiry: its sales coordinator; when it has none, every person
+// it is assigned to (enquiry_assign_to_person is multi-select) -- one row per
+// person, so each of them gets the same count.
+const scNamesOf = (rec) => {
+    if (rec.sales_coordinator_name) return [rec.sales_coordinator_name];
+    const persons = toPersonList(rec.enquiry_assign_to_person);
+    return persons.length ? persons : [null];
+};
 
 // Shared by both the Lost Details tab (Report.jsx) and its per-SC
 // drill-down page (LostDetailsPage.jsx).
@@ -208,12 +218,12 @@ export async function fetchLostDetails({ source, startDateISO, endDateISO, onPro
 
             const mapped = (baseRecords || [])
                 .filter((rec) => mergedByRecordId.has(rec.id))
-                .map((rec) => {
+                .flatMap((rec) => {
                     const merged = mergedByRecordId.get(rec.id) || {};
-                    return {
+                    return scNamesOf(rec).map((scName) => ({
                         id: rec.id,
                         source: "enquiry",
-                        scName: rec.sales_coordinator_name || rec.enquiry_assign_to_person || null,
+                        scName,
                         companyName: rec.company_name || "",
                         number: rec.enquiry_no || "",
                         createdAt: rec.created_at,
@@ -223,7 +233,7 @@ export async function fetchLostDetails({ source, startDateISO, endDateISO, onPro
                         quotationValueWithTax: merged.quotation_value_with_tax ?? null,
                         quotationUpload: merged.quotation_upload || null,
                         lostReason: [merged.if_no_reason_status, merged.if_no_reason_remark].filter(Boolean).join(" -- ") || null,
-                    };
+                    }));
                 });
 
             const withQuotes = await attachQuotations(mapped);
@@ -289,10 +299,10 @@ export async function fetchLostDetails({ source, startDateISO, endDateISO, onPro
                 newTrackers.forEach((t) => {
                     const enq = enqById.get(t.enquiry_id);
                     if (!enq) return;
-                    chunkMapped.push({
+                    scNamesOf(enq).forEach((scName) => chunkMapped.push({
                         id: enq.id,
                         source: "enquiry",
-                        scName: enq.sales_coordinator_name || enq.enquiry_assign_to_person || null,
+                        scName,
                         companyName: enq.company_name || "",
                         number: enq.enquiry_no || "",
                         createdAt: enq.created_at,
@@ -302,7 +312,7 @@ export async function fetchLostDetails({ source, startDateISO, endDateISO, onPro
                         quotationValueWithTax: t.quotation_value_with_tax ?? null,
                         quotationUpload: t.quotation_upload || null,
                         lostReason: [t.if_no_reason_status, t.if_no_reason_remark].filter(Boolean).join(" -- ") || null,
-                    });
+                    }));
                 });
 
                 // Attach latest quotations for this chunk

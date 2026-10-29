@@ -7,6 +7,8 @@ import useDialogBehavior from "../../components/useDialogBehavior"
 import supabase from "../../utils/supabase"
 import { TABLES, COLUMNS } from "../../constants/dbSchema"
 import { resolveScAndCreForNewCompany } from "../../utils/scAssignment"
+import SearchableDropdown from "../../components/SearchableDropdown"
+import { toDbPersons } from "../../utils/assignToPerson"
 
 const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = null }) => {
   const { showNotification = () => {} } = useContext(AuthContext) || {}
@@ -51,7 +53,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
     emailAddress: "",
     shippingAddress: "",
     enquiryReceiverName: "",
-    enquiryAssignToProject: "",
+    enquiryAssignToProject: [], // multi-select: array of names
     gstNumber: initialData?.gstNumber || "",
     isCompanyAutoFilled: !!initialData
   })
@@ -367,6 +369,10 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
       showNotification("State Code is mandatory.", "error");
       return;
     }
+    if (!newCallTrackerData.enquiryAssignToProject || newCallTrackerData.enquiryAssignToProject.length === 0) {
+      showNotification("Please select at least one person in Enquiry Assign to Person.", "error");
+      return;
+    }
     // Validate that all items have a name and quantity
     for (const item of items) {
       if (!item.name || !item.name.trim()) {
@@ -492,7 +498,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
         email: newCallTrackerData.emailAddress,
         shipping_address: newCallTrackerData.shippingAddress,
         enquiry_receiver_name: newCallTrackerData.enquiryReceiverName,
-        enquiry_assign_to_person: newCallTrackerData.enquiryAssignToProject,
+        enquiry_assign_to_person: toDbPersons(newCallTrackerData.enquiryAssignToProject),
         gst_number: newCallTrackerData.gstNumber,
         enquiry_date: enquiryFormData.enquiryDate ? formatDateToISO(enquiryFormData.enquiryDate) : null,
         enquiry_for_state: enquiryFormData.enquiryState,
@@ -824,27 +830,20 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="enquiryAssignToProject" className="block text-sm font-medium text-foreground">
+              <span className="block text-sm font-medium text-foreground">
                 Enquiry Assign to Person
-               <span className="text-destructive">*</span></label>
-              <select
-                id="enquiryAssignToProject"
-                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+               <span className="text-destructive">*</span></span>
+              <SearchableDropdown
+                isMulti
+                options={assignToProjectOptions.map((project) => ({ value: project, label: project }))}
                 value={newCallTrackerData.enquiryAssignToProject}
-                onChange={(e) => setNewCallTrackerData(prev => ({
+                onChange={(persons) => setNewCallTrackerData(prev => ({
                   ...prev,
-                  enquiryAssignToProject: e.target.value,
+                  enquiryAssignToProject: persons,
                   isCompanyAutoFilled: false
                 }))}
-                required
-              >
-                <option value="">Select person</option>
-                {assignToProjectOptions.map((project, index) => (
-                  <option key={index} value={project}>
-                    {project}
-                  </option>
-                ))}
-              </select>
+                placeholder="Select person(s)"
+              />
             </div>
 
             <div className="space-y-2">
