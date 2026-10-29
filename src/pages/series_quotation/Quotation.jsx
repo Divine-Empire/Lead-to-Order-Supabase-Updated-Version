@@ -11,6 +11,7 @@ import { generatePDFFromData } from "./pdf-generator";
 import { getNextQuotationNumber, getNextRevisionNo } from "./quotation-service";
 import { useQuotationData } from "./use-quotation-data";
 import supabase from "../../utils/supabase";
+import { notifyReferenceNameChanged } from "../../utils/quotationWhatsapp";
 import { loadQuotationDataByNumber } from "../../utils/quotationDataLoader";
 import { putPackagingAndFreightLast } from "../../utils/quotationItemsOrder";
 import ModalAlert from "../../components/ModalAlert";
@@ -676,6 +677,13 @@ function Quotation() {
           .eq("quotation_no", authoritativeQuotationNo);
 
         setPdfUrl(uploadedPdfUrl);
+      }
+
+      // A revision may have changed the Reference Name: the Edge Function
+      // compares with the previous revision and WhatsApps the recipients
+      // only if it did. Best-effort, never blocks the save.
+      if (isRevising && selectedQuotation) {
+        await notifyReferenceNameChanged(authoritativeQuotationNo);
       }
 
       if (isRevising && selectedQuotation) {
