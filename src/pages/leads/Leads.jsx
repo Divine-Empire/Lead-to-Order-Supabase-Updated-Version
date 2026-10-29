@@ -8,6 +8,9 @@ import * as XLSX from "xlsx";
 import { resolveScAndCreForNewCompany } from "../../utils/scAssignment";
 import { getStateCodeFromName } from "../../utils/gstStateCodes";
 import useDialogBehavior from "../../components/useDialogBehavior";
+import useDuplicateOpenRecordsDialog from "../../components/DuplicateOpenRecordsDialog";
+import { fetchOpenRecordsForCompany } from "../../utils/openRecordsCheck";
+import { logDuplicateEnquiry } from "../../utils/duplicateLog";
 
 // Generate next sequential lead numbers for bulk import
 const generateNextImportLeadNumbers = async (count) => {
@@ -579,6 +582,7 @@ function Leads() {
   const initialScName = searchParams.get("scName") || "";
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { askDuplicate, duplicateDialog } = useDuplicateOpenRecordsDialog();
   const [showImportModal, setShowImportModal] = useState(false);
   const [formData, setFormData] = useState({
     receiverName: "",
@@ -621,7 +625,7 @@ function Leads() {
   const [creditDaysOptions, setCreditDaysOptions] = useState([]);
   const [, setCreditLimitOptions] = useState([]);
   const formAuthContext = useContext(AuthContext) || {};
-  const { showNotification = () => {} } = formAuthContext;
+  const { showNotification = () => {}, currentUser = null } = formAuthContext;
   const [designationOptions, setDesignationOptions] = useState([]);
   const [nobOptions, setNobOptions] = useState([]);
   const [stateOptions, setStateOptions] = useState([]);
@@ -919,6 +923,22 @@ function Leads() {
     setIsSubmitting(true);
 
     try {
+      // 0. Same company already has open leads / enquiries in Enquiry Tracker
+      //    Pending? Warn (before anything is written); the user can still go on.
+      const dupCompany = (formData.companyName || "").trim();
+      let openRecords = []; // also logged once the lead is created (below)
+      if (dupCompany) {
+        try {
+          openRecords = await fetchOpenRecordsForCompany(dupCompany);
+        } catch (checkErr) {
+          console.warn("Open-records check failed, continuing:", checkErr);
+        }
+        if (openRecords.length > 0) {
+          const proceed = await askDuplicate({ companyName: dupCompany, records: openRecords });
+          if (!proceed) return;
+        }
+      }
+
       // 1. Check if company exists in client_master. If it's brand new,
       //    resolve SC (and, for group companies, CRE) BEFORE inserting, so
       //    the assignment lands in the SAME atomic insert -- see
@@ -1113,6 +1133,23 @@ function Leads() {
       // atomically in step 1, inside resolveScAndCreForNewCompany -- no
       // separate post-hoc rotation step needed here anymore.
 
+      // The user confirmed "Create anyway" over existing open records: log it
+      // (bell + Duplicate Enquiry Logs). Best-effort -- never blocks the lead.
+      if (openRecords.length > 0) {
+        try {
+          await logDuplicateEnquiry({
+            companyName: dupCompany,
+            newRecordType: "lead",
+            newRecordId: insertedLead.id,
+            newRecordNo: authoritiveLeadNo,
+            createdBy: currentUser?.fullName || currentUser?.username,
+            openRecords,
+          });
+        } catch (logErr) {
+          console.warn("Could not write the duplicate-enquiry log:", logErr);
+        }
+      }
+
       showNotification(`Lead created successfully! Lead No: ${authoritiveLeadNo}`, "success");
       showNotification(`Lead created successfully! Lead No: ${authoritiveLeadNo}`, "success");
       setFormData({
@@ -1161,6 +1198,7 @@ function Leads() {
 
   return (
     <div className="mx-auto w-full py-1 px-2">
+      {duplicateDialog}
       {showImportModal && (
         <ExcelImportModal
           onClose={() => setShowImportModal(false)}

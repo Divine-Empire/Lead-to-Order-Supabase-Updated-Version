@@ -2,6 +2,7 @@ import { MenuIcon } from "./Icons"
 import { useContext } from "react"
 import { AuthContext } from "../App"
 import { useLocation } from "react-router-dom"
+import NotificationBell from "./NotificationBell"
 
 function initials(name) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean)
@@ -42,6 +43,10 @@ function MainNav({ setMobileMenuOpen }) {
     if (path.startsWith("/field-sales-logs")) return {
       title: "Field Sales Logs",
       description: "Browse field sales visit logs and export them"
+    }
+    if (path.startsWith("/duplicate-logs")) return {
+      title: "Duplicate Enquiry Logs",
+      description: "Leads and enquiries created over existing open ones, and who has read each alert"
     }
     if (path.startsWith("/report")) return {
       title: "Reports",
@@ -88,6 +93,7 @@ function MainNav({ setMobileMenuOpen }) {
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        <NotificationBell />
         <span
           className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
           aria-hidden="true"

@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom"
 import { HomeIcon, UsersIcon, PhoneCallIcon, BarChartIcon, FileTextIcon, ShieldIcon, LogoutIcon, DatabaseIcon, SettingsIcon } from "./Icons"
 import { useContext, useState, useEffect } from "react"
-import { ChevronsLeft, ChevronsRight, MapPin, X } from "lucide-react"
+import { ChevronsLeft, ChevronsRight, MapPin, X, ClipboardList } from "lucide-react"
 import { AuthContext } from "../App"
 import supabase from "../utils/supabase"
 import { fetchClosedIdSet, countOpenRows } from "../utils/pendingStatus"
@@ -14,7 +14,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         callTracker: null,
         enquiryTracker: null,
         clientMaster: null,
-        itemsMaster: null
+        itemsMaster: null,
+        duplicateLogs: null
     })
 
 
@@ -122,7 +123,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                 const [
                     clientTotalRes,
                     clientNotRelevantRes,
-                    itemsRes
+                    itemsRes,
+                    dupLogsRes
                 ] = await Promise.all([
                     // Client Master total clients count
                     safeFetch(clientTotalQuery),
@@ -131,7 +133,12 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                     safeFetch(clientNotRelevantQuery),
 
                     // Items total count (master data -- not SC-scoped)
-                    safeFetch(supabase.from("lto_items").select("*", { count: "exact", head: true }))
+                    safeFetch(supabase.from("lto_items").select("*", { count: "exact", head: true })),
+
+                    // Duplicate Enquiry Logs not yet read by an admin (admin-only stage)
+                    isAdmin()
+                        ? safeFetch(supabase.from("lto_duplicate_enquiry_logs").select("*", { count: "exact", head: true }).eq("read_by_admin", false))
+                        : Promise.resolve({ count: null })
                 ]);
 
                 const relevantClientCount = Math.max(0, (clientTotalRes?.count || 0) - (clientNotRelevantRes?.count || 0));
@@ -141,7 +148,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
                     callTracker: callCount,
                     enquiryTracker: enquiryCount,
                     clientMaster: relevantClientCount,
-                    itemsMaster: itemsCount
+                    itemsMaster: itemsCount,
+                    duplicateLogs: dupLogsRes?.count ?? null
                 });
             } catch (err) {
                 console.error("Error fetching sidebar counts:", err);
@@ -202,7 +210,7 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     // "/quotation" and a longer path that starts with it.
     const isActive = (item) => (item.href === "/" ? location.pathname === "/" : location.pathname === item.href || location.pathname.startsWith(`${item.href}/`))
     const countFor = (href) =>
-        href === "/call-tracker" ? counts.callTracker : href === "/enquiry-tracker" ? counts.enquiryTracker : null
+        href === "/call-tracker" ? counts.callTracker : href === "/enquiry-tracker" ? counts.enquiryTracker : href === "/duplicate-logs" ? counts.duplicateLogs : null
 
     // Flat stage-wise navigation. Visibility rules: Report is for everyone,
     // Settings is admin-only, Master Data sub-stages are restricted to Client Master for User role.
@@ -216,6 +224,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         { href: "/series-quotation", label: "Series Quotation", icon: FileTextIcon },
         // Read-only list of field sales visit submissions (field_sales_form).
         { href: "/field-sales-logs", label: "Field Sales Logs", icon: MapPin },
+        // Admin-only: lead / enquiry creations over existing open ones.
+        ...(isAdmin && isAdmin() ? [{ href: "/duplicate-logs", label: "Duplicate Enquiry Logs", icon: ClipboardList }] : []),
         { href: "/report", label: "Report", icon: ShieldIcon },
         { isMaster: true, label: "Master Data", icon: DatabaseIcon },
     ];

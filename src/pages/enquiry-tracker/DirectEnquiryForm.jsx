@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useContext } from "react"
 import { AuthContext } from "../../App"
-import useConfirmDialog from "../../components/useConfirmDialog"
+import useDuplicateOpenRecordsDialog from "../../components/DuplicateOpenRecordsDialog"
+import { fetchOpenRecordsForCompany } from "../../utils/openRecordsCheck"
+import { logDuplicateEnquiry } from "../../utils/duplicateLog"
 import useDialogBehavior from "../../components/useDialogBehavior"
 import supabase from "../../utils/supabase"
 import { TABLES, COLUMNS } from "../../constants/dbSchema"
@@ -11,8 +13,8 @@ import SearchableDropdown from "../../components/SearchableDropdown"
 import { toDbPersons } from "../../utils/assignToPerson"
 
 const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = null }) => {
-  const { showNotification = () => {} } = useContext(AuthContext) || {}
-  const { confirmAsync, confirmDialog } = useConfirmDialog()
+  const { showNotification = () => {}, currentUser = null } = useContext(AuthContext) || {}
+  const { askDuplicate, duplicateDialog } = useDuplicateOpenRecordsDialog()
   const dialogRef = useDialogBehavior(() => {
     try {
       onClose()
@@ -388,41 +390,20 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
     setIsSubmitting(true);
 
     try {
-      // Same customer request logged twice by different receivers (e.g.
-      // En-9454 / En-9463) leaves one copy with no quotation. Warn, don't
-      // block -- a client can legitimately send a new requirement.
-      // ponytail: matches on company name + last 7 days only; doesn't check
-      // whether the earlier enquiry is still open in the tracker.
+      // Same customer request logged twice (e.g. En-9454 / En-9463) leaves one
+      // copy with no quotation. Warn, don't block -- a client can legitimately
+      // send a new requirement. Lists every lead/enquiry of this company that
+      // is still open (Enquiry Tracker Pending), whatever its age.
       const companyName = (newCallTrackerData.companyName || "").trim();
+      let openRecords = []; // also logged once the enquiry is created (below)
       if (companyName) {
-        const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-        const { data: recent, error: recentErr } = await supabase
-          .from("lto_enquiries")
-          .select("enquiry_no, created_at, enquiry_receiver_name, lto_enquiry_items(item_name, quantity)")
-          .ilike("company_name", companyName)
-          .gte("created_at", since)
-          .order("created_at", { ascending: false });
-
-        if (recentErr) {
-          console.warn("Duplicate-enquiry check failed, continuing:", recentErr);
-        } else if (recent && recent.length > 0) {
-          const lines = recent.map((e) => {
-            const items = (e.lto_enquiry_items || [])
-              .map((i) => `${i.item_name} x${i.quantity}`)
-              .join(", ");
-            const when = new Date(e.created_at).toLocaleString("en-IN");
-            return `• ${e.enquiry_no} (${when}, by ${e.enquiry_receiver_name || "-"}): ${items || "no items"}`;
-          });
-          const proceed = await confirmAsync({
-            title: "Possible duplicate enquiry",
-            confirmText: "Create anyway",
-            destructive: false,
-            message:
-            `"${companyName}" already has ${recent.length} enquir${recent.length === 1 ? "y" : "ies"} in the last 7 days:\n\n` +
-            `${lines.join("\n")}\n\n` +
-            `If this is the same requirement, cancel and continue on the existing enquiry instead.\n\n` +
-            `Create a new enquiry anyway?`,
-          });
+        try {
+          openRecords = await fetchOpenRecordsForCompany(companyName);
+        } catch (checkErr) {
+          console.warn("Open-records check failed, continuing:", checkErr);
+        }
+        if (openRecords.length > 0) {
+          const proceed = await askDuplicate({ companyName, records: openRecords });
           if (!proceed) return;
         }
       }
@@ -591,6 +572,23 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
           }
         } catch (cmErr) {
           console.error("Error updating client_master tracking status:", cmErr);
+        }
+      }
+
+      // The user confirmed "Create anyway" over existing open records: log it
+      // (bell + Duplicate Enquiry Logs). Best-effort -- never blocks the enquiry.
+      if (openRecords.length > 0) {
+        try {
+          await logDuplicateEnquiry({
+            companyName,
+            newRecordType: "enquiry",
+            newRecordId: newEnquiryId,
+            newRecordNo: assignedEnquiryNo,
+            createdBy: currentUser?.fullName || currentUser?.username,
+            openRecords,
+          });
+        } catch (logErr) {
+          console.warn("Could not write the duplicate-enquiry log:", logErr);
         }
       }
 
@@ -1094,7 +1092,7 @@ const CallTrackerForm = ({ onClose = () => window.history.back(), initialData = 
           </button>
         </div>
       </div>
-      {confirmDialog}
+      {duplicateDialog}
     </div>
   )
 }
