@@ -12,6 +12,7 @@ import {
 import logo from "../../assests/WhatsApp Image 2025-05-14 at 4.11.43 PM.jpeg";
 import qr from "../../assests/qrlogo.png";
 import maniquipLogo1 from "../../assests/maniquip-logo-screenshot.png";
+import { getPdfGeneratedBy } from "../../utils/pdfGeneratedBy";
 import { putFreightLast, isFreightItem } from "../../utils/quotationItemsOrder";
 
 // Register custom Google Font that contains the Indian Rupee symbol (₹) using stable CDNJS assets
@@ -518,6 +519,15 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#999999",
   },
+  generatedBy: {
+    position: "absolute",
+    bottom: 8,
+    right: 20,
+    fontSize: 7,
+    fontFamily: "Roboto",
+    textAlign: "right",
+    color: "#666666",
+  },
 });
 
 const colStyles = {
@@ -542,6 +552,7 @@ const QuotationPDFDocument = ({
   hiddenColumns = {},
   hiddenFields = {},
 }) => {
+  const generatedBy = getPdfGeneratedBy();
   const displayedQuotationNo =
     (quotationData &&
       (quotationData.quotation_no || quotationData.Quotation_No || quotationData.finalQuotationNo)) ||
@@ -1351,6 +1362,11 @@ const QuotationPDFDocument = ({
         {/* Footer Page Number */}
         <Text style={styles.pageNumber} fixed>
           Page
+        </Text>
+        {/* Bottom-right: who generated this PDF and when (PDF only, not stored) */}
+        <Text style={styles.generatedBy} fixed>
+          Created By: {generatedBy.createdBy || " "}
+          {"\n"}Time: {generatedBy.time}
         </Text>
       </Page>
     </Document>

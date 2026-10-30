@@ -376,6 +376,42 @@ function Quotation() {
     }
   };
 
+  // "View as Client": renders the same PDF the client would receive and opens
+  // it in a new tab. Nothing is saved or downloaded, and no quotation number
+  // is reserved -- the number currently shown in the form is used.
+  const handleViewAsClient = async () => {
+    // Open the tab inside the click so the browser doesn't block it as a popup.
+    const viewer = window.open("", "_blank");
+    setIsGenerating(true);
+    try {
+      const shownNo =
+        quotationData.Quotation_No ||
+        quotationData.finalQuotationNo ||
+        quotationData.quotationNo;
+      const pdfDataUri = await generatePDFFromData(
+        { ...quotationData, Quotation_No: shownNo },
+        selectedReferences,
+        specialDiscount,
+        hiddenColumns,
+        hiddenFields
+      );
+      const bytes = Uint8Array.from(atob(pdfDataUri.split(",")[1]), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      if (viewer) {
+        viewer.location.href = url;
+      } else {
+        showPopup("warning", "Pop-up blocked", "Allow pop-ups for this site to view the quotation as the client sees it.");
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
+    } catch (error) {
+      viewer?.close();
+      console.error("Error opening client view:", error);
+      showPopup("error", "Could not open client view", error.message || "The PDF could not be generated.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   const handleGeneratePDF = async () => {
     setIsGenerating(true);
 
@@ -829,6 +865,7 @@ function Quotation() {
               imageform={imageform}
               handleGenerateLink={handleGenerateLink}
               handleGeneratePDF={handleGeneratePDF}
+              handleViewAsClient={handleViewAsClient}
               isGenerating={isGenerating}
               isSubmitting={isSubmitting}
               hiddenColumns={hiddenColumns}

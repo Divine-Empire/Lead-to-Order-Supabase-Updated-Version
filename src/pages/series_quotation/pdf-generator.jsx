@@ -13,6 +13,7 @@ import {
 import logo from "../../assests/WhatsApp Image 2025-05-14 at 4.11.43 PM.jpeg";
 import qr from "../../assests/qrlogo.png";
 import maniquipLogo1 from "../../assests/maniquip-logo-screenshot.png";
+import { getPdfGeneratedBy } from "../../utils/pdfGeneratedBy";
 import { putFreightLast } from "../../utils/quotationItemsOrder";
 import { SERIES, getSeries, isSimpleItem, computeSeriesSummary, summaryRows } from "./series-utils";
 import { prepareImages, isHttpUrl } from "./image-service";
@@ -515,6 +516,15 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#999999",
   },
+  generatedBy: {
+    position: "absolute",
+    bottom: 8,
+    right: 20,
+    fontSize: 7,
+    fontFamily: "Roboto",
+    textAlign: "right",
+    color: "#666666",
+  },
 });
 
 // Relative widths of the two-series table columns; hidden columns drop out and
@@ -543,6 +553,7 @@ const QuotationPDFDocument = ({
   hiddenFields = {},
   images = {}, // photo link -> { dataUrl } (already compressed, see image-service.js)
 }) => {
+  const generatedBy = getPdfGeneratedBy();
   const displayedQuotationNo =
     (quotationData &&
       (quotationData.quotation_no || quotationData.Quotation_No || quotationData.finalQuotationNo)) ||
@@ -1164,6 +1175,11 @@ const QuotationPDFDocument = ({
         {/* Footer Page Number */}
         <Text style={styles.pageNumber} fixed>
           Page
+        </Text>
+        {/* Bottom-right: who generated this PDF and when (PDF only, not stored) */}
+        <Text style={styles.generatedBy} fixed>
+          Created By: {generatedBy.createdBy || " "}
+          {"\n"}Time: {generatedBy.time}
         </Text>
       </Page>
     </Document>

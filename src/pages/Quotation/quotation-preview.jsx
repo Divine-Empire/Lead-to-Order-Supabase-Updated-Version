@@ -57,6 +57,7 @@ const QuotationPreview = ({
   imageform,
   handleGenerateLink,
   handleGeneratePDF,
+  handleViewAsClient,
   isGenerating,
   isSubmitting,
   hiddenColumns,
@@ -539,7 +540,12 @@ const QuotationPreview = ({
       )}
 
       <div className="flex justify-between">
-        <button className="flex items-center px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50">
+        <button
+          type="button"
+          className="flex items-center px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={handleViewAsClient}
+          disabled={isGenerating || isSubmitting}
+        >
           <EyeIcon className="mr-2 w-4 h-4" />
           View as Client
         </button>
