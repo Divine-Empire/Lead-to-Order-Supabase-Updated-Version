@@ -40,7 +40,7 @@ const ReadChip = ({ named, read }) => {
 };
 
 function DuplicateEnquiryLogs() {
-  const { showNotification, currentUser } = useContext(AuthContext) || {};
+  const { showNotification, currentUser, isAdmin } = useContext(AuthContext) || {};
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -201,6 +201,15 @@ function DuplicateEnquiryLogs() {
       </div>
     </div>
   );
+
+  if (isAdmin && !isAdmin()) {
+    return (
+      <div className="flex min-h-[50vh] flex-col items-center justify-center p-6 text-center">
+        <h2 className="text-lg font-semibold text-foreground">Access Denied</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Only users with the admin role can access this page.</p>
+      </div>
+    );
+  }
 
   const hasFilters = Boolean(searchQuery || status);
 

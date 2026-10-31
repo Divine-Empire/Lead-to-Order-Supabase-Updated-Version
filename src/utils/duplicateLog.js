@@ -1,4 +1,5 @@
 import supabase from "./supabase";
+import { notifyDuplicateEntryCreated } from "./duplicateWhatsapp";
 
 // Writes the duplicate-enquiry log (lto_duplicate_enquiry_logs) for a lead /
 // enquiry that was just created although the company already had open ones.
@@ -34,5 +35,13 @@ export async function logDuplicateEnquiry({ companyName, newRecordType, newRecor
     p_open_records: snapshot,
   });
   if (error) throw error;
+
+  // When a new log was created, alert admins via WhatsApp (fire-and-forget).
+  if (data) {
+    notifyDuplicateEntryCreated(data).catch((err) => {
+      console.warn("Could not send duplicate entry WhatsApp notification:", err);
+    });
+  }
+
   return data;
 }

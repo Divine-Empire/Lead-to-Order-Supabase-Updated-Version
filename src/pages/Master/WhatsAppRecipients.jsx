@@ -223,7 +223,7 @@ const WhatsAppRecipients = () => {
                 className={inputClass}
                 placeholder="e.g. Neeraj"
               />
-              <p className="text-xs text-muted-foreground">Used in the greeting: &quot;Hi Neeraj Sir,&quot;</p>
+              <p className="text-xs text-muted-foreground">Used in the greeting: &quot;Hi Neeraj,&quot;</p>
             </div>
             <div className="space-y-1.5">
               <label htmlFor="wr-phone" className="block text-sm font-medium text-foreground">Mobile Number</label>

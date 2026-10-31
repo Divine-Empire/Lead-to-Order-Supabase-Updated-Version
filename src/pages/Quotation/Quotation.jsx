@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { DownloadIcon, SaveIcon, ShareIcon } from "../../components/Icons";
@@ -721,7 +721,10 @@ function Quotation() {
       // compares with the previous revision and WhatsApps the recipients
       // only if it did. Best-effort, never blocks the save.
       if (isRevising && selectedQuotation) {
-        await notifyReferenceNameChanged(authoritativeQuotationNo);
+        await notifyReferenceNameChanged(authoritativeQuotationNo, {
+          companyName: quotationData.consigneeName,
+          pdfUrl: uploadedPdfUrl,
+        });
       }
 
       if (isRevising && selectedQuotation) {

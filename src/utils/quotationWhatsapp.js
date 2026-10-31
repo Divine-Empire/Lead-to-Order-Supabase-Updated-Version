@@ -7,10 +7,14 @@ import supabase from "./supabase";
 // from the previous revision and that this quotation was not notified yet, so
 // calling it is always safe. Never throws -- a WhatsApp problem must not
 // affect the (already saved) quotation. Meta credentials stay server-side.
-export async function notifyReferenceNameChanged(quotationNo) {
+export async function notifyReferenceNameChanged(quotationNo, options = {}) {
   try {
+    const payload = typeof quotationNo === "object" && quotationNo !== null
+      ? quotationNo
+      : { quotationNo, ...options };
+
     const { data, error } = await supabase.functions.invoke("send-quotation-reference-changed", {
-      body: { quotationNo },
+      body: payload,
     });
     if (error) {
       console.error("Reference-name WhatsApp notification failed:", error);

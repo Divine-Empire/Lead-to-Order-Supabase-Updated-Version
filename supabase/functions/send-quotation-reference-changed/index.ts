@@ -6,26 +6,28 @@
 // previous revision of the same root quotation.
 //
 // Template body:
-//   Hi {{1}} Sir,
-//   New quotation created with Reference Name: {{2}}, Quotation No: {{3}},
-//   Quotation Copy: {{4}}, Company: {{5}}. Please verify. Thank You.
-//   {{1}} recipient name  {{2}} Reference Name  {{3}} Quotation No
-//   {{4}} PDF link        {{5}} Company
+//   Hi {{1}},
+//   The Reference Name for {{2}} has been changed from {{3}} to {{4}}.
+//   Quotation :- {{5}}
+//   {{1}} Receiver        {{2}} Company Name
+//   {{3}} Old Reference   {{4}} New Reference Name(s)
+//   {{5}} Updated Quotation Copy Link
 //
-// The browser only sends { quotationNo }. Everything else (is it a revision,
-// did the Reference Name change, was it already notified, who the recipients
-// are) is decided here from the DB, so the endpoint cannot be used to send
-// arbitrary text or to send twice for one quotation.
+// The browser only sends { quotationNo } (or optional overrides). Everything
+// else (is it a revision, did the Reference Name change, was it already notified,
+// who the recipients are) is decided here from the DB, so the endpoint cannot
+// be used to send arbitrary text or to send twice for one quotation.
 //
 // Secrets (Supabase > Edge Functions > Secrets): the same Meta credentials
 // the Service-Support functions use --
 //   WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID
-// optional: WHATSAPP_TEMPLATE_LANGUAGE (default "en"), WHATSAPP_API_VERSION (default "v21.0")
+// optional: WHATSAPP_REFERENCE_CHANGED_TEMPLATE (default "lto_quotation_reference_changed"),
+// WHATSAPP_TEMPLATE_LANGUAGE (default "en"), WHATSAPP_API_VERSION (default "v21.0")
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase itself.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const TEMPLATE_NAME = "lto_quotation_reference_changed";
+const TEMPLATE_NAME = Deno.env.get("WHATSAPP_REFERENCE_CHANGED_TEMPLATE") ?? "lto_quotation_reference_changed";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -56,7 +58,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { quotationNo } = await req.json();
+    const { quotationNo, companyName, oldReferenceName, newReferenceName, pdfUrl } = await req.json();
     if (typeof quotationNo !== "string" || !quotationNo.trim()) {
       return json({ success: false, error: "quotationNo is required" }, 400);
     }
@@ -97,6 +99,7 @@ Deno.serve(async (req) => {
     }
     if (!previous) return json({ success: true, sent: 0, skipped: "no_previous_revision" });
     if (norm(previous.reference_name) === norm(newRef)) return json({ success: true, sent: 0, skipped: "reference_unchanged" });
+    const oldRef = String(previous.reference_name ?? "").trim() || "None";
 
     // Claim the notification first so two concurrent calls cannot both send.
     const { data: claimed, error: cErr } = await db
@@ -128,6 +131,11 @@ Deno.serve(async (req) => {
       company = client?.company_name ?? "";
     }
 
+    const effectiveCompany = (typeof companyName === "string" && companyName.trim()) ? companyName.trim() : (company || "-");
+    const effectiveOldRef = (typeof oldReferenceName === "string" && oldReferenceName.trim()) ? oldReferenceName.trim() : oldRef;
+    const effectiveNewRef = (typeof newReferenceName === "string" && newReferenceName.trim()) ? newReferenceName.trim() : newRef;
+    const effectivePdf = (typeof pdfUrl === "string" && pdfUrl.trim()) ? pdfUrl.trim() : (quotation.pdf_url || "PDF not available");
+
     const url = `https://graph.facebook.com/${Deno.env.get("WHATSAPP_API_VERSION") ?? "v21.0"}/${phoneNumberId}/messages`;
     const language = Deno.env.get("WHATSAPP_TEMPLATE_LANGUAGE") ?? "en";
 
@@ -149,10 +157,10 @@ Deno.serve(async (req) => {
                     type: "body",
                     parameters: [
                       param(r.name),
-                      param(newRef),
-                      param(quotation.quotation_no),
-                      param(quotation.pdf_url || "PDF not available"),
-                      param(company),
+                      param(effectiveCompany),
+                      param(effectiveOldRef),
+                      param(effectiveNewRef),
+                      param(effectivePdf),
                     ],
                   },
                 ],

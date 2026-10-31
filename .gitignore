@@ -31,3 +31,5 @@ sql
 Order-Received-Data
 schema.txt
 task.txt
+.temp
+supabase/.temp
