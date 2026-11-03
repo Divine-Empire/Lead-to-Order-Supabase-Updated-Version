@@ -38,7 +38,7 @@ function Items() {
   const fileInputRef = useRef(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isReading, setIsReading] = useState(false);
-  const [importPlan, setImportPlan] = useState(null); // { fileName, entries, errors, skipped, rowCount }
+  const [importPlan, setImportPlan] = useState(null); // { fileName, entries, itemUpdates, errors, skipped, unchanged, rowCount }
   const [importProgress, setImportProgress] = useState(null); // { done, total } while writing
 
   // Debounce search input so we don't fire a query per keystroke
@@ -140,15 +140,16 @@ function Items() {
     );
   }, [askConfirm, showNotification, fetchItems]);
 
-  const handleExportTemplate = async () => {
+  const handleExportTemplate = async (kind = "template") => {
     setIsExporting(true);
     try {
       const { csv, count } = await buildTemplateCsv();
-      downloadCsvText("item_series_template.csv", csv);
-      showNotification?.(`Template downloaded (${count} items)`, "success");
+      const isExport = kind === "export";
+      downloadCsvText(isExport ? `items_export_${new Date().toISOString().slice(0, 10)}.csv` : "item_series_template.csv", csv);
+      showNotification?.(`${isExport ? "Export" : "Template"} downloaded (${count} items)`, "success");
     } catch (err) {
       console.error("Template export failed:", err);
-      showNotification?.("Could not create the template: " + (err.message || err), "error");
+      showNotification?.("Could not create the file: " + (err.message || err), "error");
     } finally {
       setIsExporting(false);
     }
@@ -170,20 +171,22 @@ function Items() {
     }
   };
 
+  const importPlanTotal = importPlan ? importPlan.entries.length + importPlan.itemUpdates.length : 0;
+
   const closeImport = () => { if (!importProgress) setImportPlan(null); };
 
   const handleConfirmImport = async (e) => {
     e.preventDefault();
-    if (!importPlan?.entries.length) return;
-    setImportProgress({ done: 0, total: importPlan.entries.length });
+    if (!importPlanTotal) return;
+    setImportProgress({ done: 0, total: importPlanTotal });
     try {
       await applyImport(
-        importPlan.entries,
+        importPlan,
         currentUser?.fullName || currentUser?.username,
         (done, total) => setImportProgress({ done, total })
       );
       fetchItemCatalog({ force: true }).catch(() => {}); // drop cached series details
-      showNotification?.(`Imported ${importPlan.entries.length} series rows`, "success");
+      showNotification?.(`Imported: ${importPlan.itemUpdates.length} items and ${importPlan.entries.length} series rows updated`, "success");
       setImportPlan(null);
     } catch (err) {
       console.error("Import failed:", err);
@@ -282,13 +285,13 @@ function Items() {
 
           <button
             type="button"
-            onClick={handleExportTemplate}
+            onClick={() => handleExportTemplate("export")}
             disabled={isExporting}
             className="inline-flex h-9 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
-            title="Download the Lite Plus / Ultra Tough CSV template (pre-filled with current values)"
+            title="Export all items with their current data in the Template format"
           >
             {isExporting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
-            Template
+            Export
           </button>
 
           <button
@@ -381,10 +384,10 @@ function Items() {
       <ModalForm
         isOpen={Boolean(importPlan)}
         onClose={closeImport}
-        title="Import Lite / UT series details"
+        title="Import item details"
         onSubmit={handleConfirmImport}
-        submitText={importProgress ? `Importing ${importProgress.done}/${importProgress.total}...` : `Import ${importPlan?.entries.length || 0} rows`}
-        submitDisabled={Boolean(importProgress) || !importPlan?.entries.length}
+        submitText={importProgress ? `Importing ${importProgress.done}/${importProgress.total}...` : `Import ${importPlanTotal} changes`}
+        submitDisabled={Boolean(importProgress) || !importPlanTotal}
         maxHeight="75vh"
       >
         {importPlan && (
@@ -392,13 +395,28 @@ function Items() {
             <p className="text-muted-foreground break-all">{importPlan.fileName}</p>
             <ul className="grid grid-cols-2 gap-2">
               <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.entries.filter((x) => x.isNew).length}</span>new series rows</li>
-              <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.entries.filter((x) => !x.isNew).length}</span>existing rows updated</li>
-              <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.skipped}</span>blank series skipped</li>
+              <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.entries.filter((x) => !x.isNew).length}</span>series rows updated</li>
+              <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.itemUpdates.length}</span>items renamed / unit changed</li>
+              <li className="rounded-md border bg-card px-3 py-2"><span className="block text-lg font-semibold">{importPlan.unchanged + importPlan.skipped}</span>already up to date or blank</li>
               <li className={`rounded-md border px-3 py-2 ${importPlan.errors.length ? "border-destructive/40 bg-destructive/5 text-destructive" : "bg-card"}`}><span className="block text-lg font-semibold">{importPlan.errors.length}</span>rows with problems (not imported)</li>
             </ul>
             <p className="text-muted-foreground">
-              A series that is completely blank is skipped when the item has no details yet; if it already has details, blank cells clear them. Images are never changed by an import.
+              Rows are matched by Item Code. Only values that differ from the database are written; for a series that already has details, blank cells clear them. Images are never changed by an import.
             </p>
+            {importPlan.itemUpdates.length > 0 && (
+              <div>
+                <p className="mb-1 font-medium text-foreground">Item changes</p>
+                <ul className="max-h-40 space-y-1 overflow-y-auto rounded-md border bg-card p-2 text-xs">
+                  {importPlan.itemUpdates.slice(0, 100).map((c) => (
+                    <li key={c.uuid}>
+                      {c.renamed ? <>{c.oldName} &rarr; <strong>{c.item_name}</strong></> : c.oldName}
+                      {c.unitChanged && <span className="text-muted-foreground"> (Unit: {c.oldUnit || "none"} &rarr; {c.unit || "none"})</span>}
+                    </li>
+                  ))}
+                  {importPlan.itemUpdates.length > 100 && <li className="text-muted-foreground">...and {importPlan.itemUpdates.length - 100} more</li>}
+                </ul>
+              </div>
+            )}
             {importPlan.errors.length > 0 && (
               <div>
                 <p className="mb-1 font-medium text-foreground">Problems</p>
