@@ -7,6 +7,7 @@ import { FilterSearch, filterControlClass } from "../../components/FilterBar";
 import DataTable from "../../components/DataTable";
 import supabase from "../../utils/supabase";
 import ModalForm from "../../components/ModalForm";
+import GroupCombobox from "../../components/GroupCombobox";
 import { TABLES, COLUMNS } from "../../constants/dbSchema";
 import { AuthContext } from "../../App";
 import useConfirmDialog from "../../components/useConfirmDialog";
@@ -146,8 +147,12 @@ function ClientMaster() {
   }, []);
   // Add mode + a real group: SC/CRM are pre-selected from the group and
   // locked. OTHER CLIENTS (or no group): admin picks from the rules' lists.
+  // A group created in this modal has no SC/CRM to copy yet, so it stays unlocked.
   const groupLocksScCrm =
-    modalMode === "add" && !!formData.companyGroupName.trim() && !isOtherClientsGroup(formData.companyGroupName);
+    modalMode === "add" &&
+    !!formData.companyGroupName.trim() &&
+    !isOtherClientsGroup(formData.companyGroupName) &&
+    groupOptions.some((g) => g.toLowerCase() === formData.companyGroupName.trim().toLowerCase());
 
   const handleGroupChange = async (group) => {
     const trimmed = group.trim();
@@ -484,6 +489,11 @@ function ClientMaster() {
         if (!data) throw new Error("Update did not affect any row.");
       }
 
+      // A newly created group is now in the DB; offer it next time.
+      const savedGroup = (formData.companyGroupName || "").trim();
+      if (savedGroup && !groupOptions.some((g) => g.toLowerCase() === savedGroup.toLowerCase())) {
+        setGroupOptions((prev) => [...prev, savedGroup].sort((a, b) => a.localeCompare(b)));
+      }
       await fetchClients();
       handleCloseModal();
     } catch (err) {
@@ -938,10 +948,7 @@ function ClientMaster() {
             </div>
             <div className="space-y-2">
               <label htmlFor="client-field-4" className="block text-sm font-medium text-foreground">Company Group Name</label>
-              <select id="client-field-4" value={formData.companyGroupName} onChange={e => handleGroupChange(e.target.value)} className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none">
-                <option value="">Select group</option>
-                {withCurrent(groupOptions, formData.companyGroupName).map((g) => <option key={g} value={g}>{g}</option>)}
-              </select>
+              <GroupCombobox id="client-field-4" value={formData.companyGroupName} options={withCurrent(groupOptions, formData.companyGroupName)} onChange={handleGroupChange} />
             </div>
             <div className="space-y-2">
               <label htmlFor="client-field-5" className="block text-sm font-medium text-foreground">SC Name</label>

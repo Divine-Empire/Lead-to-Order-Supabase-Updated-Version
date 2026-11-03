@@ -28,6 +28,9 @@ import { usePendingEnquiries, useHistoryEnquiries, useItemNameOptions, fetchEnqu
 import { downloadCsv } from "./exportCsv";
 import SearchableDropdown from "../../components/SearchableDropdown";
 import { toPersonList, formatPersons, toDbPersons, samePersons } from "../../utils/assignToPerson";
+import GroupCombobox from "../../components/GroupCombobox";
+import { fetchAllRows as fetchAllRowsPaged } from "../../utils/fetchAllRows";
+import { fetchMasterByName, masterNameTaken, masterChangesFromEdit, applyMasterChanges, describeMasterChanges } from "../../utils/clientMasterEdit";
 import { usePersistedFilter } from "./filterPersistence";
 
 const columnsConfig = [
@@ -309,7 +312,7 @@ function EnquiryTracker() {
   const PENDING_EDIT_FIELDS = [
     "companyName", "phoneNumber", "salespersonName", "shippingAddress",
     "gstNumber", "enquiryState", "billingAddress", "salesType", "leadSource",
-    "enquiryReceiverName", "enquiryApproach", "sc_name",
+    "enquiryReceiverName", "enquiryApproach", "sc_name", "groupName",
   ];
   // enquiryAssignToPersons is a multi-select (array): compared by content.
   const isPendingEditDirty =
@@ -322,6 +325,25 @@ function EnquiryTracker() {
   // Company Name renders as a dropdown (existing companies only) rather
   // than free text, while editing -- see companyOptions below.
   const [companyOptions, setCompanyOptions] = useState([]);
+  // Company Group options for the edit modal (distinct groups in
+  // lto_client_master) and whether the modal is in "rename company" mode.
+  const [groupOptions, setGroupOptions] = useState([]);
+  const [renameCompanyMode, setRenameCompanyMode] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: rows } = await fetchAllRowsPaged(() => supabase.from("lto_client_master").select("company_group_name").not("company_group_name", "is", null));
+        const seen = new Map();
+        (rows || []).forEach((r) => {
+          const g = (r.company_group_name || "").trim();
+          if (g && !seen.has(g.toLowerCase())) seen.set(g.toLowerCase(), g);
+        });
+        setGroupOptions([...seen.values()].sort((a, b) => a.localeCompare(b)));
+      } catch (err) {
+        console.error("Error fetching group options:", err);
+      }
+    })();
+  }, []);
   useEffect(() => {
     const fetchCompanyOptions = async () => {
       try {
@@ -455,6 +477,55 @@ function EnquiryTracker() {
   const [historyEditError, setHistoryEditError] = useState("");
   const [historyAcceptanceFileError, setHistoryAcceptanceFileError] = useState("");
 
+  // Company / Shipping Address as the History row showed them when Edit opened.
+  const [historyOriginalDetails, setHistoryOriginalDetails] = useState({ companyName: "", shippingAddress: "" });
+
+  // Company Name + Shipping Address live on the parent lead/enquiry, not the
+  // tracker row. A changed company takes its GST / Billing Address / Group
+  // from lto_client_master (the source of truth); Shipping Address is the
+  // typed value (the master has none). The parent update then reaches the
+  // record's otp_orders rows through the otp_trg_*_details_to_orders DB
+  // triggers (Database/32_*).
+  const saveHistoryRecordDetails = async (identifier, isLeadNumber) => {
+    const trim = (v) => String(v ?? "").trim();
+    const companyChanged = trim(editedData.companyName) !== trim(historyOriginalDetails.companyName);
+    const shippingChanged = trim(editedData.shippingAddress) !== trim(historyOriginalDetails.shippingAddress);
+    if (!companyChanged && !shippingChanged) return;
+    if (!isAdmin()) throw new Error("Only admins can change Company Name or Shipping Address here.");
+
+    const table = isLeadNumber ? "lto_leads" : "lto_enquiries";
+    const { data: parent, error: parentErr } = await supabase
+      .from(table)
+      .select("id, company_name")
+      .eq(isLeadNumber ? "lead_no" : "enquiry_no", identifier)
+      .maybeSingle();
+    if (parentErr) throw parentErr;
+    if (!parent) throw new Error(`Could not find ${identifier} to update its company details.`);
+
+    const payload = {};
+    if (companyChanged) {
+      if (!trim(editedData.companyName)) throw new Error("Select a company.");
+      const master = await fetchMasterByName(editedData.companyName);
+      if (!master) throw new Error("This company was not found in Client Master.");
+      payload.company_name = master.company_name;
+      payload.gst_number = master.gst_number || null;
+      payload.location = master.billing_address || null;
+      if (isLeadNumber) payload.company_group_name = master.company_group_name || null;
+    }
+    if (shippingChanged) payload[isLeadNumber ? "address" : "shipping_address"] = trim(editedData.shippingAddress) || null;
+
+    const { error: updErr } = await supabase.from(table).update(payload).eq("id", parent.id);
+    if (updErr) throw updErr;
+
+    if (companyChanged) {
+      try {
+        await recomputeAlreadyInTrackerForRename(parent.company_name, payload.company_name);
+      } catch (syncErr) {
+        console.error("Error recomputing already_in_tracker after History edit:", syncErr);
+      }
+    }
+  };
+
   const handleHistoryEditClick = (tracker) => {
     setEditedData({
       id: tracker.id,
@@ -471,7 +542,10 @@ function EnquiryTracker() {
       quotationFile: null,
       remarks: tracker.quotationRemarks || "",
       sendQuotationNo: "",
+      companyName: tracker.companyName || "",
+      shippingAddress: tracker.shippingAddress || "",
     });
+    setHistoryOriginalDetails({ companyName: tracker.companyName || "", shippingAddress: tracker.shippingAddress || "" });
     setHistoryEditError("");
     setHistoryAcceptanceFileError("");
     setIsHistoryEditModalOpen(true);
@@ -614,6 +688,8 @@ function EnquiryTracker() {
       if (!identifier) throw new Error("Record identifier is required");
       const isLeadNumber = identifier.toUpperCase().startsWith("LD-");
       const tableName = isLeadNumber ? "lto_enquiry_tracker_for_leads" : "lto_enquiry_tracker";
+
+      await saveHistoryRecordDetails(identifier, isLeadNumber);
 
       const { error } = await supabase.from(tableName).update(updateData).eq("id", editedData.id);
       if (error) throw error;
@@ -786,13 +862,58 @@ function EnquiryTracker() {
     };
     setEditedData(initialData);
     setOriginalEditData(initialData);
+    setRenameCompanyMode(false);
     setIsPendingEditModalOpen(true);
+
+    // Group is held only by lto_client_master -- load it for the shown company.
+    fetchMasterByName(tracker.companyName)
+      .then((master) => {
+        const groupName = master?.company_group_name || "";
+        setEditedData((prev) => (prev.id === initialData.id ? { ...prev, groupName } : prev));
+        setOriginalEditData((prev) => (prev.id === initialData.id ? { ...prev, groupName } : prev));
+      })
+      .catch((err) => console.error("Error loading Client Master group:", err));
+  };
+
+  // Picking a different existing company: its Client Master details become
+  // the record's details (master is the source of truth; nothing is written
+  // back to the master for a plain company switch).
+  const handleCompanyPick = async (name) => {
+    handleFieldChange("companyName", name);
+    if (!name) return;
+    try {
+      const master = await fetchMasterByName(name);
+      if (!master) return;
+      setEditedData((prev) =>
+        prev.companyName === name
+          ? {
+              ...prev,
+              gstNumber: master.gst_number || "",
+              billingAddress: master.billing_address || "",
+              groupName: master.company_group_name || "",
+              ...(master.sc_name ? { sc_name: master.sc_name } : {}),
+            }
+          : prev
+      );
+    } catch (err) {
+      console.error("Error loading Client Master details:", err);
+      showNotification("Could not load this company's Client Master details.", "warning");
+    }
+  };
+
+  const startRenameCompany = () => {
+    setRenameCompanyMode(true);
+  };
+  const cancelRenameCompany = () => {
+    setRenameCompanyMode(false);
+    handleFieldChange("companyName", originalEditData.companyName || "");
   };
 
   const handlePendingEditCancel = () => {
     setEditingRowId(null);
     setEditedData({});
     setOriginalEditData({});
+    setRenameCompanyMode(false);
     setIsPendingEditModalOpen(false);
   };
 
@@ -929,6 +1050,48 @@ const handleSaveClick = async () => {
         .eq("id", updateId)
         .maybeSingle();
       const previousCompanyName = beforeEditRow?.company_name;
+
+      // Client Master is the source of truth: a rename, or a changed GST /
+      // Billing Address / Group, is written to the master row too (the DB
+      // trigger then copies it to the company's other open leads/enquiries).
+      // Confirmed first, and done BEFORE the record save so a failure stops
+      // everything instead of leaving the two out of step.
+      try {
+        const masterName = renameCompanyMode ? originalEditData.companyName : editedData.companyName;
+        const master = await fetchMasterByName(masterName);
+        if (renameCompanyMode && !master) {
+          showNotification("Cannot rename: this company was not found in Client Master.", "error");
+          return;
+        }
+        if (master) {
+          const renameTo = renameCompanyMode ? (editedData.companyName || "").trim() : "";
+          if (renameCompanyMode && !renameTo) {
+            showNotification("Enter the new company name.", "error");
+            return;
+          }
+          if (renameTo && renameTo.toLowerCase() !== (master.company_name || "").trim().toLowerCase() && (await masterNameTaken(renameTo, master.uuid))) {
+            showNotification(`"${renameTo}" already exists in Client Master. Pick it from the Company dropdown instead of renaming.`, "error");
+            return;
+          }
+          const changes = masterChangesFromEdit({ master, edited: editedData, original: originalEditData, renameTo });
+          if (changes.length > 0) {
+            const ok = await confirmAsync({
+              title: "Update Client Master too?",
+              message:
+                `Client Master is the main record for "${master.company_name}". This will also change it, and copy the change to this company's other open leads/enquiries:\n\n` +
+                describeMasterChanges(changes),
+              confirmText: "Update Client Master",
+              destructive: false,
+            });
+            if (!ok) return;
+            await applyMasterChanges(master.uuid, changes);
+          }
+        }
+      } catch (masterErr) {
+        console.error("Client Master sync error:", masterErr);
+        showNotification(`Could not update Client Master: ${masterErr.message || masterErr}`, "error");
+        return;
+      }
 
       const { error } = await supabase
         .from(isEnquiryRecord ? "lto_enquiries" : "lto_leads")
@@ -2937,17 +3100,39 @@ const handleSaveClick = async () => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <label htmlFor="pending-edit-1" className="block text-sm font-medium text-foreground">Company Name</label>
-            <select
-              id="pending-edit-1"
-              value={companyOptions.includes(editedData.companyName) ? editedData.companyName : ""}
-              onChange={(e) => handleFieldChange("companyName", e.target.value)}
-              className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
-            >
-              <option value="">Select company</option>
-              {companyOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
-              ))}
-            </select>
+            {renameCompanyMode ? (
+              <input
+                id="pending-edit-1"
+                type="text"
+                value={editedData.companyName || ""}
+                onChange={(e) => handleFieldChange("companyName", e.target.value)}
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                autoFocus
+              />
+            ) : (
+              <select
+                id="pending-edit-1"
+                value={companyOptions.includes(editedData.companyName) ? editedData.companyName : ""}
+                onChange={(e) => handleCompanyPick(e.target.value)}
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+              >
+                <option value="">Select company</option>
+                {companyOptions.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            )}
+            {renameCompanyMode ? (
+              <p className="text-xs text-muted-foreground">
+                Renaming &quot;{originalEditData.companyName}&quot; in Client Master and its open leads/enquiries.{" "}
+                <button type="button" onClick={cancelRenameCompany} className="font-medium text-primary hover:underline">Cancel rename</button>
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Picking another company loads its Client Master details.{" "}
+                <button type="button" onClick={startRenameCompany} className="font-medium text-primary hover:underline">Rename this company</button>
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <label htmlFor="pending-edit-2" className="block text-sm font-medium text-foreground">Phone Number</label>
@@ -3011,6 +3196,15 @@ const handleSaveClick = async () => {
               value={editedData.billingAddress || ""}
               onChange={(e) => handleFieldChange("billingAddress", e.target.value)}
               className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+            />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="pending-edit-group" className="block text-sm font-medium text-foreground">Company Group</label>
+            <GroupCombobox
+              id="pending-edit-group"
+              value={editedData.groupName || ""}
+              options={editedData.groupName && !groupOptions.some((g) => g.toLowerCase() === editedData.groupName.toLowerCase()) ? [editedData.groupName, ...groupOptions] : groupOptions}
+              onChange={(v) => handleFieldChange("groupName", v)}
             />
           </div>
           <div className="space-y-2">
@@ -3126,6 +3320,34 @@ const handleSaveClick = async () => {
             {historyEditError}
           </div>
         )}
+
+        <div className="space-y-4 border p-4 rounded-md">
+          <h4 className="text-sm font-semibold text-foreground">Company Details</h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label htmlFor="historyCompanyName" className="block text-sm font-medium text-foreground">Company Name</label>
+              <GroupCombobox
+                id="historyCompanyName"
+                value={editedData.companyName || ""}
+                options={companyOptions}
+                onChange={(v) => handleFieldChange("companyName", v)}
+                allowCreate={false}
+                placeholder="Search company"
+              />
+              <p className="text-xs text-muted-foreground">Changing the company will update GST, billing address and group from Client Master.</p>
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="historyShippingAddress" className="block text-sm font-medium text-foreground">Shipping Address</label>
+              <input
+                id="historyShippingAddress"
+                type="text"
+                value={editedData.shippingAddress || ""}
+                onChange={(e) => handleFieldChange("shippingAddress", e.target.value)}
+                className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
 
         <div className="space-y-4 border p-4 rounded-md">
           <h4 className="text-sm font-semibold text-foreground">Order Status</h4>

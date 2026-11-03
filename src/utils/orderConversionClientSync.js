@@ -254,8 +254,12 @@ export const syncClientOnOrderConversion = async (enquiryNo, creditTerms = {}) =
       client_mobile_number: leadData?.phone_number || enqData?.phone_number || enqData?.phoneNumber || existingClient?.client_mobile_number || "",
       state: resolvedState,
       state_code: resolvedStateCode,
-      billing_address: leadData?.address || enqData?.shipping_address || enqData?.shippingAddress || existingClient?.billing_address || "",
-      gst_number: leadData?.gst_number || enqData?.gst_number || enqData?.gstNumber || existingClient?.gst_number || "",
+      // Client Master is the source of truth: for an EXISTING client its own
+      // billing address / GST win (the record's value only fills a blank).
+      // Previously the record's value overwrote the master on every
+      // conversion/edit, including a shipping address landing in billing.
+      billing_address: existingClient?.billing_address || leadData?.address || enqData?.shipping_address || enqData?.shippingAddress || "",
+      gst_number: existingClient?.gst_number || leadData?.gst_number || enqData?.gst_number || enqData?.gstNumber || "",
       already_in_tracker: `Order Received (${enquiryNo})`,
       // Marks this as "converted, not yet re-engaged" -- cleared back to
       // false the moment a new lead/enquiry is created for this company
