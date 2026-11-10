@@ -39,7 +39,10 @@ export default function OpenRecordsTable({ records }) {
           {records.map((r, idx) => (
             <tr key={r.key || idx}>
               <td className="whitespace-nowrap px-3 py-2 tabular-nums">{formatDate(r.createdAt)}</td>
-              <td className="whitespace-nowrap px-3 py-2 font-medium">{r.number || "-"}</td>
+              <td className="whitespace-nowrap px-3 py-2 font-medium">
+                {r.number || "-"}
+                {r.isNew && <span className="ml-1.5 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">New</span>}
+              </td>
               <td className="px-3 py-2">{r.referencePerson || "-"}</td>
               <td className="px-3 py-2">
                 <button

@@ -129,3 +129,47 @@ export async function fetchOpenRecordsForCompany(companyName) {
     })
     .sort((a, b) => ts(b.createdAt) - ts(a.createdAt));
 }
+
+/**
+ * The record a duplicate log was raised for (the NEW lead / enquiry), in the
+ * same shape as fetchOpenRecordsForCompany entries plus `isNew: true`. A log's
+ * stored open_records only holds the records that existed before it, so the
+ * Duplicate Enquiry Logs stage adds this one on top. Read live: the open list
+ * first (full details), else the record itself (it may be closed by now).
+ * Returns null when the record can't be found.
+ */
+export async function fetchNewRecordEntry(companyName, recordNo, recordType) {
+  const no = String(recordNo || "").trim();
+  if (!no) return null;
+
+  const open = await fetchOpenRecordsForCompany(companyName).catch(() => []);
+  const hit = open.find((r) => normRef(r.number) === normRef(no));
+  if (hit) return { ...hit, isNew: true };
+
+  const isLead = recordType === "lead";
+  const { data: rec, error } = await supabase
+    .from(isLead ? "lto_leads" : "lto_enquiries")
+    .select("id, created_at, enquiry_assign_to_person")
+    .eq(isLead ? "lead_no" : "enquiry_no", no)
+    .maybeSingle();
+  if (error || !rec) return null;
+  const { data: itemRows } = await supabase
+    .from(isLead ? "lto_lead_items" : "lto_enquiry_items")
+    .select("item_name, quantity")
+    .eq(isLead ? "lead_id" : "enquiry_id", rec.id);
+  const items = (itemRows || []).map((i) => ({ name: i.item_name, quantity: i.quantity, unit: "" }));
+  return {
+    key: `${isLead ? "lead" : "enquiry"}:${rec.id}`,
+    sourceType: isLead ? "lead" : "enquiry",
+    recordId: rec.id,
+    number: no,
+    createdAt: asUtc(rec.created_at),
+    referencePerson: formatPersons(rec.enquiry_assign_to_person),
+    quotationNo: null,
+    lastFollowUpAt: null,
+    lastFollowUpSource: "none",
+    items,
+    itemsSource: items.length ? (isLead ? "lead" : "enquiry") : "none",
+    isNew: true,
+  };
+}

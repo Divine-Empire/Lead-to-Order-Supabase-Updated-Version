@@ -4,6 +4,7 @@ import { FilterSearch, filterControlClass } from "../../components/FilterBar";
 import DataTable from "../../components/DataTable";
 import ModalView from "../../components/ModalView";
 import OpenRecordsTable from "../../components/OpenRecordsTable";
+import { fetchNewRecordEntry } from "../../utils/openRecordsCheck";
 import supabase from "../../utils/supabase";
 import { AuthContext } from "../../App";
 import { DUP_LOG_TABLE, DUP_LOG_SELECT, markLogsRead } from "../../utils/duplicateLogs";
@@ -51,6 +52,8 @@ function DuplicateEnquiryLogs() {
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [totalResults, setTotalResults] = useState(0);
   const [recordsFor, setRecordsFor] = useState(null); // log whose open records are shown
+  const [newEntry, setNewEntry] = useState(null); // the log's own new record, shown on top of the stored list
+  const [newEntryLoading, setNewEntryLoading] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const fetchIdRef = useRef(0);
 
@@ -123,6 +126,16 @@ function DuplicateEnquiryLogs() {
     }
   };
 
+  const showRecords = (log) => {
+    setRecordsFor(log);
+    setNewEntry(null);
+    setNewEntryLoading(true);
+    fetchNewRecordEntry(log.companyName, log.new_record_no, log.new_record_type)
+      .then((entry) => setNewEntry((prev) => (prev === null ? entry : prev)))
+      .catch((err) => console.error("New record load failed:", err))
+      .finally(() => setNewEntryLoading(false));
+  };
+
   const openRecords = (log) => (Array.isArray(log.open_records) ? log.open_records : []);
 
   const renderRow = (log) => (
@@ -139,7 +152,7 @@ function DuplicateEnquiryLogs() {
       <td className="px-4 py-3 whitespace-nowrap text-sm text-center">
         <button
           type="button"
-          onClick={() => setRecordsFor(log)}
+          onClick={() => showRecords(log)}
           className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
         >
           <Eye size={14} aria-hidden="true" />
@@ -190,7 +203,7 @@ function DuplicateEnquiryLogs() {
         <span className="text-xs text-muted-foreground">Admin</span><ReadChip named read={log.read_by_admin} />
       </div>
       <div className="flex justify-end gap-2 border-t pt-2">
-        <button type="button" onClick={() => setRecordsFor(log)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 text-xs font-medium text-primary">
+        <button type="button" onClick={() => showRecords(log)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 text-xs font-medium text-primary">
           <Eye size={14} aria-hidden="true" />Open records ({openRecords(log).length})
         </button>
         {!log.read_by_admin && (
@@ -284,9 +297,14 @@ function DuplicateEnquiryLogs() {
         title={recordsFor ? `Open records - ${recordsFor.companyName || "Company"} (when ${recordsFor.new_record_no || "record"} was created)` : ""}
         maxWidth="max-w-4xl"
       >
-        {recordsFor && (openRecords(recordsFor).length === 0
-          ? <p className="text-sm text-muted-foreground">No open records were stored for this log.</p>
-          : <OpenRecordsTable records={openRecords(recordsFor)} />)}
+        {recordsFor && (() => {
+          const stored = openRecords(recordsFor).filter((r) => !newEntry || r.number !== newEntry.number);
+          const all = newEntry ? [newEntry, ...stored] : stored;
+          if (all.length === 0) {
+            return <p className="text-sm text-muted-foreground">{newEntryLoading ? "Loading..." : "No open records were stored for this log."}</p>;
+          }
+          return <OpenRecordsTable records={all} />;
+        })()}
       </ModalView>
     </div>
   );
