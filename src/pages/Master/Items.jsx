@@ -10,7 +10,7 @@ import useConfirmDialog from "../../components/useConfirmDialog";
 import { ITEM_UNITS, addItem, itemErrorMessage, fetchItemCatalog } from "../../utils/itemCatalog";
 import { buildTemplateCsv, downloadCsvText, analyzeImport, applyImport } from "../../utils/itemSpecsCsv";
 
-const EMPTY_FORM = { item_name: "", item_code: "", unit: "Nos" };
+const EMPTY_FORM = { item_name: "", unit: "Nos" };
 const HEADERS = ["Item Code", { label: "Item Name", className: "!text-left" }, "Actions"];
 
 // Master > Items: list + Add Item. Full details (Basic / Lite / UT series)
@@ -95,15 +95,16 @@ function Items() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     const name = formData.item_name.trim();
-    const code = formData.item_code.trim();
-    if (!name || !code) {
-      showNotification?.("Item Name and Item Code are required", "error");
+    if (!name) {
+      showNotification?.("Item Name is required", "error");
       return;
     }
 
     setIsSaving(true);
     try {
-      await addItem({ name, code, unit: formData.unit, updatedBy: currentUser?.fullName || currentUser?.username });
+      // No code — it's assigned by Purchase (PFMS) once this item is used on an indent,
+      // never typed in here. lto_add_item already treats a blank code as NULL.
+      await addItem({ name, code: "", unit: formData.unit, updatedBy: currentUser?.fullName || currentUser?.username });
       showNotification?.("Item added successfully", "success");
       handleCloseModal();
       await fetchItems();
@@ -357,16 +358,8 @@ function Items() {
               className={inputClass}
             />
           </div>
-          <div className="space-y-2">
-            <label htmlFor="item-field-code" className="block text-sm font-medium text-foreground">Item Code *</label>
-            <input
-              id="item-field-code"
-              type="text"
-              required
-              value={formData.item_code}
-              onChange={(e) => setFormData({ ...formData, item_code: e.target.value })}
-              className={inputClass}
-            />
+          <div className="space-y-2 md:col-span-2 rounded-md border border-input bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            Item Code isn't entered here — Purchase assigns it once this item is used on a purchase indent.
           </div>
           <div className="space-y-2">
             <label htmlFor="item-field-unit" className="block text-sm font-medium text-foreground">Unit</label>

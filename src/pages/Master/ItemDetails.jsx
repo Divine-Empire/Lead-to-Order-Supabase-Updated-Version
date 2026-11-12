@@ -209,9 +209,8 @@ export default function ItemDetails() {
   const handleSave = async (e) => {
     e.preventDefault();
     const name = basic.item_name.trim();
-    const code = basic.item_code.trim();
-    if (!name || !code) {
-      showNotification?.("Item Name and Item Code are required", "error");
+    if (!name) {
+      showNotification?.("Item Name is required", "error");
       return;
     }
     const badVideo = ["lite", "ultra"].find((k) => series[k].video.trim() && !isHttpUrl(series[k].video));
@@ -250,7 +249,7 @@ export default function ItemDetails() {
       await saveItemDetails({
         uuid: id,
         name,
-        code,
+        code: basic.item_code.trim(),
         unit: basic.unit,
         updatedBy,
         specs: [
@@ -410,8 +409,14 @@ export default function ItemDetails() {
           <Field id="basic-name" label="Item Name *" className="md:col-span-2">
             <input id="basic-name" required value={basic.item_name} onChange={(e) => setBasicField("item_name", e.target.value)} className={inputClass} />
           </Field>
-          <Field id="basic-code" label="Item Code *">
-            <input id="basic-code" required value={basic.item_code} onChange={(e) => setBasicField("item_code", e.target.value)} className={inputClass} />
+          <Field id="basic-code" label="Item Code">
+            <input
+              id="basic-code"
+              readOnly
+              value={basic.item_code || "Pending (assigned by Purchase)"}
+              className={`${inputClass} bg-muted text-muted-foreground cursor-not-allowed`}
+              title="Item Code is assigned by Purchase (PFMS) once this item is used on a purchase indent — it can't be typed here."
+            />
           </Field>
           <Field id="basic-unit" label="Unit">
             <select id="basic-unit" value={basic.unit} onChange={(e) => setBasicField("unit", e.target.value)} className={inputClass}>
