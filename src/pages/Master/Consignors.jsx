@@ -53,6 +53,12 @@ const Consignors = () => {
         const { data: consignorData, error, count } = await supabase
           .from("lto_consignor_details")
           .select("*", { count: "exact" })
+          // The legacy reference rows (no state) stay in the table but are not consignors.
+          .not("state", "is", null)
+          .neq("state", "")
+          // Stable order, so a newly added consignor doesn't jump between pages.
+          .order("state", { ascending: true })
+          .order("uuid", { ascending: true })
           .range(from, to);
         if (error) throw error;
         setData(consignorData || []);
