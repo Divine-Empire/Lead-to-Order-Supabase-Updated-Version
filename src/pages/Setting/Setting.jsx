@@ -29,8 +29,12 @@ function Setting() {
     password: '',
     userType: 'user',
     fullName: '',
-    restrictedLeadSources: []
+    restrictedLeadSources: [],
+    fosAlternateAccess: []
   })
+  // Names seen as receiver / assigned person on enquiries and leads (FOS Enquiries picker)
+  const [fosNameOptions, setFosNameOptions] = useState([])
+  const [fosNameQuery, setFosNameQuery] = useState('')
   const [employeeOptions, setEmployeeOptions] = useState([])
   const [leadSourceOptions, setLeadSourceOptions] = useState([])
   const [visiblePasswords, setVisiblePasswords] = useState(new Set())
@@ -48,7 +52,18 @@ function Setting() {
     fetchUsers()
     fetchEmployeeOptions()
     fetchLeadSourceOptions()
+    fetchFosNames()
   }, [])
+
+  const fetchFosNames = async () => {
+    try {
+      const { data, error } = await supabase.rpc('lto_fos_person_names')
+      if (error) throw error
+      setFosNameOptions(data || [])
+    } catch (error) {
+      console.error("Error fetching FOS person names:", error)
+    }
+  }
 
   const fetchEmployeeOptions = async () => {
     try {
@@ -95,7 +110,8 @@ function Setting() {
         ...u,
         userType: u.usertype || u.userType || 'user',
         fullName: u.full_name || u.fullName || '',
-        restrictedLeadSources: u.restricted_lead_sources || []
+        restrictedLeadSources: u.restricted_lead_sources || [],
+        fosAlternateAccess: u.fos_alternate_access || []
       }))
       setUsers(normalizedUsers)
     } catch (error) {
@@ -144,7 +160,8 @@ function Setting() {
 
   const openAddModal = () => {
     setModalMode('add')
-    setFormData({ username: '', password: '', userType: 'user', fullName: '', restrictedLeadSources: [] })
+    setFormData({ username: '', password: '', userType: 'user', fullName: '', restrictedLeadSources: [], fosAlternateAccess: [] })
+    setFosNameQuery('')
     setShowFormPassword(false)
     setIsModalOpen(true)
   }
@@ -158,9 +175,21 @@ function Setting() {
       password: user.password || '',
       userType: user.userType || user.usertype || 'user',
       fullName: user.fullName || user.full_name || '',
-      restrictedLeadSources: user.restrictedLeadSources || user.restricted_lead_sources || []
+      restrictedLeadSources: user.restrictedLeadSources || user.restricted_lead_sources || [],
+      fosAlternateAccess: user.fosAlternateAccess || user.fos_alternate_access || []
     })
+    setFosNameQuery('')
     setIsModalOpen(true)
+  }
+
+  const handleFosNameToggle = (name) => {
+    setFormData(prev => {
+      const current = prev.fosAlternateAccess || []
+      return {
+        ...prev,
+        fosAlternateAccess: current.includes(name) ? current.filter(v => v !== name) : [...current, name]
+      }
+    })
   }
 
   // Plain multi-select toggle -- unlike ScDistributionMaster's version there's
@@ -209,7 +238,8 @@ function Setting() {
             password: formData.password,
             usertype: formData.userType,
             full_name: formData.fullName,
-            restricted_lead_sources: formData.restrictedLeadSources
+            restricted_lead_sources: formData.restrictedLeadSources,
+            fos_alternate_access: formData.userType === 'admin' ? [] : formData.fosAlternateAccess
           }])
         if (error) throw error
         showNotification("User added successfully", "success")
@@ -218,7 +248,8 @@ function Setting() {
           username: formData.username,
           usertype: formData.userType,
           full_name: formData.fullName,
-          restricted_lead_sources: formData.restrictedLeadSources
+          restricted_lead_sources: formData.restrictedLeadSources,
+          fos_alternate_access: formData.userType === 'admin' ? [] : formData.fosAlternateAccess
         }
         if (formData.password) {
           updatePayload.password = formData.password
@@ -392,6 +423,11 @@ function Setting() {
                       ) : (
                         <span className="text-xs text-muted-foreground">Own records (by name)</span>
                       )}
+                      {user.userType !== 'admin' && user.fosAlternateAccess && user.fosAlternateAccess.length > 0 && (
+                        <p className="mt-1 text-xs text-muted-foreground" title={user.fosAlternateAccess.join(', ')}>
+                          FOS Enquiries: also sees {user.fosAlternateAccess.length} other {user.fosAlternateAccess.length === 1 ? 'person' : 'people'}
+                        </p>
+                      )}
                     </td>
                   </tr>
                 )
@@ -527,6 +563,63 @@ function Setting() {
                       </button>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+            {formData.userType !== 'admin' && (
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="text-sm font-medium text-foreground">FOS Enquiries: also show records of</p>
+                  <span className="text-xs text-muted-foreground">
+                    {(formData.fosAlternateAccess || []).length > 0 ? `${formData.fosAlternateAccess.length} selected` : 'Optional'}
+                  </span>
+                </div>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  For a HOD: pick the people whose enquiries (as Enquiry Receiver or Assigned Person) this user should also see in the
+                  FOS Enquiries stage. This applies to FOS Enquiries only.
+                </p>
+                <input
+                  type="text"
+                  value={fosNameQuery}
+                  onChange={(e) => setFosNameQuery(e.target.value)}
+                  placeholder="Search name"
+                  aria-label="Search person"
+                  className="mb-2 h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                />
+                <div className="grid max-h-44 grid-cols-1 gap-1 overflow-y-auto rounded-lg border bg-secondary/50 p-2 sm:grid-cols-2">
+                  {(() => {
+                    const selected = formData.fosAlternateAccess || []
+                    const q = fosNameQuery.trim().toUpperCase()
+                    const names = [...new Set([...selected, ...fosNameOptions])]
+                    // Selected people first, then the rest alphabetically; the search narrows both.
+                    const shown = names
+                      .filter((n) => !q || n.includes(q))
+                      .sort((a, b) => (selected.includes(b) ? 1 : 0) - (selected.includes(a) ? 1 : 0) || a.localeCompare(b))
+                    if (shown.length === 0) {
+                      return <span className="col-span-2 p-1 text-xs text-muted-foreground">{fosNameOptions.length === 0 ? 'No names found yet.' : 'No match.'}</span>
+                    }
+                    return shown.map((name) => {
+                      const checked = selected.includes(name)
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          role="checkbox"
+                          aria-checked={checked}
+                          onClick={() => handleFosNameToggle(name)}
+                          className={`flex w-full items-center gap-2 rounded-md border p-2 text-left text-xs font-medium transition-colors ${
+                            checked
+                              ? "border-primary/40 bg-card font-semibold text-foreground"
+                              : "border-transparent bg-transparent text-muted-foreground hover:bg-card"
+                          }`}
+                        >
+                          {checked ? <CheckSquare className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" /> : <Square className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                          <span className="truncate">{name}</span>
+                        </button>
+                      )
+                    })
+                  })()}
                 </div>
               </div>
             )}
