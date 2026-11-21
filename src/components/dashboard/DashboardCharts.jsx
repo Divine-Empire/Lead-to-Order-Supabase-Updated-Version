@@ -91,14 +91,14 @@ function DashboardCharts({ overview, isLoading, error }) {
       </div>
 
       {isLoading ? (
-        <LoadingSpinner message="Loading chart data..." minHeight="350px" />
+        <LoadingSpinner message="Loading chart data..." minHeight="300px" />
       ) : error ? (
-        <div role="alert" className="flex h-[350px] flex-col items-center justify-center gap-1 text-center">
+        <div role="alert" className="flex h-[300px] flex-col items-center justify-center gap-1 text-center">
           <p className="text-sm font-medium text-destructive">Unable to load chart data</p>
           <p className="text-xs text-muted-foreground">{error} -- try refreshing the page.</p>
         </div>
       ) : (
-        <div className="h-[350px]">
+        <div className="h-[300px]">
           {activeTab === "overview" && (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={leadData} margin={{ top: 20, right: 30, left: 0, bottom: 5 }} barGap={4}>
@@ -140,7 +140,7 @@ function DashboardCharts({ overview, isLoading, error }) {
                 </ResponsiveContainer>
               </div>
 
-              <div className="flex max-h-[350px] flex-col justify-center overflow-y-auto">
+              <div className="flex max-h-[300px] flex-col justify-center overflow-y-auto">
                 <h3 className="mb-4 text-sm font-semibold text-foreground">Conversion funnel</h3>
                 <div className="space-y-4">
                   {conversionData.map((item, index) => (

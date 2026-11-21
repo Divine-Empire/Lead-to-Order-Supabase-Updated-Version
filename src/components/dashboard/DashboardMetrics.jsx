@@ -35,7 +35,7 @@ function DashboardMetrics({ overview, isLoading, error, toolbar }) {
   return (
     <div className="space-y-4">
       {/* Admin badge on the left, the page's date filter (toolbar) on the right */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         {isAdmin() ? (
           <span className="inline-flex items-center rounded border border-success/25 bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
             Admin view: showing all data
@@ -53,16 +53,13 @@ function DashboardMetrics({ overview, isLoading, error, toolbar }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Total Leads" value={shown(metrics?.totalLeads?.toString())} {...changes.totalLeads} periodLabel={periodLabel} tone="brand" icon={<UsersIcon className="h-5 w-5" />} />
-        <MetricCard title="Pending Follow-ups" value={shown(metrics?.pendingFollowups?.toString())} {...changes.pendingFollowups} periodLabel={periodLabel} tone="warning" icon={<PhoneCallIcon className="h-5 w-5" />} />
-        <MetricCard title="Quotations Sent" value={shown(metrics?.quotationsSent?.toString())} {...changes.quotationsSent} periodLabel={periodLabel} tone="info" icon={<FileTextIcon className="h-5 w-5" />} />
-        <MetricCard title="Orders Received" value={shown(metrics?.ordersReceived?.toString())} {...changes.ordersReceived} periodLabel={periodLabel} tone="lime" icon={<ShoppingCartIcon className="h-5 w-5" />} />
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Total Enquiry" value={shown(metrics?.totalEnquiry?.toString())} {...changes.totalEnquiry} periodLabel={periodLabel} tone="brand" icon={<UsersIcon className="h-5 w-5" />} />
-        <MetricCard title="Pending Enquiry" value={shown(metrics?.pendingEnquiry?.toString())} {...changes.pendingEnquiry} periodLabel={periodLabel} tone="warning" icon={<AlertCircleIcon className="h-5 w-5" />} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+        <MetricCard title="Total Leads" value={shown(metrics?.totalLeads?.toString())} {...changes.totalLeads} periodLabel={periodLabel} tone="brand" icon={<UsersIcon className="h-4 w-4" />} />
+        <MetricCard title="Total Enquiry" value={shown(metrics?.totalEnquiry?.toString())} {...changes.totalEnquiry} periodLabel={periodLabel} tone="brand" icon={<UsersIcon className="h-4 w-4" />} />
+        <MetricCard title="Quotations Sent" value={shown(metrics?.quotationsSent?.toString())} {...changes.quotationsSent} periodLabel={periodLabel} tone="info" icon={<FileTextIcon className="h-4 w-4" />} />
+        <MetricCard title="Orders Received" value={shown(metrics?.ordersReceived?.toString())} {...changes.ordersReceived} periodLabel={periodLabel} tone="lime" icon={<ShoppingCartIcon className="h-4 w-4" />} />
+        <MetricCard title="Pending Follow-ups" value={shown(metrics?.pendingFollowups?.toString())} {...changes.pendingFollowups} periodLabel={periodLabel} tone="warning" icon={<PhoneCallIcon className="h-4 w-4" />} />
+        <MetricCard title="Pending Enquiry" value={shown(metrics?.pendingEnquiry?.toString())} {...changes.pendingEnquiry} periodLabel={periodLabel} tone="warning" icon={<AlertCircleIcon className="h-4 w-4" />} />
       </div>
     </div>
   )
@@ -78,40 +75,36 @@ const TONES = {
 
 function MetricCard({ title, value, pct, trend, periodLabel, caption, tone = "brand", icon }) {
   const t = TONES[tone] || TONES.brand
+  const loaded = value !== null && value !== undefined
   return (
-    <div className="relative overflow-hidden rounded-lg border bg-card p-4 shadow-sm">
+    <div className="relative overflow-hidden rounded-lg border bg-card px-3 py-2.5 shadow-sm">
       <span className={`absolute inset-y-0 left-0 w-1 ${t.bar}`} aria-hidden="true" />
-      <div className="ml-1 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm text-muted-foreground">{title}</p>
-          {value === null || value === undefined ? (
-            <div className="mt-1 h-8 w-16 animate-pulse rounded bg-secondary" role="status" aria-label="Loading" />
-          ) : (
-            <p className="mt-1 text-2xl font-semibold leading-8 tabular-nums text-foreground">{value}</p>
-          )}
-        </div>
-        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${t.chip}`}>{icon}</span>
+      <div className="ml-1 flex items-center justify-between gap-2">
+        <p className="min-w-0 truncate text-xs text-muted-foreground">{title}</p>
+        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${t.chip}`}>{icon}</span>
       </div>
-      {value !== null && value !== undefined && caption && (
-        <p className="ml-1 mt-3 flex items-center gap-1 text-sm text-muted-foreground">
-          <MinusIcon className="h-4 w-4" />
-          {caption}
-        </p>
+      {loaded ? (
+        <p className="ml-1 mt-0.5 text-xl font-semibold leading-7 tabular-nums text-foreground">{value}</p>
+      ) : (
+        <div className="ml-1 mt-1 h-6 w-14 animate-pulse rounded bg-secondary" role="status" aria-label="Loading" />
       )}
-      {value !== null && value !== undefined && !caption && (
+      {loaded && caption && (
+        <p className="ml-1 mt-1 truncate text-xs text-muted-foreground">{caption}</p>
+      )}
+      {loaded && !caption && (
         <p
-          className={`ml-1 mt-3 flex items-center gap-1 text-sm ${
+          className={`ml-1 mt-1 flex items-center gap-1 truncate text-xs ${
             trend === "up" ? "text-success" : trend === "down" ? "text-destructive" : "text-muted-foreground"
           }`}
         >
           {trend === "up" ? (
-            <TrendingUpIcon className="h-4 w-4" />
+            <TrendingUpIcon className="h-3.5 w-3.5 shrink-0" />
           ) : trend === "down" ? (
-            <TrendingDownIcon className="h-4 w-4" />
+            <TrendingDownIcon className="h-3.5 w-3.5 shrink-0" />
           ) : (
-            <MinusIcon className="h-4 w-4" />
+            <MinusIcon className="h-3.5 w-3.5 shrink-0" />
           )}
-          {pct === null ? "New" : `${pct > 0 ? "+" : ""}${pct}%`} {periodLabel}
+          <span className="truncate">{pct === null ? "New" : `${pct > 0 ? "+" : ""}${pct}%`} {periodLabel}</span>
         </p>
       )}
     </div>
