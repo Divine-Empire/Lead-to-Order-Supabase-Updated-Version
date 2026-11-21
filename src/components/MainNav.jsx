@@ -40,6 +40,10 @@ function MainNav({ setMobileMenuOpen }) {
       title: "Series Quotation",
       description: "Create Lite Plus and Ultra Tough series quotations"
     }
+    if (path.startsWith("/fos-weekly-plan")) return {
+      title: "Weekly Plan",
+      description: "Plan the week's field visits and compare it with the previous week"
+    }
     if (path.startsWith("/fos-enquiries")) return {
       title: "FOS Enquiries",
       description: "Open leads and enquiries where you are the Enquiry Receiver or Assigned Person"

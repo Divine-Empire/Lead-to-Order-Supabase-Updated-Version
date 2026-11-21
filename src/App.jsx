@@ -28,6 +28,7 @@ const Report = lazy(() => import("./pages/report/Report"))
 const FieldSalesLogs = lazy(() => import("./pages/field-sales-logs/field_sales_logs"))
 const DuplicateEnquiryLogs = lazy(() => import("./pages/duplicate-logs/DuplicateEnquiryLogs"))
 const FosEnquiries = lazy(() => import("./pages/fos-enquiries/FosEnquiries"))
+const FosWeeklyPlan = lazy(() => import("./pages/fos-weekly-plan/FosWeeklyPlan"))
 const LostDetailsPage = lazy(() => import("./pages/report/LostDetailsPage"))
 const Master = lazy(() => import("./pages/Master/Master"))
 const ItemDetails = lazy(() => import("./pages/Master/ItemDetails"))
@@ -594,6 +595,14 @@ function App() {
                     element={
                       <ProtectedRoute adminOnly>
                         <DuplicateEnquiryLogs key="duplicate-logs" />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/fos-weekly-plan"
+                    element={
+                      <ProtectedRoute>
+                        <FosWeeklyPlan key="fos-weekly-plan" />
                       </ProtectedRoute>
                     }
                   />
