@@ -1,8 +1,6 @@
 ﻿"use client"
 
-import { useState, useEffect, useContext } from "react"
-import { AuthContext } from "../../App" // Import AuthContext
-import supabase from "../../utils/supabase" // Import your Supabase client
+import { useState, useMemo } from "react"
 import {
   BarChart,
   Bar,
@@ -48,315 +46,33 @@ const renderPercentLabel = ({ cx, cy, midAngle, outerRadius, percent }) => {
   )
 }
 
-// Months back shown on the Overview trend chart when no explicit date range
-// is given. Kept at the module scope since the bucket-building helpers below
-// don't need component re-creation.
-const DEFAULT_MONTHS_BACK = 6
-const MAX_MONTHS = 24 // guard against a pathologically wide custom range
-
-// Builds one empty {key, label, leads, enquiries, orders} bucket per
-// calendar month from `start` to `end` inclusive (both Date objects,
-// normalised to the 1st of their month).
-function buildMonthBuckets(start, end) {
-  const buckets = []
-  let cursor = new Date(start.getFullYear(), start.getMonth(), 1)
-  const last = new Date(end.getFullYear(), end.getMonth(), 1)
-  while (cursor <= last && buckets.length < MAX_MONTHS) {
-    buckets.push({
-      key: `${cursor.getFullYear()}-${cursor.getMonth()}`,
-      month: cursor.toLocaleString("en-US", { month: "short", year: "2-digit" }),
-      leads: 0,
-      enquiries: 0,
-      orders: 0,
-    })
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1)
-  }
-  return buckets
+// The monthly buckets, funnel and lead sources arrive ready-made from the
+// dashboard's lto_dashboard_overview request; this only labels and colours them.
+const monthLabel = (ym) => {
+  const [y, m] = ym.split("-").map(Number)
+  return new Date(y, m - 1, 1).toLocaleString("en-US", { month: "short", year: "2-digit" })
 }
 
-function monthKeyOf(dateStr) {
-  const d = new Date(dateStr)
-  return `${d.getFullYear()}-${d.getMonth()}`
-}
-
-// Fetches every row's `created_at` (and `select` extras) in [startIso, endIso)
-// for `table`, applying `extraFilters`, paginated past PostgREST's 1000-row
-// cap -- same pattern used elsewhere in this codebase (e.g. Leads.jsx's
-// client_master fetch) for exactly the same reason.
-async function fetchAllForMonthRange(table, { select = "created_at", startIso, endIsoExclusive, extraFilters }) {
-  let all = []
-  let from = 0
-  const step = 1000
-  for (;;) {
-    let q = supabase.from(table).select(select).gte("created_at", startIso).lt("created_at", endIsoExclusive)
-    if (extraFilters) q = extraFilters(q)
-    const { data, error } = await q.range(from, from + step - 1)
-    if (error) throw error
-    if (!data || data.length === 0) break
-    all = all.concat(data)
-    if (data.length < step) break
-    from += step
-  }
-  return all
-}
-
-function DashboardCharts({ scNameFilter = "all", startDate, endDate }) {
-  const authContext = useContext(AuthContext) || {}
-  const {
-    currentUser = null,
-    isAdmin = () => false,
-    getUsernamesToFilter = () => []
-  } = authContext
+function DashboardCharts({ overview, isLoading, error }) {
   const [activeTab, setActiveTab] = useState("overview")
-  const [leadData, setLeadData] = useState([])
-  const [conversionData, setConversionData] = useState([])
-  const [sourceData, setSourceData] = useState([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState(null)
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setIsLoading(true)
-
-        // Fetch counts for conversion funnel
-        let totalLeads = 0
-        let totalEnquiries = 0
-        let totalQuotations = 0
-        let totalOrders = 0
-
-        // --- 1. LEADS COUNT ---
-        let leadsCountQuery = supabase
-          .from('lto_leads')
-          .select('*', { count: 'exact', head: true })
-
-        // Apply SC Name Filter
-        if (isAdmin()) {
-          if (scNameFilter !== "all") {
-            leadsCountQuery = leadsCountQuery.eq('sc_name', scNameFilter)
-          }
-        } else if (currentUser?.username) {
-          // Standard user filter
-          const usernamesToFilter = getUsernamesToFilter()
-          leadsCountQuery = leadsCountQuery.in('sc_name', usernamesToFilter)
-        }
-
-        // Apply Date Filter
-        // Helper to adjust end date to cover the full day
-        const getEndDateWithTime = (date) => {
-          if (!date) return null
-          return `${date}T23:59:59`
-        }
-
-        if (startDate) {
-          leadsCountQuery = leadsCountQuery.gte('created_at', startDate)
-        }
-        if (endDate) {
-          leadsCountQuery = leadsCountQuery.lte('created_at', getEndDateWithTime(endDate))
-        }
-
-        const { count: leadsCount, error: leadsCountError } = await leadsCountQuery
-
-        if (!leadsCountError) {
-          totalLeads = leadsCount || 0
-        }
-
-        // --- 2. ENQUIRIES COUNT ---
-        let enquiryCountQuery = supabase
-          .from('lto_enquiries')
-          .select('*', { count: 'exact', head: true })
-
-        if (isAdmin()) {
-          if (scNameFilter !== "all") {
-            enquiryCountQuery = enquiryCountQuery.eq('sales_coordinator_name', scNameFilter)
-          }
-        } else if (currentUser?.username) {
-          const usernamesToFilter = getUsernamesToFilter()
-          enquiryCountQuery = enquiryCountQuery.in('sales_coordinator_name', usernamesToFilter)
-        }
-
-        if (startDate) {
-          enquiryCountQuery = enquiryCountQuery.gte('created_at', startDate)
-        }
-        if (endDate) {
-          enquiryCountQuery = enquiryCountQuery.lte('created_at', getEndDateWithTime(endDate))
-        }
-
-        const { count: enquiriesCount, error: enquiriesCountError } = await enquiryCountQuery
-        if (!enquiriesCountError) {
-          totalEnquiries = enquiriesCount || 0
-        }
-
-        // --- 3. QUOTATIONS COUNT ---
-        // (rows with quotation_number not null) -- enquiry_tracker has no SC
-        // name column of its own (it's only linked to enquiries via enquiry_id),
-        // so this count isn't filterable by SC.
-        let quotationsCountQuery = supabase
-          .from('lto_enquiry_tracker')
-          .select('*', { count: 'exact', head: true })
-          .not('quotation_number', 'is', null)
-          .neq('quotation_number', '')
-
-        if (startDate) {
-          quotationsCountQuery = quotationsCountQuery.gte('created_at', startDate)
-        }
-        if (endDate) {
-          quotationsCountQuery = quotationsCountQuery.lte('created_at', getEndDateWithTime(endDate))
-        }
-
-        const { count: quotationsCount, error: quotationsCountError } = await quotationsCountQuery
-
-        if (!quotationsCountError) {
-          totalQuotations = quotationsCount || 0
-        }
-
-        // --- 4. ORDERS COUNT ---
-        // (where is_order_received_status = "yes")
-        let ordersCountQuery = supabase
-          .from('lto_enquiry_tracker')
-          .select('*', { count: 'exact', head: true })
-          .eq('is_order_received_status', 'yes')
-
-        if (startDate) {
-          ordersCountQuery = ordersCountQuery.gte('created_at', startDate)
-        }
-        if (endDate) {
-          ordersCountQuery = ordersCountQuery.lte('created_at', getEndDateWithTime(endDate))
-        }
-
-        const { count: ordersCount, error: ordersCountError } = await ordersCountQuery
-
-        if (!ordersCountError) {
-          totalOrders = ordersCount || 0
-        }
-
-        // Create conversion data
-        const newConversionData = [
-          { name: "Leads", value: totalLeads, color: FUNNEL[0] },
-          { name: "Enquiries", value: totalEnquiries, color: FUNNEL[1] },
-          { name: "Quotations", value: totalQuotations, color: FUNNEL[2] },
-          { name: "Orders", value: totalOrders, color: FUNNEL[3] }
-        ]
-
-        setConversionData(newConversionData)
-
-        // --- LEADS SOURCES ---
-        let leadSourcesQuery = supabase
-          .from('lto_leads')
-          .select('lead_source')
-
-        if (isAdmin()) {
-          if (scNameFilter !== "all") {
-            leadSourcesQuery = leadSourcesQuery.eq('sc_name', scNameFilter)
-          }
-        } else if (currentUser?.username) {
-          const usernamesToFilter = getUsernamesToFilter()
-          leadSourcesQuery = leadSourcesQuery.in('sc_name', usernamesToFilter)
-        }
-
-        if (startDate) {
-          leadSourcesQuery = leadSourcesQuery.gte('created_at', startDate)
-        }
-        if (endDate) {
-          leadSourcesQuery = leadSourcesQuery.lte('created_at', getEndDateWithTime(endDate))
-        }
-
-        const { data: leadSourcesData, error: leadSourcesError } = await leadSourcesQuery
-
-        if (!leadSourcesError && leadSourcesData) {
-          // Count leads by source
-          const sourceCounter = {}
-
-          leadSourcesData.forEach(row => {
-            if (row.lead_source) {
-              const source = row.lead_source
-              sourceCounter[source] = (sourceCounter[source] || 0) + 1
-            }
-          })
-
-          // Convert to array format for the chart
-          const sourceNames = Object.keys(sourceCounter)
-          const newSourceData = sourceNames.map((name, index) => ({
-            name,
-            value: sourceCounter[name],
-            color: CATEGORICAL[index] || OTHER_COLOR
-          }))
-
-          // Sort by value (descending)
-          newSourceData.sort((a, b) => b.value - a.value)
-
-          if (newSourceData.length > 0) {
-            setSourceData(newSourceData)
-          } else {
-            // If filter yields no results, maybe empty? or keep previous/empty
-            setSourceData([])
-          }
-        }
-
-        // --- OVERVIEW TREND (real monthly buckets, not a single-month stub) ---
-        // One lightweight `created_at`-only fetch per table across the whole
-        // window, bucketed client-side by month -- 3 queries total no matter
-        // how many months are shown, instead of one query per month.
-        const rangeEnd = endDate ? new Date(endDate) : new Date()
-        const rangeStart = startDate
-          ? new Date(startDate)
-          : new Date(rangeEnd.getFullYear(), rangeEnd.getMonth() - (DEFAULT_MONTHS_BACK - 1), 1)
-        const buckets = buildMonthBuckets(rangeStart, rangeEnd)
-        const bucketByKey = new Map(buckets.map((b) => [b.key, b]))
-        const startIso = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1).toISOString()
-        const endIsoExclusive = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth() + 1, 1).toISOString()
-
-        const [monthlyLeads, monthlyEnquiries, monthlyOrders] = await Promise.all([
-          fetchAllForMonthRange("lto_leads", {
-            startIso, endIsoExclusive,
-            extraFilters: (q) => {
-              if (isAdmin()) return scNameFilter !== "all" ? q.eq("sc_name", scNameFilter) : q
-              if (currentUser?.username) return q.in("sc_name", getUsernamesToFilter())
-              return q
-            },
-          }),
-          fetchAllForMonthRange("lto_enquiries", {
-            startIso, endIsoExclusive,
-            extraFilters: (q) => {
-              if (isAdmin()) return scNameFilter !== "all" ? q.eq("sales_coordinator_name", scNameFilter) : q
-              if (currentUser?.username) return q.in("sales_coordinator_name", getUsernamesToFilter())
-              return q
-            },
-          }),
-          fetchAllForMonthRange("lto_enquiry_tracker", {
-            startIso, endIsoExclusive,
-            extraFilters: (q) => q.eq("is_order_received_status", "yes"),
-          }),
-        ])
-
-        monthlyLeads.forEach((row) => {
-          const b = bucketByKey.get(monthKeyOf(row.created_at))
-          if (b) b.leads += 1
-        })
-        monthlyEnquiries.forEach((row) => {
-          const b = bucketByKey.get(monthKeyOf(row.created_at))
-          if (b) b.enquiries += 1
-        })
-        monthlyOrders.forEach((row) => {
-          const b = bucketByKey.get(monthKeyOf(row.created_at))
-          if (b) b.orders += 1
-        })
-
-        setLeadData(buckets)
-
-      } catch (error) {
-        console.error("Error fetching chart data:", error)
-        setError(error.message || "Failed to load chart data.")
-        setLeadData([])
-        setConversionData([])
-        setSourceData([])
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    fetchData()
-  }, [currentUser, isAdmin, scNameFilter, startDate, endDate]) // Add dependencies
+  const leadData = useMemo(
+    () => (overview?.trend || []).map((row) => ({ ...row, month: monthLabel(row.month) })),
+    [overview]
+  )
+  const conversionData = useMemo(() => {
+    const f = overview?.funnel || {}
+    return [
+      { name: "Leads", value: f.leads || 0, color: FUNNEL[0] },
+      { name: "Enquiries", value: f.enquiries || 0, color: FUNNEL[1] },
+      { name: "Quotations", value: f.quotations || 0, color: FUNNEL[2] },
+      { name: "Orders", value: f.orders || 0, color: FUNNEL[3] },
+    ]
+  }, [overview])
+  const sourceData = useMemo(
+    () => (overview?.sources || []).map((row, index) => ({ ...row, color: CATEGORICAL[index] || OTHER_COLOR })),
+    [overview]
+  )
 
   return (
     <div>

@@ -1,10 +1,6 @@
-import { useState, useEffect } from "react"
 import { Link } from "react-router-dom"
 import { ArrowRightIcon, ClockIcon } from "../Icons"
 import LoadingSpinner from "../LoadingSpinner"
-import supabase from "../../utils/supabase"
-
-const TASKS_PER_SECTION = 3
 
 function dueLabel(dateStr) {
   if (!dateStr) return "No date set"
@@ -52,88 +48,10 @@ function TaskCard({ tone, badge, title, subtitle, due, to, cta }) {
   )
 }
 
-function PendingTasks() {
-  const [followUps, setFollowUps] = useState([])
-  const [quotationsNeeded, setQuotationsNeeded] = useState([])
-  const [orderStatusNeeded, setOrderStatusNeeded] = useState([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    let cancelled = false
-
-    const run = async () => {
-      setIsLoading(true)
-      setError(null)
-      try {
-        // Follow-ups due: reuses the same view Call Tracker's Pending tab is
-        // built on, so "due" here means exactly what it means there.
-        const followUpsPromise = supabase
-          .from("call_tracker_pending_view")
-          .select("record_id, display_no, company_name, next_call_date")
-          .order("next_call_date", { ascending: true, nullsFirst: true })
-          .limit(TASKS_PER_SECTION)
-
-        // Quotation needed: latest tracker row sitting at the "Make
-        // Quotation" stage with no quotation number logged against it yet.
-        const quotationsPromise = supabase
-          .from("lto_enquiry_tracker")
-          .select("id, enquiry_id, created_at, quotation_number")
-          .in("current_stage", ["make-quotation", "Make Quotation"])
-          .or("quotation_number.is.null,quotation_number.eq.")
-          .order("created_at", { ascending: false })
-          .limit(TASKS_PER_SECTION)
-
-        // Order status needed: latest tracker row at the order stage still
-        // awaiting a yes/no decision.
-        const orderStatusPromise = supabase
-          .from("lto_enquiry_tracker")
-          .select("id, enquiry_id, created_at")
-          .in("current_stage", ["order-status", "Order Status", "order-expected", "Order Expected"])
-          .is("is_order_received_status", null)
-          .order("created_at", { ascending: false })
-          .limit(TASKS_PER_SECTION)
-
-        const [followUpsRes, quotationsRes, orderStatusRes] = await Promise.all([
-          followUpsPromise, quotationsPromise, orderStatusPromise,
-        ])
-        const firstError = followUpsRes.error || quotationsRes.error || orderStatusRes.error
-        if (firstError) throw firstError
-
-        // Both quotation/order-status rows only carry enquiry_id -- fill in
-        // the enquiry_no/company_name they need to display via one lookup.
-        const enquiryIds = [
-          ...new Set([
-            ...(quotationsRes.data || []).map((r) => r.enquiry_id),
-            ...(orderStatusRes.data || []).map((r) => r.enquiry_id),
-          ].filter(Boolean)),
-        ]
-        const { data: enquiryLookup, error: enqErr } = enquiryIds.length > 0
-          ? await supabase.from("lto_enquiries").select("id, enquiry_no, company_name").in("id", enquiryIds)
-          : { data: [] }
-        if (enqErr) throw enqErr
-        const enquiryById = new Map((enquiryLookup || []).map((e) => [e.id, e]))
-
-        if (cancelled) return
-        setFollowUps(followUpsRes.data || [])
-        setQuotationsNeeded(
-          (quotationsRes.data || []).map((row) => ({ ...row, enquiry: enquiryById.get(row.enquiry_id) }))
-        )
-        setOrderStatusNeeded(
-          (orderStatusRes.data || []).map((row) => ({ ...row, enquiry: enquiryById.get(row.enquiry_id) }))
-        )
-      } catch (err) {
-        if (cancelled) return
-        console.error("Error fetching pending tasks:", err)
-        setError(err.message || "Failed to load pending tasks.")
-      } finally {
-        if (!cancelled) setIsLoading(false)
-      }
-    }
-
-    run()
-    return () => { cancelled = true }
-  }, [])
+function PendingTasks({ overview, isLoading, error }) {
+  const followUps = overview?.pending?.followUps || []
+  const quotationsNeeded = overview?.pending?.quotations || []
+  const orderStatusNeeded = overview?.pending?.orderStatus || []
 
   const hasAnyTask = followUps.length > 0 || quotationsNeeded.length > 0 || orderStatusNeeded.length > 0
 

@@ -1,12 +1,7 @@
-import { useState, useEffect } from "react"
-import supabase from "../../utils/supabase"
+import { useMemo } from "react"
 import LoadingSpinner from "../LoadingSpinner"
 
 const ACTIVITY_LIMIT = 6
-// Pull a few more than ACTIVITY_LIMIT from each source table so that after
-// merging and sorting by real time, the most recent N across all four
-// sources are actually represented (not just "the 6 newest leads").
-const PER_SOURCE_LIMIT = 8
 
 function timeAgo(isoString) {
   const diffMs = Date.now() - new Date(isoString).getTime()
@@ -36,118 +31,48 @@ function getBadgeColor(type) {
   }
 }
 
-function RecentActivities() {
-  const [activities, setActivities] = useState([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    let cancelled = false
-
-    const run = async () => {
-      setIsLoading(true)
-      setError(null)
-      try {
-        const [leadsRes, followUpsRes, quotationsRes, ordersRes] = await Promise.all([
-          supabase
-            .from("lto_leads")
-            .select("id, lead_no, company_name, sc_name, created_at")
-            .order("created_at", { ascending: false })
-            .limit(PER_SOURCE_LIMIT),
-          supabase
-            .from("lto_call_tracker_for_leads")
-            .select("id, lead_id, sc_name, created_at")
-            .order("created_at", { ascending: false })
-            .limit(PER_SOURCE_LIMIT),
-          supabase
-            .from("lto_make_quotations")
-            .select("id, quotation_no, enquiry_reference_no, prepared_by, created_at")
-            .order("created_at", { ascending: false })
-            .limit(PER_SOURCE_LIMIT),
-          supabase
-            .from("lto_enquiry_tracker")
-            .select("id, enquiry_id, approved_by, created_at")
-            .eq("is_order_received_status", "yes")
-            .order("created_at", { ascending: false })
-            .limit(PER_SOURCE_LIMIT),
-        ])
-
-        const firstError = leadsRes.error || followUpsRes.error || quotationsRes.error || ordersRes.error
-        if (firstError) throw firstError
-
-        // Follow-ups and order rows only carry a foreign key -- a second,
-        // narrow lookup fills in the company name each needs to display.
-        const leadIds = [...new Set((followUpsRes.data || []).map((r) => r.lead_id).filter(Boolean))]
-        const enquiryIds = [...new Set((ordersRes.data || []).map((r) => r.enquiry_id).filter(Boolean))]
-
-        const [leadLookupRes, enquiryLookupRes] = await Promise.all([
-          leadIds.length > 0
-            ? supabase.from("lto_leads").select("id, lead_no, company_name").in("id", leadIds)
-            : Promise.resolve({ data: [] }),
-          enquiryIds.length > 0
-            ? supabase.from("lto_enquiries").select("id, enquiry_no, company_name").in("id", enquiryIds)
-            : Promise.resolve({ data: [] }),
-        ])
-        const leadById = new Map((leadLookupRes.data || []).map((l) => [l.id, l]))
-        const enquiryById = new Map((enquiryLookupRes.data || []).map((e) => [e.id, e]))
-
-        const merged = [
-          ...(leadsRes.data || []).map((row) => ({
-            key: `lead-${row.id}`,
-            user: row.sc_name || "—",
-            action: "Created a new lead",
-            type: "Lead",
-            detail: `${row.company_name || "Unknown company"} (${row.lead_no || "—"})`,
-            created_at: row.created_at,
-          })),
-          ...(followUpsRes.data || []).map((row) => {
-            const lead = leadById.get(row.lead_id)
-            return {
-              key: `followup-${row.id}`,
-              user: row.sc_name || "—",
-              action: "Logged a follow-up call",
-              type: "Follow-up",
-              detail: `${lead?.company_name || "Unknown company"} (${lead?.lead_no || "—"})`,
-              created_at: row.created_at,
-            }
-          }),
-          ...(quotationsRes.data || []).map((row) => ({
-            key: `quotation-${row.id}`,
-            user: row.prepared_by || "—",
-            action: "Sent a quotation",
-            type: "Quotation",
-            detail: `${row.quotation_no} for ${row.enquiry_reference_no || "—"}`,
-            created_at: row.created_at,
-          })),
-          ...(ordersRes.data || []).map((row) => {
-            const enquiry = enquiryById.get(row.enquiry_id)
-            return {
-              key: `order-${row.id}`,
-              user: row.approved_by || "—",
-              action: "Received an order",
-              type: "Order",
-              detail: `${enquiry?.company_name || "Unknown company"} (${enquiry?.enquiry_no || "—"})`,
-              created_at: row.created_at,
-            }
-          }),
-        ]
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-          .slice(0, ACTIVITY_LIMIT)
-
-        if (!cancelled) setActivities(merged)
-      } catch (err) {
-        if (cancelled) return
-        console.error("Error fetching recent activities:", err)
-        setError(err.message || "Failed to load recent activity.")
-        setActivities([])
-      } finally {
-        if (!cancelled) setIsLoading(false)
-      }
-    }
-
-    run()
-    return () => { cancelled = true }
-  }, [])
+function RecentActivities({ overview, isLoading, error }) {
+  // Up to 8 newest rows per source arrive from the overview request; merge by real time.
+  const activities = useMemo(() => {
+    const recent = overview?.recent
+    if (!recent) return []
+    return [
+      ...(recent.leads || []).map((row) => ({
+        key: `lead-${row.id}`,
+        user: row.sc_name || "—",
+        action: "Created a new lead",
+        type: "Lead",
+        detail: `${row.company_name || "Unknown company"} (${row.lead_no || "—"})`,
+        created_at: row.created_at,
+      })),
+      ...(recent.followUps || []).map((row) => ({
+        key: `followup-${row.id}`,
+        user: row.sc_name || "—",
+        action: "Logged a follow-up call",
+        type: "Follow-up",
+        detail: `${row.lead?.company_name || "Unknown company"} (${row.lead?.lead_no || "—"})`,
+        created_at: row.created_at,
+      })),
+      ...(recent.quotations || []).map((row) => ({
+        key: `quotation-${row.id}`,
+        user: row.prepared_by || "—",
+        action: "Sent a quotation",
+        type: "Quotation",
+        detail: `${row.quotation_no} for ${row.enquiry_reference_no || "—"}`,
+        created_at: row.created_at,
+      })),
+      ...(recent.orders || []).map((row) => ({
+        key: `order-${row.id}`,
+        user: row.approved_by || "—",
+        action: "Received an order",
+        type: "Order",
+        detail: `${row.enquiry?.company_name || "Unknown company"} (${row.enquiry?.enquiry_no || "—"})`,
+        created_at: row.created_at,
+      })),
+    ]
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .slice(0, ACTIVITY_LIMIT)
+  }, [overview])
 
   return (
     <div>
