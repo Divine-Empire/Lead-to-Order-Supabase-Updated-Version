@@ -7,6 +7,8 @@ import supabase from "../../utils/supabase"
 import LoadingSpinner from "../../components/LoadingSpinner"
 import MasterDialog from "../../components/MasterDialog"
 import useConfirmDialog from "../../components/useConfirmDialog"
+import ModalView from "../../components/ModalView"
+import { FilterSearch } from "../../components/FilterBar"
 
 function Setting() {
   const authContext = useContext(AuthContext) || {}
@@ -38,6 +40,8 @@ function Setting() {
   const [employeeOptions, setEmployeeOptions] = useState([])
   const [leadSourceOptions, setLeadSourceOptions] = useState([])
   const [visiblePasswords, setVisiblePasswords] = useState(new Set())
+  const [userSearch, setUserSearch] = useState('')
+  const [accessUser, setAccessUser] = useState(null) // user whose Data Access is open in the view dialog
   const [showFormPassword, setShowFormPassword] = useState(false)
 
   const togglePasswordVisibility = (username) => {
@@ -288,6 +292,11 @@ function Setting() {
     )
   }
 
+  const query = userSearch.trim().toLowerCase()
+  const visibleUsers = query
+    ? users.filter((u) => `${u.fullName || ''} ${u.username || ''}`.toLowerCase().includes(query))
+    : users
+
   return (
     <div className="flex flex-col gap-3 h-full min-h-0">
       {/* Header */}
@@ -299,9 +308,15 @@ function Setting() {
           </h2>
           <p className="mt-0.5 text-sm text-muted-foreground">Manage user accounts, credentials, and lead-source data access.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterSearch
+            value={userSearch}
+            onChange={setUserSearch}
+            placeholder="Search by full name or username..."
+            className="!flex-none w-full sm:w-72"
+          />
           <span className="inline-flex h-7 items-center rounded-full border bg-secondary px-3 text-xs font-medium text-foreground tabular-nums">
-            {users.length} Active Users
+            {userSearch.trim() ? `${visibleUsers.length} of ${users.length}` : users.length} Active Users
           </span>
           <button
             type="button"
@@ -342,7 +357,7 @@ function Setting() {
               </tr>
             </thead>
             <tbody className="bg-card">
-              {users.map((user) => {
+              {visibleUsers.map((user) => {
                 const isSelf = user.username === currentUser.username
                 const isPasswordVisible = visiblePasswords.has(user.username)
                 return (
@@ -411,31 +426,27 @@ function Setting() {
                         <span className="inline-flex items-center rounded-full border border-success/30 bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
                           All Records (Full Access)
                         </span>
-                      ) : user.restrictedLeadSources && user.restrictedLeadSources.length > 0 ? (
-                        <div className="flex max-w-xs flex-wrap gap-1">
-                          {user.restrictedLeadSources.map((src) => (
-                            <span key={src} className="inline-flex items-center gap-1 rounded-full border border-warning/40 bg-warning/15 px-2 py-0.5 text-xs font-medium text-foreground">
-                              <MapPin className="h-3 w-3" aria-hidden="true" />
-                              {src}
-                            </span>
-                          ))}
-                        </div>
+                      ) : (user.restrictedLeadSources && user.restrictedLeadSources.length > 0) || (user.fosAlternateAccess && user.fosAlternateAccess.length > 0) ? (
+                        <button
+                          type="button"
+                          onClick={() => setAccessUser(user)}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+                          aria-label={`View data access for ${user.username}`}
+                        >
+                          <Eye size={14} aria-hidden="true" />
+                          View
+                        </button>
                       ) : (
                         <span className="text-xs text-muted-foreground">Own records (by name)</span>
-                      )}
-                      {user.userType !== 'admin' && user.fosAlternateAccess && user.fosAlternateAccess.length > 0 && (
-                        <p className="mt-1 text-xs text-muted-foreground" title={user.fosAlternateAccess.join(', ')}>
-                          FOS Enquiries: also sees {user.fosAlternateAccess.length} other {user.fosAlternateAccess.length === 1 ? 'person' : 'people'}
-                        </p>
                       )}
                     </td>
                   </tr>
                 )
               })}
-              {users.length === 0 && (
+              {visibleUsers.length === 0 && (
                 <tr>
                   <td colSpan="6" className="px-6 py-8 text-center text-muted-foreground">
-                    No users found.
+                    {users.length === 0 ? 'No users found.' : 'No users match your search.'}
                   </td>
                 </tr>
               )}
@@ -443,6 +454,43 @@ function Setting() {
           </table>
         )}
       </div>
+
+      <ModalView
+        isOpen={Boolean(accessUser)}
+        onClose={() => setAccessUser(null)}
+        title={accessUser ? `Data Access - ${accessUser.fullName || accessUser.username}` : ''}
+        maxWidth="max-w-xl"
+      >
+        {accessUser && (
+          <div className="space-y-4 text-sm">
+            <div>
+              <p className="mb-1.5 font-medium text-foreground">Lead sources</p>
+              {accessUser.restrictedLeadSources && accessUser.restrictedLeadSources.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {accessUser.restrictedLeadSources.map((src) => (
+                    <span key={src} className="inline-flex items-center gap-1 rounded-full border border-warning/40 bg-warning/15 px-2 py-0.5 text-xs font-medium text-foreground">
+                      <MapPin className="h-3 w-3" aria-hidden="true" />
+                      {src}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground">Own records (by name)</p>
+              )}
+            </div>
+            {accessUser.fosAlternateAccess && accessUser.fosAlternateAccess.length > 0 && (
+              <div>
+                <p className="mb-1.5 font-medium text-foreground">FOS Enquiries: also sees</p>
+                <div className="flex flex-wrap gap-1">
+                  {accessUser.fosAlternateAccess.map((p) => (
+                    <span key={p} className="inline-flex items-center rounded-full border bg-secondary px-2 py-0.5 text-xs font-medium text-foreground">{p}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </ModalView>
 
       {/* Add/Edit User Modal */}
       {isModalOpen && (

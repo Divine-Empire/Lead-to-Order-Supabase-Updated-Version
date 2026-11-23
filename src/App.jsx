@@ -25,7 +25,7 @@ const EnquiryTrackerForm = lazy(() => import("./pages/enquiry-tracker/EnquiryTra
 const Quotation = lazy(() => import("./pages/Quotation/Quotation"))
 const SeriesQuotation = lazy(() => import("./pages/series_quotation/Quotation"))
 const Report = lazy(() => import("./pages/report/Report"))
-const FieldSalesLogs = lazy(() => import("./pages/field-sales-logs/field_sales_logs"))
+const FieldSalesLogs = lazy(() => import("./pages/field-sales-logs/FieldSalesPage"))
 const DuplicateEnquiryLogs = lazy(() => import("./pages/duplicate-logs/DuplicateEnquiryLogs"))
 const FosEnquiries = lazy(() => import("./pages/fos-enquiries/FosEnquiries"))
 const FosWeeklyPlan = lazy(() => import("./pages/fos-weekly-plan/FosWeeklyPlan"))

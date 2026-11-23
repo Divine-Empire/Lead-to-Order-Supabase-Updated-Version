@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useContext, useCallback, useMemo } from "react";
-import { RefreshCw, Download, Loader2, ExternalLink, Eye, CalendarDays } from "lucide-react";
+import { RefreshCw, Download, Loader2, ExternalLink, Eye, SlidersHorizontal } from "lucide-react";
 import { FilterSearch, filterControlClass } from "../../components/FilterBar";
 import DataTable from "../../components/DataTable";
 import ColumnSelector from "../../components/ColumnSelector";
@@ -60,10 +60,6 @@ const nextDay = (ymd) => {
   const [y, m, d] = ymd.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 };
-const shortDay = (ymd) => {
-  const [y, m, d] = ymd.split("-");
-  return `${d}/${m}/${y}`;
-};
 
 const dash = (v) => (v === null || v === undefined || String(v).trim() === "" ? "-" : v);
 
@@ -115,8 +111,12 @@ const viewButtonClass =
   "inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10";
 
 // Field Sales Logs: read-only list of field_sales_form submissions.
-function FieldSalesLogs() {
-  const { showNotification } = useContext(AuthContext) || {};
+// leading / trailing: the page's tab switch and Calendar button, placed in this toolbar row.
+function FieldSalesLogs({ leading = null, trailing = null }) {
+  const { showNotification, isAdmin = () => false, currentUser = null } = useContext(AuthContext) || {};
+  // Admin sees every log; anyone else only the logs filed under their own Full Name.
+  const admin = isAdmin();
+  const ownName = String(currentUser?.fullName || "").replace(/\s+/g, " ").trim();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -194,6 +194,11 @@ function FieldSalesLogs() {
   const applyFilters = useCallback(
     (query) => {
       let q = query;
+      if (!admin) {
+        // Case-insensitive; spaces match any run of characters so stray double spaces still match.
+        if (ownName) q = q.ilike("sales_person_name", ownName.replace(/[\\%_]/g, "\\$&").replace(/ /g, "%"));
+        else q = q.is("id", null); // no Full Name on the login: nothing to show
+      }
       if (debouncedSearch) {
         const term = `%${debouncedSearch}%`;
         q = q.or(`serial_code.ilike.${term},sales_person_name.ilike.${term}`);
@@ -207,7 +212,7 @@ function FieldSalesLogs() {
       }
       return q;
     },
-    [debouncedSearch, visitType, dateFrom, dateTo, rangeInvalid]
+    [admin, ownName, debouncedSearch, visitType, dateFrom, dateTo, rangeInvalid]
   );
 
   const fetchLogs = useCallback(async () => {
@@ -303,11 +308,8 @@ function FieldSalesLogs() {
 
   const hasFilters = Boolean(searchQuery || visitType || dateFrom || dateTo);
   const clearFilters = () => { setSearchQuery(""); setVisitType(""); setDateFrom(""); setDateTo(""); setCurrentPage(1); };
-  const dateLabel =
-    dateFrom && dateTo ? `${shortDay(dateFrom)} - ${shortDay(dateTo)}`
-      : dateFrom ? `From ${shortDay(dateFrom)}`
-      : dateTo ? `Until ${shortDay(dateTo)}`
-      : "Date";
+  // Visit type and the date range live in the Filters popover; the badge counts what is set.
+  const activeFilterCount = (visitType ? 1 : 0) + (dateFrom || dateTo ? 1 : 0);
 
   const openDetail = (type, log) => setDetail({ type, log });
 
@@ -336,7 +338,17 @@ function FieldSalesLogs() {
     ),
     sales_person_name: (r) => <td key="sales_person_name" className="px-4 py-3 text-sm font-semibold text-gray-900 text-left whitespace-normal break-words">{dash(r.sales_person_name)}</td>,
     visit_datetime: (r) => <td key="visit_datetime" className="px-4 py-3 whitespace-nowrap text-sm text-center">{dash(formatVisitDate(r.visit_datetime))}</td>,
-    city_location: (r) => <td key="city_location" className="px-4 py-3 text-sm text-left whitespace-normal break-words">{dash(r.city_location)}</td>,
+    city_location: (r) => (
+      <td key="city_location" className="px-4 py-3 text-sm text-left max-w-[180px]">
+        <span
+          className="block truncate cursor-default"
+          style={{ textDecorationLine: "underline", textDecorationStyle: "dotted", textUnderlineOffset: "3px" }}
+          title={r.city_location || ""}
+        >
+          {dash(r.city_location)}
+        </span>
+      </td>
+    ),
     visit_type: (r) => <td key="visit_type" className="px-4 py-3 whitespace-nowrap text-sm text-center">{dash(r.visit_type)}</td>,
     company_name: (r) => <td key="company_name" className="px-4 py-3 text-sm text-left whitespace-normal break-words">{dash(r.company_name)}</td>,
     contacts: (r) => <td key="contacts" className="px-4 py-3 whitespace-nowrap text-sm text-center">{viewButton("contacts", r)}</td>,
@@ -384,7 +396,7 @@ function FieldSalesLogs() {
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 gap-3">
       <div className="flex flex-wrap items-center gap-2 shrink-0 w-full">
-
+        {leading}
         <FilterSearch
           value={searchQuery}
           onChange={setSearchQuery}
@@ -392,55 +404,62 @@ function FieldSalesLogs() {
           className="max-w-[320px]"
         />
 
-        <select
-          aria-label="Filter by visit type"
-          value={visitType}
-          onChange={(e) => setVisitType(e.target.value)}
-          className={`${filterControlClass} !w-auto min-w-[160px] max-w-[220px]`}
-        >
-          <option value="">All visit types</option>
-          {visitTypes.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-
         <div ref={dateRef} className="relative shrink-0">
           <button
             type="button"
             aria-haspopup="dialog"
             aria-expanded={showDate}
             onClick={() => setShowDate((v) => !v)}
-            className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${dateFrom || dateTo ? "border-primary/40 bg-primary/5 font-medium text-primary" : "border-input bg-card text-foreground hover:bg-accent"}`}
+            className={`inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${activeFilterCount ? "border-primary/40 bg-primary/5 font-medium text-primary" : "border-input bg-card text-foreground hover:bg-accent"}`}
           >
-            <CalendarDays size={16} aria-hidden="true" />
-            <span className="tabular-nums">{dateLabel}</span>
+            <SlidersHorizontal size={16} aria-hidden="true" />
+            Filters
+            {activeFilterCount > 0 && (
+              <span className="rounded bg-primary px-1.5 text-xs font-medium tabular-nums text-primary-foreground">{activeFilterCount}</span>
+            )}
           </button>
 
           {showDate && (
             <div
               role="dialog"
-              aria-label="Filter by date"
-              className="absolute left-0 top-full z-50 mt-1 w-64 space-y-3 rounded-md border bg-popover p-3 shadow-lg"
+              aria-label="Filters"
+              className="absolute left-0 top-full z-50 mt-1 w-72 space-y-3 rounded-md border bg-popover p-3 shadow-lg"
             >
               <div className="space-y-1">
-                <label htmlFor="fsl-date-from" className="block text-xs font-medium text-muted-foreground">Start date</label>
-                <input
-                  id="fsl-date-from"
-                  type="date"
-                  value={dateFrom}
-                  max={dateTo || undefined}
-                  onChange={(e) => setDateFrom(e.target.value)}
+                <label htmlFor="fsl-visit-type" className="block text-xs font-medium text-muted-foreground">Visit type</label>
+                <select
+                  id="fsl-visit-type"
+                  value={visitType}
+                  onChange={(e) => setVisitType(e.target.value)}
                   className={filterControlClass}
-                />
+                >
+                  <option value="">All visit types</option>
+                  {visitTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
               </div>
-              <div className="space-y-1">
-                <label htmlFor="fsl-date-to" className="block text-xs font-medium text-muted-foreground">End date</label>
-                <input
-                  id="fsl-date-to"
-                  type="date"
-                  value={dateTo}
-                  min={dateFrom || undefined}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className={filterControlClass}
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label htmlFor="fsl-date-from" className="block text-xs font-medium text-muted-foreground">Start date</label>
+                  <input
+                    id="fsl-date-from"
+                    type="date"
+                    value={dateFrom}
+                    max={dateTo || undefined}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className={filterControlClass}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="fsl-date-to" className="block text-xs font-medium text-muted-foreground">End date</label>
+                  <input
+                    id="fsl-date-to"
+                    type="date"
+                    value={dateTo}
+                    min={dateFrom || undefined}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className={filterControlClass}
+                  />
+                </div>
               </div>
               {rangeInvalid && (
                 <p role="alert" className="text-xs text-destructive">Start date is after the end date, so the range is not applied.</p>
@@ -448,8 +467,8 @@ function FieldSalesLogs() {
               <div className="flex items-center justify-between gap-2 border-t pt-2">
                 <button
                   type="button"
-                  onClick={() => { setDateFrom(""); setDateTo(""); }}
-                  disabled={!dateFrom && !dateTo}
+                  onClick={() => { setVisitType(""); setDateFrom(""); setDateTo(""); }}
+                  disabled={!activeFilterCount}
                   className="h-8 rounded-md px-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
                 >
                   Clear
@@ -511,6 +530,7 @@ function FieldSalesLogs() {
             {isExporting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
             Export CSV
           </button>
+          {trailing}
         </div>
       </div>
 

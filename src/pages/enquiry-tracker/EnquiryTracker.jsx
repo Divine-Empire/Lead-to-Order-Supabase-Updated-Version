@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useContext, useMemo, useId } from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -20,6 +20,7 @@ import { recomputeAlreadyInTrackerForRename } from "../../utils/clientMasterTrac
 import { tokenizeLoose, buildPgLooseToken, looseIncludes } from "../../utils/looseSearch";
 import DataTable from "../../components/DataTable";
 import ModalForm from "../../components/ModalForm";
+import AssignFieldPersonModal from "../../components/AssignFieldPersonModal";
 import useDialogBehavior from "../../components/useDialogBehavior";
 import EnquiryTrackerFilter from "../../components/enquiry-tracker/EnquiryTrackerFilter";
 import MakeQuotationForm from "../../components/enquiry-tracker/MakeQuotationFrom";
@@ -306,6 +307,8 @@ function EnquiryTracker() {
   // row -- editedData tracks the row's field values, the modal is just
   // where the inputs live now.
   const [isPendingEditModalOpen, setIsPendingEditModalOpen] = useState(false);
+  // Admin: assign this enquiry / lead to field person(s) for a visit.
+  const [assignRecord, setAssignRecord] = useState(null);
   // Snapshot of the row as it was when the Edit modal opened -- Save stays
   // disabled until one of the modal's fields differs from this.
   const [originalEditData, setOriginalEditData] = useState({});
@@ -2792,6 +2795,7 @@ const handleSaveClick = async () => {
           {isAdmin() && (
             <button type="button" onClick={() => handleEditClick(tracker, index)} className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-colors border-input bg-card text-foreground hover:bg-accent">Edit</button>
           )}
+          <button type="button" onClick={() => setAssignRecord(tracker)} className="inline-flex h-7 items-center rounded-md border px-2.5 text-xs font-medium transition-colors border-input bg-card text-foreground hover:bg-accent">Assign</button>
         </div>
       </td>
       {renderRowCells(tracker, visiblePendingColumns)}
@@ -3089,6 +3093,16 @@ const handleSaveClick = async () => {
           Save/Cancel-in-row editing. Restricted to exactly 11 master
           lead/enquiry fields (see handleSaveClick's pending branch for the
           per-field/per-table-source mapping). */}
+      {assignRecord && (
+        <AssignFieldPersonModal
+          isOpen
+          onClose={() => setAssignRecord(null)}
+          record={assignRecord}
+          assignedBy={currentUser?.fullName || currentUser?.username}
+          showNotification={showNotification}
+        />
+      )}
+
       <ModalForm
         isOpen={isPendingEditModalOpen}
         onClose={handlePendingEditCancel}
