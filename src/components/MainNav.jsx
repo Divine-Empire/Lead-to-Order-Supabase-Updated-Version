@@ -73,7 +73,7 @@ function MainNav({ setMobileMenuOpen }) {
 
   const { title, description } = getPageHeader()
   const showAdminView = (location.pathname.startsWith("/call-tracker") || location.pathname.startsWith("/enquiry-tracker")) && isAdmin && isAdmin()
-  const displayName = currentUser?.username || "User"
+  const displayName = currentUser?.fullName || currentUser?.username || "User"
 
   return (
     <header className="sticky top-0 z-40 flex min-h-14 w-full items-center justify-between gap-3 border-b border-brand-200 bg-card px-4 py-2 shadow-[inset_0_2px_0_0_hsl(var(--brand-lime))] md:px-6">

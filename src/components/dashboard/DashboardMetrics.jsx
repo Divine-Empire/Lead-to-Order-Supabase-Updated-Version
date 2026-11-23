@@ -1,4 +1,4 @@
-// DashboardMetrics.jsx - the six metric cards. The numbers come from the
+// DashboardMetrics.jsx - the six metric cards (open leads, open enquiries, their pending follow-ups, quotations not made, orders). The numbers come from the
 // dashboard's single lto_dashboard_overview request (see utils/dashboardOverview.js).
 
 import { useContext } from "react"
@@ -13,19 +13,23 @@ function pctChange(curr, prev) {
   return { pct: diff, trend: diff > 0 ? "up" : "down" }
 }
 
-const PENDING_KEYS = ["pendingFollowups", "pendingEnquiry"]
+// Snapshot cards: open right now, no date range and no previous period.
+const OPEN_KEYS = ["openLeads", "openLeadFollowups", "openEnquiries", "openEnquiryFollowups", "quotationPending"]
 
 function DashboardMetrics({ overview, isLoading, error, toolbar }) {
   const { isAdmin = () => false } = useContext(AuthContext) || {}
   const metrics = overview?.metrics?.current || null
   const previous = overview?.metrics?.previous || {}
   const periodLabel = overview?.usesCustomRange ? "vs previous period" : "from last month"
-  // Pending cards are open-right-now snapshots, so they have no previous period.
   const changes = metrics
     ? Object.fromEntries(
         Object.keys(metrics).map((key) => [
           key,
-          PENDING_KEYS.includes(key) ? { caption: "Open right now" } : pctChange(metrics[key], previous[key] || 0),
+          OPEN_KEYS.includes(key)
+            ? { caption: "Open right now" }
+            : overview?.allTime
+              ? { caption: "All time" }
+              : pctChange(metrics[key], previous[key] || 0),
         ])
       )
     : {}
@@ -54,12 +58,12 @@ function DashboardMetrics({ overview, isLoading, error, toolbar }) {
       )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-        <MetricCard title="Total Leads" value={shown(metrics?.totalLeads?.toString())} {...changes.totalLeads} periodLabel={periodLabel} tone="brand" icon={<UsersIcon className="h-4 w-4" />} />
-        <MetricCard title="Total Enquiry" value={shown(metrics?.totalEnquiry?.toString())} {...changes.totalEnquiry} periodLabel={periodLabel} tone="brand" icon={<UsersIcon className="h-4 w-4" />} />
-        <MetricCard title="Quotations Sent" value={shown(metrics?.quotationsSent?.toString())} {...changes.quotationsSent} periodLabel={periodLabel} tone="info" icon={<FileTextIcon className="h-4 w-4" />} />
-        <MetricCard title="Orders Received" value={shown(metrics?.ordersReceived?.toString())} {...changes.ordersReceived} periodLabel={periodLabel} tone="lime" icon={<ShoppingCartIcon className="h-4 w-4" />} />
-        <MetricCard title="Pending Follow-ups" value={shown(metrics?.pendingFollowups?.toString())} {...changes.pendingFollowups} periodLabel={periodLabel} tone="warning" icon={<PhoneCallIcon className="h-4 w-4" />} />
-        <MetricCard title="Pending Enquiry" value={shown(metrics?.pendingEnquiry?.toString())} {...changes.pendingEnquiry} periodLabel={periodLabel} tone="warning" icon={<AlertCircleIcon className="h-4 w-4" />} />
+        <MetricCard title="Open Leads" value={shown(metrics?.openLeads?.toString())} {...changes.openLeads} periodLabel={periodLabel} tone="brand" icon={<UsersIcon className="h-4 w-4" />} />
+        <MetricCard title="Lead Follow-ups Pending" value={shown(metrics?.openLeadFollowups?.toString())} {...changes.openLeadFollowups} periodLabel={periodLabel} tone="warning" icon={<PhoneCallIcon className="h-4 w-4" />} />
+        <MetricCard title="Open Enquiries" value={shown(metrics?.openEnquiries?.toString())} {...changes.openEnquiries} periodLabel={periodLabel} tone="brand" icon={<UsersIcon className="h-4 w-4" />} />
+        <MetricCard title="Enquiry Follow-ups Pending" value={shown(metrics?.openEnquiryFollowups?.toString())} {...changes.openEnquiryFollowups} periodLabel={periodLabel} tone="warning" icon={<PhoneCallIcon className="h-4 w-4" />} />
+        <MetricCard title="Quotation Not Made" value={shown(metrics?.quotationPending?.toString())} {...changes.quotationPending} periodLabel={periodLabel} tone="info" icon={<FileTextIcon className="h-4 w-4" />} />
+        <MetricCard title="Total Orders Received" value={shown(metrics?.ordersReceived?.toString())} {...changes.ordersReceived} periodLabel={periodLabel} tone="lime" icon={<ShoppingCartIcon className="h-4 w-4" />} />
       </div>
     </div>
   )

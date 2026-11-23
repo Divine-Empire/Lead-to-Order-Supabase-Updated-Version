@@ -50,6 +50,10 @@ DECLARE
   v_quot_cur  bigint; v_quot_prev  bigint;
   v_ord_cur   bigint; v_ord_prev   bigint;
   v_pend_fu   bigint; v_pend_enq   bigint;
+  v_open_leads bigint; v_open_lead_fu bigint;
+  v_open_enq   bigint; v_open_enq_fu  bigint;
+  v_quot_todo  bigint;
+  v_today      date := (now() AT TIME ZONE 'Asia/Kolkata')::date;
   v_funnel    jsonb;
   v_sources   jsonb;
   v_trend     jsonb;
@@ -89,6 +93,26 @@ BEGIN
   SELECT count(*) INTO v_pend_enq
     FROM enquiry_pending_view
    WHERE source_type = 'enquiry' AND (p_sc IS NULL OR assigned_to = ANY (p_sc));
+
+  -- ---- open-record snapshot cards (no date window) -------------------
+  -- Open leads = leads still in Call Tracker; open enquiries = enquiries still
+  -- in Enquiry Tracker. A follow-up is pending when its next date is today or
+  -- earlier, or when no date has been set yet.
+  SELECT count(*), count(*) FILTER (WHERE next_call_date IS NULL OR next_call_date <= v_today)
+    INTO v_open_leads, v_open_lead_fu
+    FROM call_tracker_pending_view
+   WHERE p_sc IS NULL OR assigned_to = ANY (p_sc);
+
+  SELECT count(*), count(*) FILTER (WHERE next_call_date IS NULL OR next_call_date <= v_today)
+    INTO v_open_enq, v_open_enq_fu
+    FROM enquiry_pending_view
+   WHERE source_type = 'enquiry' AND (p_sc IS NULL OR assigned_to = ANY (p_sc));
+
+  -- Open enquiries / leads still waiting at Make Quotation (quotation not generated yet).
+  SELECT count(*) INTO v_quot_todo
+    FROM enquiry_pending_view
+   WHERE current_stage IN ('make-quotation', 'Make Quotation')
+     AND (p_sc IS NULL OR assigned_to = ANY (p_sc));
 
   -- ---- funnel (chart window) ----------------------------------------
   SELECT jsonb_build_object(
@@ -214,7 +238,10 @@ BEGIN
     'metrics', jsonb_build_object(
       'current', jsonb_build_object(
         'totalLeads', v_lead_cur, 'pendingFollowups', v_pend_fu, 'quotationsSent', v_quot_cur,
-        'ordersReceived', v_ord_cur, 'totalEnquiry', v_enq_cur, 'pendingEnquiry', v_pend_enq),
+        'ordersReceived', v_ord_cur, 'totalEnquiry', v_enq_cur, 'pendingEnquiry', v_pend_enq,
+        'openLeads', v_open_leads, 'openLeadFollowups', v_open_lead_fu,
+        'openEnquiries', v_open_enq, 'openEnquiryFollowups', v_open_enq_fu,
+        'quotationPending', v_quot_todo),
       'previous', jsonb_build_object(
         'totalLeads', v_lead_prev, 'quotationsSent', v_quot_prev,
         'ordersReceived', v_ord_prev, 'totalEnquiry', v_enq_prev)

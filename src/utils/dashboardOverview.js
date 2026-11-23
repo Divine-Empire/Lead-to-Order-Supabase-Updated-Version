@@ -5,6 +5,7 @@ import { useState, useEffect, useContext } from "react"
 import { AuthContext } from "../App"
 import supabase from "./supabase"
 
+export const ALL_TIME_START = "2000-01-01" // the dashboard's "All time" range
 const DEFAULT_MONTHS_BACK = 6
 const MAX_MONTHS = 24 // guard against a pathologically wide custom range
 
@@ -73,7 +74,7 @@ export async function fetchDashboardOverview({ scNames, startDate, endDate }) {
     p_trend_end: trend.endExclusive,
   })
   if (error) throw error
-  return { ...data, usesCustomRange }
+  return { ...data, usesCustomRange, allTime: startDate === ALL_TIME_START && !endDate }
 }
 
 // Loads the overview once for the whole dashboard (same scoping the separate

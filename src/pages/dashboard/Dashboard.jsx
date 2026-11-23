@@ -3,7 +3,7 @@ import DashboardMetrics from "../../components/dashboard/DashboardMetrics"
 import LoadingSpinner from "../../components/LoadingSpinner"
 import PendingTasks from "../../components/dashboard/PendingTasks"
 import RecentActivities from "../../components/dashboard/RecentActivities"
-import { useDashboardOverview } from "../../utils/dashboardOverview"
+import { useDashboardOverview, ALL_TIME_START } from "../../utils/dashboardOverview"
 
 // recharts is large; load it after the metric cards so they appear first.
 const DashboardCharts = lazy(() => import("../../components/dashboard/DashboardCharts"))
@@ -11,7 +11,7 @@ const DashboardCharts = lazy(() => import("../../components/dashboard/DashboardC
 const pad = (n) => String(n).padStart(2, "0")
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 
-// Quick ranges. "This month" is the default (no dates sent). Each returns [start, end].
+// Quick ranges. "All time" is the default. Each returns [start, end].
 const PRESETS = [
   { id: "this", label: "This month", range: () => ["", ""] },
   {
@@ -30,14 +30,14 @@ const PRESETS = [
       return [ymd(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 29)), ymd(n)]
     },
   },
-  { id: "all", label: "All time", range: () => ["2000-01-01", ""] },
+  { id: "all", label: "All time", range: () => [ALL_TIME_START, ""] },
 ]
 
 function Dashboard() {
-  const [startDate, setStartDate] = useState("")
+  const [startDate, setStartDate] = useState(ALL_TIME_START)
   const [endDate, setEndDate] = useState("")
   const rangeInvalid = Boolean(startDate && endDate && endDate < startDate)
-  // An invalid range (end before start) is not sent; the dashboard keeps the default month.
+  // An invalid range (end before start) is not sent; the dashboard shows all time.
   const { data: overview, isLoading, error } = useDashboardOverview({
     startDate: rangeInvalid ? undefined : startDate || undefined,
     endDate: rangeInvalid ? undefined : endDate || undefined,
@@ -51,8 +51,8 @@ function Dashboard() {
   })?.id
 
   const rangeHint = rangeInvalid
-    ? "End date is before the start date, so the default range is shown."
-    : "Cards and charts follow this range; the Pending cards always show what is open now."
+    ? "End date is before the start date, so All time is shown."
+    : "Orders Received and the charts follow this range; the other cards always show what is open right now."
 
   const dateFilter = (
     <div className="flex flex-wrap items-center gap-2" title={rangeHint}>
