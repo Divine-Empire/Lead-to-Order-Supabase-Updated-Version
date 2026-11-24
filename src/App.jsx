@@ -9,6 +9,8 @@ import Notification from "./components/Notification"
 import Sidebar from "./components/Sidebar"
 import UpdateBanner from "./components/UpdateBanner"
 import LoadingSpinner from "./components/LoadingSpinner"
+import PermissionDenied from "./components/PermissionDenied"
+import { allows, firstAllowedPage } from "./constants/pageAccess"
 import supabase from "./utils/supabase"
 
 // Lazy-loaded so each page's own code (and its heavy deps, e.g. recharts on
@@ -58,6 +60,15 @@ function App() {
     return localStorage.getItem("userType") || null
   })
   const [userData, setUserData] = useState(null)
+  // Page keys this user may open (login.page_access); null = no explicit list (default non-admin set).
+  const [pageAccess, setPageAccess] = useState(() => {
+    try {
+      const raw = localStorage.getItem("pageAccess")
+      return raw ? JSON.parse(raw) : null
+    } catch {
+      return null
+    }
+  })
   const [alternateAccess, setAlternateAccess] = useState(() => {
     return localStorage.getItem("alternateAccess") || null
   })
@@ -104,7 +115,7 @@ function App() {
         try {
           const { data, error } = await supabase
             .from('login')
-            .select('usertype, alternate_access, full_name, restricted_lead_sources')
+            .select('usertype, alternate_access, full_name, restricted_lead_sources, page_access')
             .eq('username', parsedUser.username)
             .maybeSingle()
 
@@ -126,6 +137,7 @@ function App() {
             const latestRestrictedLeadSources = data.restricted_lead_sources || []
             setAlternateAccess(latestAlternateAccess)
             setRestrictedLeadSources(latestRestrictedLeadSources)
+            applyPageAccess(data.page_access)
             setCurrentUser(prev => ({ ...(prev || parsedUser), fullName: latestFullName }))
             localStorage.setItem("alternateAccess", latestAlternateAccess || '')
             localStorage.setItem("restrictedLeadSources", JSON.stringify(latestRestrictedLeadSources))
@@ -170,10 +182,11 @@ function App() {
       try {
         const { data, error } = await supabase
           .from('login')
-          .select('usertype')
+          .select('usertype, page_access')
           .eq('username', username)
           .maybeSingle()
         if (error) return
+        if (data) applyPageAccess(data.page_access) // an admin's change reaches an open session on the next focus / check
         if (!data) {
           endInvalidSession()
         } else if ((data.usertype || null) !== userTypeRef.current) {
@@ -310,7 +323,7 @@ function App() {
       // Query Supabase login table - now also fetching alternate_access + full_name + restricted_lead_sources
       const { data, error } = await supabase
         .from('login')
-        .select('username, usertype, alternate_access, full_name, restricted_lead_sources')
+        .select('username, usertype, alternate_access, full_name, restricted_lead_sources, page_access')
         .eq('username', username)
         .eq('password', password)
         .single()
@@ -335,6 +348,7 @@ function App() {
         setUserType(data.usertype);
         setAlternateAccess(data.alternate_access || null);
         setRestrictedLeadSources(loginRestrictedLeadSources);
+        applyPageAccess(data.page_access);
 
         localStorage.setItem("isAuthenticated", "true");
         localStorage.setItem("currentUser", JSON.stringify(userInfo));
@@ -368,6 +382,8 @@ function App() {
     setUserData(null);
     setAlternateAccess(null);
     setRestrictedLeadSources([]);
+    setPageAccess(null);
+    localStorage.removeItem("pageAccess");
     localStorage.removeItem("isAuthenticated");
     localStorage.removeItem("currentUser");
     localStorage.removeItem("userType");
@@ -445,8 +461,20 @@ function App() {
     return Array.isArray(restrictedLeadSources) ? restrictedLeadSources : [];
   }
 
-  // Protected route component
-  const ProtectedRoute = ({ children, adminOnly = false }) => {
+  // Keeps the page list in state + localStorage (only rewrites when it actually changed).
+  function applyPageAccess(list) {
+    const next = Array.isArray(list) ? list : null
+    setPageAccess((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+    if (next) localStorage.setItem("pageAccess", JSON.stringify(next))
+    else localStorage.removeItem("pageAccess")
+  }
+
+  // Page-wise access: admins open everything; others only the pages in their page_access list.
+  // "master" is true when any Master Data page is allowed.
+  const canAccess = (key) => isAdmin() || allows(pageAccess, key)
+
+  // Protected route component. pageKey = the page access key (src/constants/pageAccess.js).
+  const ProtectedRoute = ({ children, adminOnly = false, pageKey = null }) => {
     if (!isAuthenticated) {
       return <Navigate to="/login" />;
     }
@@ -457,11 +485,20 @@ function App() {
       return <Navigate to="/" />;
     }
     
+    if (pageKey && !canAccess(pageKey)) {
+      const first = firstAllowedPage(canAccess)
+      // No access to the landing page: send them to the first page they do have.
+      if (pageKey === "dashboard" && first && first.href !== "/") return <Navigate to={first.href} replace />
+      return <PermissionDenied homeHref={first?.href} homeLabel={first?.label} />
+    }
+
     return children;
   }
 
   return (
     <AuthContext.Provider value={{ 
+      canAccess,
+      pageAccess,
       isAuthenticated, 
       login, 
       logout, 
@@ -504,7 +541,7 @@ function App() {
                   <Route
                     path="/"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="dashboard">
                         <Dashboard />
                       </ProtectedRoute>
                     }
@@ -512,7 +549,7 @@ function App() {
                   <Route
                     path="/leads"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="leads">
                         <Leads />
                       </ProtectedRoute>
                     }
@@ -520,7 +557,7 @@ function App() {
                   <Route
                     path="/call-tracker"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="call-tracker">
                         <CallTracker />
                       </ProtectedRoute>
                     }
@@ -528,7 +565,7 @@ function App() {
                   <Route
                     path="/call-tracker/new"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="call-tracker">
                         <CallTrackerForm />
                       </ProtectedRoute>
                     }
@@ -536,7 +573,7 @@ function App() {
                   <Route
                     path="/call-tracker/form"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="call-tracker">
                         <CallTrackerForm />
                       </ProtectedRoute>
                     }
@@ -544,7 +581,7 @@ function App() {
                   <Route
                     path="/call-tracker-form"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="call-tracker">
                         <CallTrackerForm />
                       </ProtectedRoute>
                     }
@@ -552,7 +589,7 @@ function App() {
                   <Route
                     path="/enquiry-tracker"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="enquiry-tracker">
                         <EnquiryTracker />
                       </ProtectedRoute>
                     }
@@ -560,7 +597,7 @@ function App() {
                   <Route
                     path="/enquiry-tracker/form"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="enquiry-tracker">
                         <EnquiryTrackerForm />
                       </ProtectedRoute>
                     }
@@ -568,7 +605,7 @@ function App() {
                   <Route
                     path="/enquiry-tracker/new"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="enquiry-tracker">
                         <EnquiryTrackerForm />
                       </ProtectedRoute>
                     }
@@ -576,7 +613,7 @@ function App() {
                   <Route
                     path="/quotation"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="quotation">
                         <Quotation key="quotation" />
                       </ProtectedRoute>
                     }
@@ -584,7 +621,7 @@ function App() {
                   <Route
                     path="/series-quotation"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="series-quotation">
                         <SeriesQuotation key="series-quotation" />
                       </ProtectedRoute>
                     }
@@ -593,7 +630,7 @@ function App() {
                   <Route
                     path="/duplicate-logs"
                     element={
-                      <ProtectedRoute adminOnly>
+                      <ProtectedRoute pageKey="duplicate-logs">
                         <DuplicateEnquiryLogs key="duplicate-logs" />
                       </ProtectedRoute>
                     }
@@ -601,7 +638,7 @@ function App() {
                   <Route
                     path="/fos-weekly-plan"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="weekly-plan">
                         <FosWeeklyPlan key="fos-weekly-plan" />
                       </ProtectedRoute>
                     }
@@ -609,7 +646,7 @@ function App() {
                   <Route
                     path="/fos-enquiries"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="fos-enquiries">
                         <FosEnquiries key="fos-enquiries" />
                       </ProtectedRoute>
                     }
@@ -617,7 +654,7 @@ function App() {
                   <Route
                     path="/field-sales-logs"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="field-sales-logs">
                         <FieldSalesLogs key="field-sales-logs" />
                       </ProtectedRoute>
                     }
@@ -625,7 +662,7 @@ function App() {
                   <Route
                     path="/report"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="report">
                         <Report />
                       </ProtectedRoute>
                     }
@@ -633,7 +670,7 @@ function App() {
                   <Route
                     path="/report/lost-details"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="report">
                         <LostDetailsPage />
                       </ProtectedRoute>
                     }
@@ -641,7 +678,7 @@ function App() {
                   <Route
                     path="/master"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="master">
                         <Master />
                       </ProtectedRoute>
                     }
@@ -649,7 +686,7 @@ function App() {
                   <Route
                     path="/master/:substage"
                     element={
-                      <ProtectedRoute>
+                      <ProtectedRoute pageKey="master">
                         <Master />
                       </ProtectedRoute>
                     }
@@ -657,7 +694,7 @@ function App() {
                   <Route
                     path="/master/items/:id"
                     element={
-                      <ProtectedRoute adminOnly={true}>
+                      <ProtectedRoute pageKey="master:items">
                         <ItemDetails />
                       </ProtectedRoute>
                     }

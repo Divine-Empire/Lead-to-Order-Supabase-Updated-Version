@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { SlidersHorizontal, X, Download, ChevronDown, Loader2 } from 'lucide-react';
+import { SlidersHorizontal, X, Download, ChevronDown, Loader2, UserPlus } from 'lucide-react';
 import FilterTabs from "../FilterTabs";
 import SearchableDropdown from "../SearchableDropdown";
 import ColumnSelector from "../ColumnSelector";
@@ -26,6 +26,7 @@ const EnquiryTrackerFilter = ({
   visibleColumns, handleSelectAll, handleColumnToggle, columnOptions,
   visiblePendingColumns = {}, handleSelectAllPending = () => {}, handleColumnTogglePending = () => {}, pendingColumnOptions = [],
   setShowNewCallTrackerForm,
+  onAssignNew = null, // admin: open the blank "Assign to Field Person" form
   pendingCallTrackers = [],
   historyCallTrackers = [],
   currentStageOptions = null,
@@ -116,7 +117,19 @@ const EnquiryTrackerFilter = ({
           value={searchTerm}
           onChange={setSearchTerm}
           placeholder="Search enquiry trackers"
+          className="max-w-[420px]"
         />
+
+        {activeTab === "pending" && onAssignNew && (
+          <button
+            type="button"
+            onClick={onAssignNew}
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+          >
+            <UserPlus size={16} aria-hidden="true" />
+            Assign to Field Person
+          </button>
+        )}
 
         <button
           type="button"

@@ -5,7 +5,8 @@ import DataTable from "../../components/DataTable";
 import AssignFieldPersonModal from "../../components/AssignFieldPersonModal";
 import useConfirmDialog from "../../components/useConfirmDialog";
 import { AuthContext } from "../../App";
-import { listAssigned, deleteAssignment, namesForUser } from "../../utils/fosAssigned";
+import { listAssigned, deleteAssignment, namesForUser, formatDateRange } from "../../utils/fosAssigned";
+import { notifyFieldAssignment } from "../../utils/fieldAssignmentWhatsapp";
 
 // Field Sales Logs > Assigned Enquiries: enquiries / leads the admin assigned for
 // a visit. Admin sees all (and can edit / delete); a field person sees their own.
@@ -28,9 +29,19 @@ const formatCreated = (v) => {
 const money = (v) => (v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN"));
 
 const HEADERS = [
-  "Status", "Meeting Date & Time", "Enquiry / Lead No", "Company Name", "Person Name", "Contact Number",
+  "Status", "Meeting Dates", "Enquiry / Lead No", "Company Name", "Person Name", "Contact Number",
   "Address", "NOB", "Project Value", "Client Type", "Assigned To", "Assigned By", "Assigned On",
 ];
+// WhatsApp audit kept on the assignment row (Database/39_assignment_whatsapp_status.sql).
+const WA_BADGE = {
+  sent: "bg-green-100 text-green-700",
+  partial: "bg-amber-100 text-amber-800",
+  failed: "bg-red-100 text-red-700",
+};
+const waTitle = (r) => {
+  const parts = (r.wa_results || []).map((x) => `${x.person}: ${x.status}${x.error ? ` (${x.error})` : ""}`);
+  return [r.wa_sent_at ? `Last sent ${formatMeeting(String(r.wa_sent_at).replace("Z", "").slice(0, 16))}` : "", ...parts].filter(Boolean).join(" | ");
+};
 const LEFT = new Set(["Company Name", "Person Name", "Address", "Assigned To"]);
 
 export default function AssignedEnquiries({ refreshKey = 0, leading = null, trailing = null }) {
@@ -91,7 +102,18 @@ export default function AssignedEnquiries({ refreshKey = 0, leading = null, trai
       }
     );
 
-  const headers = [...(admin ? ["Actions"] : []), ...HEADERS].map((label) => ({ label, className: LEFT.has(label) ? "!text-left" : "" }));
+  const [resending, setResending] = useState(null);
+  const resend = async (row) => {
+    setResending(row.id);
+    const res = await notifyFieldAssignment(row.id, "resend");
+    setResending(null);
+    if (res.success && res.skipped) showNotification?.("Everyone has already been messaged.", "info");
+    else if (res.success && !res.failed?.length) showNotification?.("WhatsApp sent", "success");
+    else showNotification?.(`WhatsApp failed: ${res.error || res.failed?.[0]?.error || "unknown error"}`, "warning");
+    load();
+  };
+
+  const headers = [...(admin ? ["Actions"] : []), ...HEADERS, ...(admin ? ["WhatsApp"] : [])].map((label) => ({ label, className: LEFT.has(label) ? "!text-left" : "" }));
 
   const renderRow = (r) => (
     <tr key={r.id}>
@@ -108,7 +130,7 @@ export default function AssignedEnquiries({ refreshKey = 0, leading = null, trai
           {r.status || "Open"}
         </span>
       </td>
-      <td className="px-4 py-3 whitespace-nowrap text-sm text-center font-medium">{dash(formatMeeting(r.meeting_at))}</td>
+      <td className="px-4 py-3 whitespace-nowrap text-sm text-center font-medium">{dash(formatDateRange(r.meeting_at, r.meeting_to))}</td>
       <td className="px-4 py-3 whitespace-nowrap text-sm text-center">
         <span className="inline-flex items-center rounded border border-primary/20 bg-primary/5 px-2.5 py-0.5 font-mono text-xs font-semibold text-primary">{dash(r.display_no)}</span>
       </td>
@@ -122,6 +144,29 @@ export default function AssignedEnquiries({ refreshKey = 0, leading = null, trai
       <td className="px-4 py-3 text-sm text-left whitespace-normal break-words">{dash((r.assigned_to || []).join(", "))}</td>
       <td className="px-4 py-3 text-sm text-center whitespace-normal break-words">{dash(r.assigned_by)}</td>
       <td className="px-4 py-3 whitespace-nowrap text-sm text-center">{dash(formatCreated(r.created_at))}</td>
+      {admin && (
+        <td className="px-4 py-3 whitespace-nowrap text-sm text-center">
+          <div className="flex items-center justify-center gap-2">
+            {r.wa_status ? (
+              <span title={waTitle(r)} className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${WA_BADGE[r.wa_status] || ""}`}>
+                {r.wa_status === "sent" ? "Sent" : r.wa_status === "partial" ? "Partial" : "Failed"}
+              </span>
+            ) : (
+              <span className="text-gray-400 italic">-</span>
+            )}
+            {r.wa_status !== "sent" && (
+              <button
+                type="button"
+                onClick={() => resend(r)}
+                disabled={resending === r.id}
+                className="inline-flex h-7 items-center rounded-md border border-input bg-card px-2 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                {resending === r.id ? "Sending..." : r.wa_status ? "Resend" : "Send"}
+              </button>
+            )}
+          </div>
+        </td>
+      )}
     </tr>
   );
 
@@ -134,7 +179,7 @@ export default function AssignedEnquiries({ refreshKey = 0, leading = null, trai
           <span className="rounded border border-primary/20 bg-primary/5 px-2 py-0.5 font-mono text-xs font-semibold text-primary">{r.display_no}</span>
         </div>
       </div>
-      <p className="mt-1 text-sm font-medium text-primary">{formatMeeting(r.meeting_at)}</p>
+      <p className="mt-1 text-sm font-medium text-primary">{formatDateRange(r.meeting_at, r.meeting_to)}</p>
       <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
         {[["Person", r.person_name], ["Contact", r.contact_number], ["NOB", r.nob], ["Project Value", money(r.project_value)], ["Client Type", r.client_type], ["Assigned To", (r.assigned_to || []).join(", ")]].map(([k, v]) => (
           <div key={k} className="min-w-0"><dt className="text-xs text-muted-foreground">{k}</dt><dd className="break-words">{dash(v)}</dd></div>
@@ -191,7 +236,7 @@ export default function AssignedEnquiries({ refreshKey = 0, leading = null, trai
         <AssignFieldPersonModal
           isOpen
           onClose={() => setEditing(null)}
-          record={{ sourceType: editing.source_type, dbId: editing.record_id, leadNo: editing.display_no }}
+          record={{ sourceType: editing.source_type, dbId: editing.record_id, leadNo: editing.display_no, assignmentId: editing.id }}
           assignedBy={currentUser?.fullName || currentUser?.username}
           showNotification={showNotification}
           onSaved={load}

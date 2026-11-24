@@ -8,6 +8,7 @@ import LoadingSpinner from "../../components/LoadingSpinner"
 import MasterDialog from "../../components/MasterDialog"
 import useConfirmDialog from "../../components/useConfirmDialog"
 import ModalView from "../../components/ModalView"
+import { PAGES, PAGE_GROUPS, DEFAULT_USER_PAGES, NEW_USER_PAGES } from "../../constants/pageAccess"
 import { FilterSearch } from "../../components/FilterBar"
 
 function Setting() {
@@ -32,7 +33,8 @@ function Setting() {
     userType: 'user',
     fullName: '',
     restrictedLeadSources: [],
-    fosAlternateAccess: []
+    fosAlternateAccess: [],
+    pageAccess: NEW_USER_PAGES
   })
   // Names seen as receiver / assigned person on enquiries and leads (FOS Enquiries picker)
   const [fosNameOptions, setFosNameOptions] = useState([])
@@ -41,6 +43,7 @@ function Setting() {
   const [leadSourceOptions, setLeadSourceOptions] = useState([])
   const [visiblePasswords, setVisiblePasswords] = useState(new Set())
   const [userSearch, setUserSearch] = useState('')
+  const [pagesUser, setPagesUser] = useState(null) // user whose page list is open in the dialog
   const [accessUser, setAccessUser] = useState(null) // user whose Data Access is open in the view dialog
   const [showFormPassword, setShowFormPassword] = useState(false)
 
@@ -115,7 +118,9 @@ function Setting() {
         userType: u.usertype || u.userType || 'user',
         fullName: u.full_name || u.fullName || '',
         restrictedLeadSources: u.restricted_lead_sources || [],
-        fosAlternateAccess: u.fos_alternate_access || []
+        fosAlternateAccess: u.fos_alternate_access || [],
+        // No saved list (account older than page access) = the default non-admin pages.
+        pageAccess: Array.isArray(u.page_access) ? u.page_access : DEFAULT_USER_PAGES
       }))
       setUsers(normalizedUsers)
     } catch (error) {
@@ -164,7 +169,7 @@ function Setting() {
 
   const openAddModal = () => {
     setModalMode('add')
-    setFormData({ username: '', password: '', userType: 'user', fullName: '', restrictedLeadSources: [], fosAlternateAccess: [] })
+    setFormData({ username: '', password: '', userType: 'user', fullName: '', restrictedLeadSources: [], fosAlternateAccess: [], pageAccess: NEW_USER_PAGES })
     setFosNameQuery('')
     setShowFormPassword(false)
     setIsModalOpen(true)
@@ -180,10 +185,27 @@ function Setting() {
       userType: user.userType || user.usertype || 'user',
       fullName: user.fullName || user.full_name || '',
       restrictedLeadSources: user.restrictedLeadSources || user.restricted_lead_sources || [],
-      fosAlternateAccess: user.fosAlternateAccess || user.fos_alternate_access || []
+      fosAlternateAccess: user.fosAlternateAccess || user.fos_alternate_access || [],
+      pageAccess: user.pageAccess || DEFAULT_USER_PAGES
     })
     setFosNameQuery('')
     setIsModalOpen(true)
+  }
+
+  const handlePageToggle = (key) => {
+    setFormData(prev => {
+      const current = prev.pageAccess || []
+      return { ...prev, pageAccess: current.includes(key) ? current.filter(k => k !== key) : [...current, key] }
+    })
+  }
+
+  // Tick / clear every page of one group (or all pages when group is null).
+  const setPagesFor = (group, on) => {
+    const keys = PAGES.filter(p => !group || p.group === group).map(p => p.key)
+    setFormData(prev => {
+      const rest = (prev.pageAccess || []).filter(k => !keys.includes(k))
+      return { ...prev, pageAccess: on ? [...rest, ...keys] : rest }
+    })
   }
 
   const handleFosNameToggle = (name) => {
@@ -232,6 +254,11 @@ function Setting() {
       return
     }
 
+    if (formData.userType !== 'admin' && (formData.pageAccess || []).length === 0) {
+      showNotification("Select at least one page this user can open", "error")
+      return
+    }
+
     setIsUpdating(true)
     try {
       if (modalMode === 'add') {
@@ -243,7 +270,9 @@ function Setting() {
             usertype: formData.userType,
             full_name: formData.fullName,
             restricted_lead_sources: formData.restrictedLeadSources,
-            fos_alternate_access: formData.userType === 'admin' ? [] : formData.fosAlternateAccess
+            fos_alternate_access: formData.userType === 'admin' ? [] : formData.fosAlternateAccess,
+            // Admin sees every page, so no list is stored for them.
+            page_access: formData.userType === 'admin' ? null : formData.pageAccess
           }])
         if (error) throw error
         showNotification("User added successfully", "success")
@@ -253,7 +282,8 @@ function Setting() {
           usertype: formData.userType,
           full_name: formData.fullName,
           restricted_lead_sources: formData.restrictedLeadSources,
-          fos_alternate_access: formData.userType === 'admin' ? [] : formData.fosAlternateAccess
+          fos_alternate_access: formData.userType === 'admin' ? [] : formData.fosAlternateAccess,
+          page_access: formData.userType === 'admin' ? null : formData.pageAccess
         }
         if (formData.password) {
           updatePayload.password = formData.password
@@ -353,6 +383,7 @@ function Setting() {
                 <th scope="col" className="border-b bg-secondary px-4 py-2.5">Username</th>
                 <th scope="col" className="border-b bg-secondary px-4 py-2.5">Password</th>
                 <th scope="col" className="border-b bg-secondary px-4 py-2.5">Role</th>
+                <th scope="col" className="border-b bg-secondary px-4 py-2.5">Page Access</th>
                 <th scope="col" className="border-b bg-secondary px-4 py-2.5">Data Access</th>
               </tr>
             </thead>
@@ -421,6 +452,23 @@ function Setting() {
                         </span>
                       )}
                     </td>
+                    <td className="whitespace-nowrap border-b px-4 py-3">
+                      {user.userType === 'admin' ? (
+                        <span className="inline-flex items-center rounded-full border border-success/30 bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
+                          All pages
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPagesUser(user)}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+                          aria-label={`View page access for ${user.username}`}
+                        >
+                          <Eye size={14} aria-hidden="true" />
+                          {user.pageAccess.length} {user.pageAccess.length === 1 ? 'page' : 'pages'}
+                        </button>
+                      )}
+                    </td>
                     <td className="border-b px-4 py-3">
                       {user.userType === 'admin' ? (
                         <span className="inline-flex items-center rounded-full border border-success/30 bg-success/10 px-2.5 py-1 text-xs font-medium text-success">
@@ -445,7 +493,7 @@ function Setting() {
               })}
               {visibleUsers.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="px-6 py-8 text-center text-muted-foreground">
+                  <td colSpan="7" className="px-6 py-8 text-center text-muted-foreground">
                     {users.length === 0 ? 'No users found.' : 'No users match your search.'}
                   </td>
                 </tr>
@@ -454,6 +502,35 @@ function Setting() {
           </table>
         )}
       </div>
+
+      <ModalView
+        isOpen={Boolean(pagesUser)}
+        onClose={() => setPagesUser(null)}
+        title={pagesUser ? `Page Access - ${pagesUser.fullName || pagesUser.username}` : ''}
+        maxWidth="max-w-xl"
+      >
+        {pagesUser && (
+          <div className="space-y-4 text-sm">
+            {PAGE_GROUPS.map((group) => {
+              const allowed = PAGES.filter(p => p.group === group && pagesUser.pageAccess.includes(p.key))
+              return (
+                <div key={group}>
+                  <p className="mb-1.5 font-medium text-foreground">{group}</p>
+                  {allowed.length === 0 ? (
+                    <p className="text-muted-foreground">No pages</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {allowed.map((p) => (
+                        <span key={p.key} className="inline-flex items-center rounded-full border bg-secondary px-2 py-0.5 text-xs font-medium text-foreground">{p.label}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </ModalView>
 
       <ModalView
         isOpen={Boolean(accessUser)}
@@ -575,6 +652,59 @@ function Setting() {
                   <option value="admin">Admin</option>
                 </select>
               </div>
+            </div>
+
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <p className="text-sm font-medium text-foreground">Page Access</p>
+                {formData.userType !== 'admin' && (
+                  <span className="flex items-center gap-3 text-xs">
+                    <button type="button" onClick={() => setPagesFor(null, true)} className="font-medium text-primary hover:underline">Select all</button>
+                    <button type="button" onClick={() => setPagesFor(null, false)} className="font-medium text-destructive hover:underline">Clear</button>
+                  </span>
+                )}
+              </div>
+              {formData.userType === 'admin' ? (
+                <p className="rounded-lg border bg-secondary/50 p-3 text-xs text-muted-foreground">Admins can open every page, including Settings.</p>
+              ) : (
+                <>
+                  <div className="max-h-56 space-y-3 overflow-y-auto rounded-lg border bg-secondary/50 p-3">
+                    {PAGE_GROUPS.map((group) => (
+                      <div key={group}>
+                        <div className="mb-1 flex items-center justify-between">
+                          <p className="text-xs font-semibold text-brand-800">{group}</p>
+                          <span className="flex items-center gap-2 text-xs">
+                            <button type="button" onClick={() => setPagesFor(group, true)} className="text-primary hover:underline">All</button>
+                            <button type="button" onClick={() => setPagesFor(group, false)} className="text-muted-foreground hover:underline">None</button>
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {PAGES.filter(p => p.group === group).map((p) => {
+                            const checked = (formData.pageAccess || []).includes(p.key)
+                            return (
+                              <button
+                                key={p.key}
+                                type="button"
+                                role="checkbox"
+                                aria-checked={checked}
+                                onClick={() => handlePageToggle(p.key)}
+                                className={`flex w-full items-center gap-2 rounded-md border p-2 text-left text-xs font-medium transition-colors ${
+                                  checked
+                                    ? "border-primary/40 bg-card font-semibold text-foreground"
+                                    : "border-transparent bg-transparent text-muted-foreground hover:bg-card"
+                                }`}
+                              >
+                                {checked ? <CheckSquare className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" /> : <Square className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                                <span className="truncate">{p.label}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
 
             {formData.userType !== 'admin' && (

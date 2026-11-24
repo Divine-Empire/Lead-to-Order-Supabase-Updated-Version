@@ -1,8 +1,7 @@
 import { useState, useEffect, useMemo, useId } from "react";
 import { ChevronLeft, ChevronRight, X, MapPin, Loader2 } from "lucide-react";
 import useDialogBehavior from "../../components/useDialogBehavior";
-import { listAssigned } from "../../utils/fosAssigned";
-import { formatMeeting } from "./AssignedEnquiries";
+import { listAssigned, toInputDate, formatDateRange } from "../../utils/fosAssigned";
 
 // Field visit calendar: assigned meetings by date, with company and address.
 // Admin sees every person (filterable); a field person sees only their own.
@@ -28,11 +27,14 @@ const colorOf = (name) => {
   return COLORS[Math.abs(h) % COLORS.length];
 };
 
-const timeOf = (v) => {
-  const m = String(v || "").match(/[T ](\d{2}):(\d{2})/);
-  if (!m) return "";
-  const h = Number(m[1]);
-  return `${pad(h % 12 || 12)}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
+// Every date from..to (YYYY-MM-DD), capped so a mistyped far-away end date cannot blow up the grid.
+const datesBetween = (from, to) => {
+  const out = [];
+  const end = new Date(`${to}T00:00:00`);
+  for (let d = new Date(`${from}T00:00:00`), n = 0; d <= end && n < 62; d.setDate(d.getDate() + 1), n += 1) {
+    out.push(ymd(d.getFullYear(), d.getMonth(), d.getDate()));
+  }
+  return out;
 };
 
 export default function FieldVisitCalendarModal({ isOpen, onClose, names, admin }) {
@@ -75,9 +77,11 @@ export default function FieldVisitCalendarModal({ isOpen, onClose, names, admin 
     items
       .filter((i) => !person || (i.assigned_to || []).includes(person))
       .forEach((i) => {
-        const k = String(i.meeting_at).slice(0, 10);
-        if (!map.has(k)) map.set(k, []);
-        map.get(k).push(i);
+        // A multi-day visit shows on every day of its range.
+        datesBetween(toInputDate(i.meeting_at), toInputDate(i.meeting_to || i.meeting_at)).forEach((k) => {
+          if (!map.has(k)) map.set(k, []);
+          map.get(k).push(i);
+        });
       });
     map.forEach((list) => list.sort((a, b) => String(a.meeting_at).localeCompare(String(b.meeting_at))));
     return map;
@@ -132,7 +136,7 @@ export default function FieldVisitCalendarModal({ isOpen, onClose, names, admin 
                     <span className={`ml-auto flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-xs ${c.key === todayKey ? "bg-primary font-semibold text-primary-foreground" : "text-foreground"}`}>{c.day}</span>
                     {list.slice(0, 2).map((i) => (
                       <span key={i.id} className={`truncate rounded border px-1 py-0.5 text-[11px] leading-tight ${colorOf((i.assigned_to || [])[0])}`}>
-                        {timeOf(i.meeting_at)} {i.company_name}
+                        {i.company_name}
                       </span>
                     ))}
                     {list.length > 2 && <span className="px-1 text-[11px] font-medium text-muted-foreground">+{list.length - 2} more</span>}
@@ -152,11 +156,11 @@ export default function FieldVisitCalendarModal({ isOpen, onClose, names, admin 
               <ul className="space-y-2">
                 {dayItems.map((i) => (
                   <li key={i.id} className={`rounded-md border p-2.5 text-sm ${colorOf((i.assigned_to || [])[0])}`}>
-                    <p className="font-semibold">{timeOf(i.meeting_at)} - {i.company_name}</p>
+                    <p className="font-semibold">{i.company_name}</p>
+                    <p className="text-xs opacity-80">{formatDateRange(i.meeting_at, i.meeting_to)}</p>
                     <p className="text-xs opacity-80">{i.display_no}{i.client_type ? ` | ${i.client_type}` : ""}{i.person_name ? ` | ${i.person_name}` : ""}</p>
                     {i.address && <p className="mt-1 flex items-start gap-1 text-xs"><MapPin size={12} className="mt-0.5 shrink-0" aria-hidden="true" /><span className="break-words">{i.address}</span></p>}
                     <p className="mt-1 text-xs"><span className="opacity-70">Assigned to:</span> {(i.assigned_to || []).join(", ")}</p>
-                    <span className="sr-only">{formatMeeting(i.meeting_at)}</span>
                   </li>
                 ))}
               </ul>

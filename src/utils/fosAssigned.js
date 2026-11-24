@@ -8,6 +8,16 @@ export const CLIENT_TYPES = ["NBD", "Existing"];
 
 // "YYYY-MM-DDTHH:mm" (datetime-local) <-> the timestamp the table keeps (no timezone shift).
 export const toInputDateTime = (v) => (v ? String(v).replace(" ", "T").slice(0, 16) : "");
+// "YYYY-MM-DD" part of a date / timestamp value (for <input type="date">).
+export const toInputDate = (v) => (v ? String(v).slice(0, 10) : "");
+// "26/11/2026" or, for a multi-day visit, "26/11/2026 to 28/11/2026". `to` empty = single day.
+export const formatDateRange = (from, to) => {
+  const f = toInputDate(from);
+  if (!f) return "";
+  const t = toInputDate(to);
+  const dmy = (d) => d.split("-").reverse().join("/");
+  return t && t !== f ? `${dmy(f)} to ${dmy(t)}` : dmy(f);
+};
 
 const dropdown = async (category) => {
   const { data, error } = await supabase.from("lto_dropdown").select("value").eq("category", category).order("value", { ascending: true });
@@ -16,11 +26,12 @@ const dropdown = async (category) => {
 };
 export const fetchNobOptions = () => dropdown("nob");
 
-// Field person names: Consignor Details "reference_name".
+// Field person names: Master Data > Consignor Details > References. That tab keeps its rows in
+// lto_dropdown (category "reference", value "Name — Number"), so the name is the part before the dash.
 export async function fetchFieldPersonNames() {
-  const { data, error } = await supabase.from("lto_consignor_details").select("reference_name").not("reference_name", "is", null);
+  const { data, error } = await supabase.from("lto_dropdown").select("value").eq("category", "reference");
   if (error) throw error;
-  const names = (data || []).map((r) => String(r.reference_name || "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  const names = (data || []).map((r) => String(r.value || "").split("—")[0].replace(/\s+/g, " ").trim()).filter(Boolean);
   return [...new Set(names)].sort((a, b) => a.localeCompare(b));
 }
 
@@ -28,6 +39,19 @@ export async function fetchAssignment(sourceType, recordId) {
   const { data, error } = await supabase.from(TABLE).select("*").eq("source_type", sourceType).eq("record_id", recordId).maybeSingle();
   if (error) throw error;
   return data;
+}
+
+export async function fetchAssignmentById(id) {
+  const { data, error } = await supabase.from(TABLE).select("*").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Update one existing assignment (used by the form when editing, incl. manual ones with no record).
+export async function updateAssignment(id, payload) {
+  const { error } = await supabase.from(TABLE).update({ ...payload, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+  return { id };
 }
 
 // One row per enquiry / lead: assigning again updates it (status resets to Open unless explicitly set).

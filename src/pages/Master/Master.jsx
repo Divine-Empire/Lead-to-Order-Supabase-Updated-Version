@@ -1,6 +1,8 @@
 import React, { useEffect, useContext } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { AuthContext } from "../../App";
+import PermissionDenied from "../../components/PermissionDenied";
+import { PAGES } from "../../constants/pageAccess";
 
 // Sub-master Components
 import ClientMaster from "./ClientMaster";
@@ -17,32 +19,38 @@ export default function Master() {
   const { substage } = useParams();
   const navigate = useNavigate();
   const authContext = useContext(AuthContext) || {};
-  const { isAdmin = () => false } = authContext;
+  const { canAccess = () => false } = authContext;
 
   // Resolve current tab (default to 'client' or alias 'tat')
   const currentTab = !substage ? "client" : substage === "tat" ? "tat-config" : substage;
 
   useEffect(() => {
     // Proactively redirect to default substage if root /master is visited directly
-    if (!substage) {
+    if (!substage && canAccess("master:client")) {
       navigate("/master/client", { replace: true });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [substage, navigate]);
 
+  // Page access is per sub-master ("master:<tab>", see constants/pageAccess.js).
+  const firstAllowed = PAGES.find((p) => p.key.startsWith("master:") && canAccess(p.key));
+
   useEffect(() => {
-    // Non-admins (USER role) are restricted to Client Master -- bounce any direct/typed
-    // URL to another sub-stage back to the one they're allowed to see.
-    if (!isAdmin() && currentTab !== "client") {
-      navigate("/master/client", { replace: true });
+    // Typed URL for a sub-master the user has no access to: move to the first one they do have.
+    if (substage && !canAccess(`master:${currentTab}`) && firstAllowed) {
+      navigate(firstAllowed.href, { replace: true });
     }
-  }, [currentTab, isAdmin, navigate]);
+    // Bare /master: land on the first allowed sub-master instead of Client Master.
+    if (!substage && firstAllowed && firstAllowed.key !== "master:client") {
+      navigate(firstAllowed.href, { replace: true });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTab, substage]);
 
   const renderActiveComponent = () => {
-    // Belt-and-suspenders: even if a non-admin somehow reaches this point
-    // with a non-client tab (e.g. before the redirect effect above runs),
-    // never render an admin-only sub-master for them.
-    if (!isAdmin() && currentTab !== "client") {
-      return <ClientMaster />;
+    // Never render a sub-master the user has no access to.
+    if (!canAccess(`master:${currentTab}`)) {
+      return <PermissionDenied homeHref={firstAllowed?.href} homeLabel={firstAllowed?.label} />;
     }
 
     switch (currentTab) {

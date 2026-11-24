@@ -2951,6 +2951,7 @@ const handleSaveClick = async () => {
   return (
     <div className="flex flex-col flex-1 h-full min-h-0 w-full p-1 md:p-1.5">
       <EnquiryTrackerFilter
+        onAssignNew={isAdmin() ? () => setAssignRecord({ sourceType: "manual" }) : null}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         searchTerm={searchTerm}

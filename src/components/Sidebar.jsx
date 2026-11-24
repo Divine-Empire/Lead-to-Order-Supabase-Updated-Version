@@ -9,7 +9,7 @@ import { fetchClosedIdSet, countOpenRows } from "../utils/pendingStatus"
 function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
     const location = useLocation()
     const authContext = useContext(AuthContext) || {}
-    const { isAdmin = () => false, logout = () => {}, getUsernamesToFilter = () => [] } = authContext
+    const { isAdmin = () => false, canAccess = () => true, logout = () => {}, getUsernamesToFilter = () => [] } = authContext
     const [counts, setCounts] = useState({
         callTracker: null,
         enquiryTracker: null,
@@ -203,9 +203,8 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         { href: "/master/whatsapp-recipients", label: "WhatsApp Recipients", id: "whatsapp-recipients", adminOnly: true },
     ];
 
-    const visibleMasterSubStages = MASTER_SUB_STAGES.filter(
-        (sub) => !sub.adminOnly || (isAdmin && isAdmin())
-    );
+    // Master Data pages are granted one by one (page access "master:<id>").
+    const visibleMasterSubStages = MASTER_SUB_STAGES.filter((sub) => canAccess(`master:${sub.id}`));
 
     // Exact match or a sub-path -- plain startsWith would light up both
     // "/quotation" and a longer path that starts with it.
@@ -215,25 +214,27 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
 
     // Flat stage-wise navigation. Visibility rules: Report is for everyone,
     // Settings is admin-only, Master Data sub-stages are restricted to Client Master for User role.
-    const navItems = [
-        { href: "/", label: "Dashboard", icon: HomeIcon },
-        { href: "/leads", label: "Leads", icon: UsersIcon },
-        { href: "/call-tracker", label: "Call Tracker", icon: PhoneCallIcon },
-        { href: "/enquiry-tracker", label: "Enquiry Tracker", icon: BarChartIcon },
-        { href: "/quotation", label: "Quotation", icon: FileTextIcon },
+    // Each item carries its page access key (constants/pageAccess.js); only allowed ones are listed.
+    const allNavItems = [
+        { key: "dashboard", href: "/", label: "Dashboard", icon: HomeIcon },
+        { key: "leads", href: "/leads", label: "Leads", icon: UsersIcon },
+        { key: "call-tracker", href: "/call-tracker", label: "Call Tracker", icon: PhoneCallIcon },
+        { key: "enquiry-tracker", href: "/enquiry-tracker", label: "Enquiry Tracker", icon: BarChartIcon },
+        { key: "quotation", href: "/quotation", label: "Quotation", icon: FileTextIcon },
         // Landscape two-series (Lite Plus / Ultra Tough) quotation.
-        { href: "/series-quotation", label: "Series Quotation", icon: FileTextIcon },
+        { key: "series-quotation", href: "/series-quotation", label: "Series Quotation", icon: FileTextIcon },
         // Open leads / enquiries the user is Enquiry Receiver or Assigned Person on.
-        { href: "/fos-enquiries", label: "FOS Enquiries", icon: Users },
+        { key: "fos-enquiries", href: "/fos-enquiries", label: "FOS Enquiries", icon: Users },
         // Field Sales Person's Mon-Sat visit plan, current week vs previous week.
-        { href: "/fos-weekly-plan", label: "Weekly Plan", icon: CalendarDays },
+        { key: "weekly-plan", href: "/fos-weekly-plan", label: "Weekly Plan", icon: CalendarDays },
         // Read-only list of field sales visit submissions (field_sales_form).
-        { href: "/field-sales-logs", label: "Field Sales Logs", icon: MapPin },
-        // Admin-only: lead / enquiry creations over existing open ones.
-        ...(isAdmin && isAdmin() ? [{ href: "/duplicate-logs", label: "Duplicate Enquiry Logs", icon: ClipboardList }] : []),
-        { href: "/report", label: "Report", icon: ShieldIcon },
-        { isMaster: true, label: "Master Data", icon: DatabaseIcon },
+        { key: "field-sales-logs", href: "/field-sales-logs", label: "Field Sales Logs", icon: MapPin },
+        // Lead / enquiry creations over existing open ones.
+        { key: "duplicate-logs", href: "/duplicate-logs", label: "Duplicate Enquiry Logs", icon: ClipboardList },
+        { key: "report", href: "/report", label: "Report", icon: ShieldIcon },
+        { key: "master", isMaster: true, label: "Master Data", icon: DatabaseIcon },
     ];
+    const navItems = allNavItems.filter((item) => canAccess(item.key));
     if (isAdmin && isAdmin()) {
         navItems.push({ href: "/setting", label: "Settings", icon: SettingsIcon });
     }
