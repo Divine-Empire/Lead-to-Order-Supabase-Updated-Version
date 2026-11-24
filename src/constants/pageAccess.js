@@ -24,7 +24,6 @@ export const PAGES = [
   { key: "master:items", label: "Items", group: "Master Data", href: "/master/items" },
   { key: "master:tat-config", label: "TAT Configuration", group: "Master Data", href: "/master/tat-config" },
   { key: "master:report-persons", label: "Report Persons", group: "Master Data", href: "/master/report-persons" },
-  { key: "master:whatsapp-recipients", label: "WhatsApp Recipients", group: "Master Data", href: "/master/whatsapp-recipients" },
 ];
 
 export const PAGE_GROUPS = ["Main", "Master Data"];

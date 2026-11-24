@@ -1,8 +1,8 @@
 // Edge Function: send-quotation-reference-changed
 //
-// WhatsApps the active rows of lto_whatsapp_recipients (Master Data >
-// WhatsApp Recipients) with the "lto_quotation_reference_changed" template
-// when a quotation REVISION is saved with a Reference Name different from the
+// Notifies the users who have the "quotation_reference_changed" event (Settings >
+// user > "Send this user messages for"; rules in lto_notification_rules, sent by
+// _shared/notify.ts) when a quotation REVISION is saved with a Reference Name different from the
 // previous revision of the same root quotation.
 //
 // Template body:
@@ -26,8 +26,7 @@
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase itself.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const TEMPLATE_NAME = Deno.env.get("WHATSAPP_REFERENCE_CHANGED_TEMPLATE") ?? "lto_quotation_reference_changed";
+import { dispatch } from "../_shared/notify.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,13 +35,6 @@ const corsHeaders = {
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-// Meta rejects template parameters containing newlines/tabs or 4+ spaces in a
-// row, and empty parameters.
-const param = (value: unknown) => {
-  const text = String(value ?? "").replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
-  return { type: "text", text: text || "-" };
-};
 
 const revisionOf = (quotationNo: string) => {
   const parts = quotationNo.split("-");
@@ -62,10 +54,6 @@ Deno.serve(async (req) => {
     if (typeof quotationNo !== "string" || !quotationNo.trim()) {
       return json({ success: false, error: "quotationNo is required" }, 400);
     }
-
-    const token = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
-    const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
-    if (!token || !phoneNumberId) return json({ success: false, error: "WhatsApp credentials are not configured" }, 500);
 
     const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
@@ -111,16 +99,6 @@ Deno.serve(async (req) => {
     if (cErr) throw cErr;
     if (!claimed?.length) return json({ success: true, sent: 0, skipped: "already_notified" });
 
-    const { data: recipients, error: rErr } = await db
-      .from("lto_whatsapp_recipients")
-      .select("name, phone")
-      .eq("is_active", true);
-    if (rErr) throw rErr;
-    if (!recipients?.length) {
-      await db.from("lto_make_quotations").update({ wa_notified_at: null }).eq("id", quotation.id);
-      return json({ success: true, sent: 0, skipped: "no_active_recipients" });
-    }
-
     let company = "";
     if (quotation.consignee_client_id) {
       const { data: client } = await db
@@ -136,55 +114,25 @@ Deno.serve(async (req) => {
     const effectiveNewRef = (typeof newReferenceName === "string" && newReferenceName.trim()) ? newReferenceName.trim() : newRef;
     const effectivePdf = (typeof pdfUrl === "string" && pdfUrl.trim()) ? pdfUrl.trim() : (quotation.pdf_url || "PDF not available");
 
-    const url = `https://graph.facebook.com/${Deno.env.get("WHATSAPP_API_VERSION") ?? "v21.0"}/${phoneNumberId}/messages`;
-    const language = Deno.env.get("WHATSAPP_TEMPLATE_LANGUAGE") ?? "en";
+    // Who gets it, on which channel and under which conditions comes from
+    // lto_notification_rules (Settings > user > "Send this user messages for").
+    const result = await dispatch(db, "quotation_reference_changed", {
+      quotation_no: quotation.quotation_no,
+      company_name: effectiveCompany,
+      old_reference: effectiveOldRef,
+      new_reference: effectiveNewRef,
+      pdf_url: effectivePdf,
+    }, { dedupeKey: quotation.quotation_no });
 
-    const results = await Promise.all(
-      recipients.map(async (r) => {
-        try {
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              messaging_product: "whatsapp",
-              to: `91${r.phone}`,
-              type: "template",
-              template: {
-                name: TEMPLATE_NAME,
-                language: { code: language },
-                components: [
-                  {
-                    type: "body",
-                    parameters: [
-                      param(r.name),
-                      param(effectiveCompany),
-                      param(effectiveOldRef),
-                      param(effectiveNewRef),
-                      param(effectivePdf),
-                    ],
-                  },
-                ],
-              },
-            }),
-          });
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) return { name: r.name, success: false, error: body?.error?.message ?? `HTTP ${res.status}` };
-          return { name: r.name, success: true };
-        } catch (e) {
-          return { name: r.name, success: false, error: (e as Error).message };
-        }
-      }),
-    );
-
-    const sent = results.filter((r) => r.success).length;
     // Nobody got it: release the claim so a later save/retry can try again.
-    if (sent === 0) await db.from("lto_make_quotations").update({ wa_notified_at: null }).eq("id", quotation.id);
+    if (!result.sent) await db.from("lto_make_quotations").update({ wa_notified_at: null }).eq("id", quotation.id);
 
     return json({
-      success: sent > 0,
-      sent,
-      failed: results.filter((r) => !r.success),
-      error: sent === 0 ? results[0]?.error ?? "No message could be sent" : undefined,
+      success: !!result.sent,
+      sent: result.sent ?? 0,
+      failed: result.failed ?? [],
+      skipped: result.skipped,
+      error: result.sent ? undefined : (result.failed?.[0]?.error ?? result.error ?? "No message could be sent"),
     });
   } catch (e) {
     return json({ success: false, error: (e as Error).message }, 500);

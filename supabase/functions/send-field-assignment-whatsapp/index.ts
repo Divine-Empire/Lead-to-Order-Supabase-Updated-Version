@@ -29,10 +29,11 @@
 //   persons         optional: restrict to these names
 //   testPhone       optional 10-digit number: send the first person's message there instead and do
 //                   NOT touch the assignment row (for testing the approved template)
-// Phone numbers come from Master Data > Consignor Details > References (lto_dropdown, category
-// "reference", value "Name — Number"), falling back to lto_consignor_details; matched on the
-// upper-cased, space-collapsed name. Messages go to 91 + a valid 10-digit number; anything else
-// is logged as failed ("Invalid phone number in References").
+// Recipients: an assigned person is messaged only if the "Enquiry Assigned to Field Person" event
+// (lto_notification_events.field_assignment) is ticked for their user in Settings. The user is
+// found by Full Name (upper-cased, space-collapsed) and the number is login.whatsapp_number.
+// Messages go to 91 + a valid 10-digit number; anything else (no such user, event not ticked,
+// missing / invalid number) is recorded as failed with the reason.
 //
 // Secrets (already set for the other WhatsApp functions): WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID
 // optional: WHATSAPP_FIELD_ASSIGNMENT_TEMPLATE (default below), WHATSAPP_TEMPLATE_LANGUAGE (default "en"),
@@ -106,18 +107,20 @@ Deno.serve(async (req) => {
     if (testPhone) targets = targets.slice(0, 1);
     if (!targets.length) return json({ success: true, sent: 0, skipped: "nobody_to_message" });
 
-    // Phones: References tab (lto_dropdown "Name — Number"), then legacy lto_consignor_details.
-    const [{ data: refs, error: rErr }, { data: legacy }] = await Promise.all([
-      db.from("lto_dropdown").select("value").eq("category", "reference"),
-      db.from("lto_consignor_details").select("reference_name, contact_num").not("reference_name", "is", null),
+    // Recipients: a person is messaged only if the "Enquiry Assigned to Field Person" event
+    // (field_assignment) is ticked for their user in Settings; the number is login.whatsapp_number.
+    const [{ data: users, error: uErr }, { data: rules, error: rErr }, { data: ev }] = await Promise.all([
+      db.from("login").select("id, full_name, whatsapp_number"),
+      db.from("lto_notification_rules").select("login_id").eq("event_key", "field_assignment").eq("target_type", "user").eq("is_active", true),
+      db.from("lto_notification_events").select("is_active").eq("event_key", "field_assignment").maybeSingle(),
     ]);
+    if (uErr) throw uErr;
     if (rErr) throw rErr;
-    const rawPhone = new Map<string, string>(); // name -> number as typed (may be invalid)
-    for (const p of legacy ?? []) rawPhone.set(norm(p.reference_name), String(p.contact_num ?? ""));
-    for (const r of refs ?? []) {
-      const [name, number] = String(r.value ?? "").split("—");
-      if (name?.trim()) rawPhone.set(norm(name), String(number ?? ""));
-    }
+    if (!testPhone && ev && ev.is_active === false) return json({ success: true, sent: 0, skipped: "event_inactive" });
+    const enabledIds = new Set((rules ?? []).map((r: { login_id: string }) => r.login_id));
+    const userByName = new Map<string, { id: string; whatsapp_number: string | null }>(
+      (users ?? []).map((u: { id: string; full_name: string; whatsapp_number: string | null }) => [norm(u.full_name), u]),
+    );
     // Accept exactly 10 digits (optionally with a leading 91 / 0); never guess from a longer or shorter number.
     const cleanPhone = (raw?: string) => {
       let d = String(raw ?? "").replace(/\D/g, "");
@@ -132,10 +135,17 @@ Deno.serve(async (req) => {
     const results: Result[] = await Promise.all(
       targets.map(async (person): Promise<Result> => {
         const at = new Date().toISOString();
-        const raw = rawPhone.get(norm(person));
+        const user = userByName.get(norm(person));
+        if (!testPhone) {
+          if (!user) return { person, phone: null, status: "failed", at, error: "No user with this name in Settings" };
+          if (!enabledIds.has(user.id)) {
+            return { person, phone: null, status: "failed", at, error: "Enquiry Assigned to Field Person is not ticked for this user in Settings" };
+          }
+        }
+        const raw = user?.whatsapp_number ?? "";
         const phone = testPhone ? cleanPhone(String(testPhone)) : cleanPhone(raw);
         if (!phone) {
-          return { person, phone: raw || null, status: "failed", at, error: raw ? "Invalid phone number in References" : "No phone number in References" };
+          return { person, phone: raw || null, status: "failed", at, error: raw ? "Invalid WhatsApp number in Settings" : "No WhatsApp number in Settings" };
         }
         try {
           const res = await fetch(url, {

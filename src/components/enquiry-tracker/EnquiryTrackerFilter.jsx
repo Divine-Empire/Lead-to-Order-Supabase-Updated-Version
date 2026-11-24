@@ -26,7 +26,7 @@ const EnquiryTrackerFilter = ({
   visibleColumns, handleSelectAll, handleColumnToggle, columnOptions,
   visiblePendingColumns = {}, handleSelectAllPending = () => {}, handleColumnTogglePending = () => {}, pendingColumnOptions = [],
   setShowNewCallTrackerForm,
-  onAssignNew = null, // admin: open the blank "Assign to Field Person" form
+  onAssignNew = null, // open the blank "Assign to Field Person" form
   pendingCallTrackers = [],
   historyCallTrackers = [],
   currentStageOptions = null,

@@ -11,6 +11,18 @@ import ModalView from "../../components/ModalView"
 import { PAGES, PAGE_GROUPS, DEFAULT_USER_PAGES, NEW_USER_PAGES } from "../../constants/pageAccess"
 import { FilterSearch } from "../../components/FilterBar"
 
+// One category per event, from lto_notification_events.channels.
+const eventCategory = (ev) => {
+  const ch = ev?.channels || []
+  return ch.includes('whatsapp') && ch.includes('email') ? 'both' : ch.includes('email') ? 'email' : 'whatsapp'
+}
+const CATEGORIES = [
+  { key: 'whatsapp', label: 'WhatsApp events' },
+  { key: 'email', label: 'Email events' },
+  { key: 'both', label: 'WhatsApp + Email events' }
+]
+const CATEGORY_LABEL = { whatsapp: 'WhatsApp', email: 'Email', both: 'WhatsApp + Email' }
+
 function Setting() {
   const authContext = useContext(AuthContext) || {}
   const {
@@ -34,12 +46,15 @@ function Setting() {
     fullName: '',
     restrictedLeadSources: [],
     fosAlternateAccess: [],
-    pageAccess: NEW_USER_PAGES
+    pageAccess: NEW_USER_PAGES,
+    whatsappNumber: '', email: '', position: '', department: '', canLogin: true,
+    notifyEvents: []
   })
   // Names seen as receiver / assigned person on enquiries and leads (FOS Enquiries picker)
   const [fosNameOptions, setFosNameOptions] = useState([])
   const [fosNameQuery, setFosNameQuery] = useState('')
-  const [employeeOptions, setEmployeeOptions] = useState([])
+  const [eventOptions, setEventOptions] = useState([]) // lto_notification_events: what a user can be messaged about
+  const [rulesByUser, setRulesByUser] = useState(new Map()) // login id -> { events: [event_key], channel }
   const [leadSourceOptions, setLeadSourceOptions] = useState([])
   const [visiblePasswords, setVisiblePasswords] = useState(new Set())
   const [userSearch, setUserSearch] = useState('')
@@ -57,7 +72,7 @@ function Setting() {
 
   useEffect(() => {
     fetchUsers()
-    fetchEmployeeOptions()
+    fetchNotifyData()
     fetchLeadSourceOptions()
     fetchFosNames()
   }, [])
@@ -72,19 +87,25 @@ function Setting() {
     }
   }
 
-  const fetchEmployeeOptions = async () => {
+  const fetchNotifyData = async () => {
     try {
-      const { data, error } = await supabase
-        .from('lto_dropdown')
-        .select('value')
-        .eq('category', 'employees')
-        .order('value', { ascending: true })
-
-      if (error) throw error
-      setEmployeeOptions((data || []).map(d => d.value).filter(Boolean))
+      const [{ data: events, error: eErr }, { data: rules, error: rErr }] = await Promise.all([
+        supabase.from('lto_notification_events').select('event_key, label, description, channels').eq('is_active', true).order('label', { ascending: true }),
+        supabase.from('lto_notification_rules').select('login_id, event_key, is_active').eq('target_type', 'user')
+      ])
+      if (eErr) throw eErr
+      if (rErr) throw rErr
+      setEventOptions(events || [])
+      const map = new Map()
+      ;(rules || []).filter(r => r.is_active).forEach(r => {
+        const cur = map.get(r.login_id) || { events: [] }
+        cur.events.push(r.event_key)
+        map.set(r.login_id, cur)
+      })
+      setRulesByUser(map)
     } catch (error) {
-      console.error("Error fetching employee options:", error)
-      showNotification("Failed to fetch employee list", "error")
+      console.error("Error fetching notification events:", error)
+      showNotification("Failed to fetch notification events", "error")
     }
   }
 
@@ -119,6 +140,11 @@ function Setting() {
         fullName: u.full_name || u.fullName || '',
         restrictedLeadSources: u.restricted_lead_sources || [],
         fosAlternateAccess: u.fos_alternate_access || [],
+        whatsappNumber: u.whatsapp_number || '',
+        email: u.email || '',
+        position: u.position || '',
+        department: u.department || '',
+        canLogin: u.can_login !== false,
         // No saved list (account older than page access) = the default non-admin pages.
         pageAccess: Array.isArray(u.page_access) ? u.page_access : DEFAULT_USER_PAGES
       }))
@@ -163,13 +189,13 @@ function Setting() {
 
   const handleRefresh = () => {
     fetchUsers()
-    fetchEmployeeOptions()
+    fetchNotifyData()
     fetchLeadSourceOptions()
   }
 
   const openAddModal = () => {
     setModalMode('add')
-    setFormData({ username: '', password: '', userType: 'user', fullName: '', restrictedLeadSources: [], fosAlternateAccess: [], pageAccess: NEW_USER_PAGES })
+    setFormData({ username: '', password: '', userType: 'user', fullName: '', restrictedLeadSources: [], fosAlternateAccess: [], pageAccess: NEW_USER_PAGES, whatsappNumber: '', email: '', position: '', department: '', canLogin: true, notifyEvents: [] })
     setFosNameQuery('')
     setShowFormPassword(false)
     setIsModalOpen(true)
@@ -186,7 +212,13 @@ function Setting() {
       fullName: user.fullName || user.full_name || '',
       restrictedLeadSources: user.restrictedLeadSources || user.restricted_lead_sources || [],
       fosAlternateAccess: user.fosAlternateAccess || user.fos_alternate_access || [],
-      pageAccess: user.pageAccess || DEFAULT_USER_PAGES
+      pageAccess: user.pageAccess || DEFAULT_USER_PAGES,
+      whatsappNumber: user.whatsappNumber || '',
+      email: user.email || '',
+      position: user.position || '',
+      department: user.department || '',
+      canLogin: user.canLogin !== false,
+      notifyEvents: rulesByUser.get(user.id)?.events || []
     })
     setFosNameQuery('')
     setIsModalOpen(true)
@@ -231,18 +263,69 @@ function Setting() {
     });
   }
 
+  const handleNotifyEventToggle = (key) => {
+    setFormData(prev => {
+      const current = prev.notifyEvents || []
+      return { ...prev, notifyEvents: current.includes(key) ? current.filter(k => k !== key) : [...current, key] }
+    })
+  }
+
+  // One rule row per (user, event): remove the events that were unticked, add / refresh the ticked ones.
+  const syncNotifyRules = async (loginId) => {
+    const selected = formData.notifyEvents || []
+    const { error: delErr } = selected.length
+      ? await supabase.from('lto_notification_rules').delete().eq('login_id', loginId).eq('target_type', 'user').not('event_key', 'in', `(${selected.map(k => `"${k}"`).join(',')})`)
+      : await supabase.from('lto_notification_rules').delete().eq('login_id', loginId).eq('target_type', 'user')
+    if (delErr) throw delErr
+    if (!selected.length) return
+    const { error: upErr } = await supabase
+      .from('lto_notification_rules')
+      .upsert(selected.map(event_key => ({ event_key, target_type: 'user', login_id: loginId, channel: eventCategory(eventOptions.find(ev => ev.event_key === event_key)), is_active: true })), { onConflict: 'event_key,login_id' })
+    if (upErr) throw upErr
+  }
+
   const handleFormSubmit = async (e) => {
     e.preventDefault()
-    if (!formData.username) {
+    const canLogin = formData.canLogin !== false
+    if (canLogin && !formData.username) {
       showNotification("Username is required", "error")
       return
     }
-    if (modalMode === 'add' && !formData.password) {
+    if (canLogin && modalMode === 'add' && !formData.password) {
       showNotification("Password is required for new users", "error")
       return
     }
-    if (!formData.fullName) {
+    const whatsapp = String(formData.whatsappNumber || '').replace(/\D/g, '')
+    if (whatsapp && !/^[6-9]\d{9}$/.test(whatsapp)) {
+      showNotification("WhatsApp number must be a 10-digit mobile number", "error")
+      return
+    }
+    const email = String(formData.email || '').trim().toLowerCase()
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      showNotification("Enter a valid email address", "error")
+      return
+    }
+    if ((formData.notifyEvents || []).length) {
+      const categories = (formData.notifyEvents || []).map(k => eventCategory(eventOptions.find(ev => ev.event_key === k)))
+      const needsWhatsapp = categories.some(c => c !== 'email')
+      const needsEmail = categories.some(c => c !== 'whatsapp')
+      if (needsWhatsapp && !whatsapp) {
+        showNotification("Add a WhatsApp number to send this user WhatsApp messages", "error")
+        return
+      }
+      if (needsEmail && !email) {
+        showNotification("Add an email address to send this user emails", "error")
+        return
+      }
+    }
+    const fullName = String(formData.fullName || '').replace(/\s+/g, ' ').trim().toUpperCase()
+    if (!fullName) {
       showNotification("Full Name is required", "error")
+      return
+    }
+    const nameTaken = users.some(u => u.username !== editingUsername && String(u.fullName || '').trim().toUpperCase() === fullName)
+    if (nameTaken) {
+      showNotification("Another user already has this Full Name", "error")
       return
     }
     if (
@@ -254,33 +337,48 @@ function Setting() {
       return
     }
 
-    if (formData.userType !== 'admin' && (formData.pageAccess || []).length === 0) {
+    if (canLogin && formData.userType !== 'admin' && (formData.pageAccess || []).length === 0) {
       showNotification("Select at least one page this user can open", "error")
       return
     }
 
+    // Contact-only entries need no credentials: an internal username and a random
+    // password keep the table's NOT NULL columns filled, and can_login = false blocks sign-in.
+    const contact = {
+      whatsapp_number: whatsapp || null,
+      email: email || null,
+      position: formData.position.trim() || null,
+      department: formData.department.trim() || null,
+      can_login: canLogin
+    }
+    const username = formData.username || `contact.${Date.now()}`
+    const newPassword = formData.password || (canLogin ? '' : crypto.randomUUID())
+
     setIsUpdating(true)
     try {
       if (modalMode === 'add') {
-        const { error } = await supabase
+        const { data: inserted, error } = await supabase
           .from('login')
           .insert([{
-            username: formData.username,
-            password: formData.password,
+            ...contact,
+            username,
+            password: newPassword,
             usertype: formData.userType,
-            full_name: formData.fullName,
+            full_name: fullName,
             restricted_lead_sources: formData.restrictedLeadSources,
             fos_alternate_access: formData.userType === 'admin' ? [] : formData.fosAlternateAccess,
             // Admin sees every page, so no list is stored for them.
             page_access: formData.userType === 'admin' ? null : formData.pageAccess
-          }])
+          }]).select('id').single()
         if (error) throw error
+        await syncNotifyRules(inserted.id)
         showNotification("User added successfully", "success")
       } else {
         const updatePayload = {
-          username: formData.username,
+          ...contact,
+          username,
           usertype: formData.userType,
-          full_name: formData.fullName,
+          full_name: fullName,
           restricted_lead_sources: formData.restrictedLeadSources,
           fos_alternate_access: formData.userType === 'admin' ? [] : formData.fosAlternateAccess,
           page_access: formData.userType === 'admin' ? null : formData.pageAccess
@@ -293,11 +391,12 @@ function Setting() {
           .update(updatePayload)
           .eq('username', editingUsername)
         if (error) throw error
+        await syncNotifyRules(users.find(u => u.username === editingUsername)?.id)
         showNotification("User updated successfully", "success")
       }
 
       setIsModalOpen(false)
-      await fetchUsers()
+      await Promise.all([fetchUsers(), fetchNotifyData()])
     } catch (error) {
       console.error("Error saving user:", error)
       showNotification(error.message || "Failed to save user", "error")
@@ -385,6 +484,7 @@ function Setting() {
                 <th scope="col" className="border-b bg-secondary px-4 py-2.5">Role</th>
                 <th scope="col" className="border-b bg-secondary px-4 py-2.5">Page Access</th>
                 <th scope="col" className="border-b bg-secondary px-4 py-2.5">Data Access</th>
+                <th scope="col" className="border-b bg-secondary px-4 py-2.5">Contact</th>
               </tr>
             </thead>
             <tbody className="bg-card">
@@ -488,12 +588,29 @@ function Setting() {
                         <span className="text-xs text-muted-foreground">Own records (by name)</span>
                       )}
                     </td>
+                    <td className="whitespace-nowrap border-b px-4 py-3 text-xs">
+                      {!user.canLogin && (
+                        <span className="mb-1 inline-flex items-center rounded-full border bg-secondary px-2 py-0.5 font-medium text-muted-foreground">Contact only</span>
+                      )}
+                      {user.position && <p className="font-medium text-foreground">{user.position}{user.department ? ` | ${user.department}` : ''}</p>}
+                      {user.whatsappNumber && <p className="font-mono text-muted-foreground">{user.whatsappNumber}</p>}
+                      {user.email && <p className="text-muted-foreground">{user.email}</p>}
+                      {rulesByUser.get(user.id)?.events.length > 0 && (
+                        <p className="mt-1 text-primary">
+                          {rulesByUser.get(user.id).events.map(k => {
+                            const ev = eventOptions.find(e => e.event_key === k)
+                            return ev ? `${ev.label} (${CATEGORY_LABEL[eventCategory(ev)]})` : k
+                          }).join(', ')}
+                        </p>
+                      )}
+                      {!user.position && !user.whatsappNumber && !user.email && user.canLogin && <span className="text-muted-foreground">-</span>}
+                    </td>
                   </tr>
                 )
               })}
               {visibleUsers.length === 0 && (
                 <tr>
-                  <td colSpan="7" className="px-6 py-8 text-center text-muted-foreground">
+                  <td colSpan="8" className="px-6 py-8 text-center text-muted-foreground">
                     {users.length === 0 ? 'No users found.' : 'No users match your search.'}
                   </td>
                 </tr>
@@ -586,29 +703,116 @@ function Setting() {
                   value={formData.username}
                   onChange={(e) => setFormData({...formData, username: e.target.value})}
                   className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
-                  placeholder="e.g. jdoe"
-                  required
+                  placeholder={formData.canLogin === false ? "Optional for contact only" : "e.g. jdoe"}
+                  required={formData.canLogin !== false}
                 />
               </div>
               <div>
                 <label htmlFor="user-fullname" className="mb-1 block text-sm font-medium text-foreground">Full Name</label>
-                <select
+                <input
                   id="user-fullname"
+                  type="text"
                   value={formData.fullName}
                   onChange={(e) => setFormData({...formData, fullName: e.target.value})}
-                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm uppercase focus:border-primary focus:outline-none"
+                  placeholder="e.g. RISHABH CHOUBEY"
                   required
-                >
-                  <option value="" disabled>Select employee</option>
-                  {employeeOptions.map((name) => (
-                    <option key={name} value={name}>{name}</option>
-                  ))}
-                </select>
+                />
               </div>
             </div>
             <p className="-mt-2 text-xs text-muted-foreground">
-              Full Name must match the "SC Assigned" name on leads/enquiries so this user only sees records assigned to them.
+              Type the Full Name exactly as the "SC Assigned" name on leads/enquiries so this user only sees records assigned to them.
             </p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="user-whatsapp" className="mb-1 block text-sm font-medium text-foreground">WhatsApp Number</label>
+                <input
+                  id="user-whatsapp"
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
+                  value={formData.whatsappNumber}
+                  onChange={(e) => setFormData({...formData, whatsappNumber: e.target.value.replace(/\D/g, '').slice(0, 10)})}
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                  placeholder="10-digit mobile"
+                />
+              </div>
+              <div>
+                <label htmlFor="user-email" className="mb-1 block text-sm font-medium text-foreground">Email</label>
+                <input
+                  id="user-email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                  placeholder="name@company.com"
+                />
+              </div>
+              <div>
+                <label htmlFor="user-position" className="mb-1 block text-sm font-medium text-foreground">Position</label>
+                <input
+                  id="user-position"
+                  type="text"
+                  value={formData.position}
+                  onChange={(e) => setFormData({...formData, position: e.target.value})}
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                  placeholder="e.g. Sales Head"
+                />
+              </div>
+              <div>
+                <label htmlFor="user-department" className="mb-1 block text-sm font-medium text-foreground">Department</label>
+                <input
+                  id="user-department"
+                  type="text"
+                  value={formData.department}
+                  onChange={(e) => setFormData({...formData, department: e.target.value})}
+                  className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none"
+                  placeholder="Optional"
+                />
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <input
+                type="checkbox"
+                checked={formData.canLogin !== false}
+                onChange={(e) => setFormData({...formData, canLogin: e.target.checked})}
+                className="h-4 w-4 rounded border-input"
+              />
+              Can sign in to this app
+              <span className="font-normal text-muted-foreground">(untick for a contact that only receives WhatsApp / mail)</span>
+            </label>
+            <div className="rounded-md border p-3">
+              <p className="mb-2 text-sm font-medium text-foreground">Send this user messages for</p>
+              {eventOptions.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No events available.</p>
+              ) : (
+                <div className="space-y-3">
+                  {CATEGORIES.map(cat => {
+                    const list = eventOptions.filter(ev => eventCategory(ev) === cat.key)
+                    if (!list.length) return null
+                    return (
+                      <fieldset key={cat.key} className="space-y-1.5">
+                        <legend className="mb-1 text-xs font-semibold text-brand-800">{cat.label}</legend>
+                        {list.map(ev => (
+                          <label key={ev.event_key} className="flex items-start gap-2 text-sm text-foreground">
+                            <input
+                              type="checkbox"
+                              checked={(formData.notifyEvents || []).includes(ev.event_key)}
+                              onChange={() => handleNotifyEventToggle(ev.event_key)}
+                              className="mt-0.5 h-4 w-4 rounded border-input"
+                            />
+                            <span>
+                              {ev.label}
+                              {ev.description && <span className="block text-xs text-muted-foreground">{ev.description}</span>}
+                            </span>
+                          </label>
+                        ))}
+                      </fieldset>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <label htmlFor="user-password" className="mb-1 block text-sm font-medium text-foreground">
@@ -623,7 +827,7 @@ function Setting() {
                     onChange={(e) => setFormData({...formData, password: e.target.value})}
                     className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm focus:border-primary focus:outline-none pr-10"
                     placeholder={modalMode === 'edit' ? "Enter new password" : "Enter password"}
-                    required={modalMode === 'add'}
+                    required={modalMode === 'add' && formData.canLogin !== false}
                   />
                   <button
                     type="button"

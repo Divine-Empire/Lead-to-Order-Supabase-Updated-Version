@@ -115,13 +115,13 @@ function App() {
         try {
           const { data, error } = await supabase
             .from('login')
-            .select('usertype, alternate_access, full_name, restricted_lead_sources, page_access')
+            .select('usertype, alternate_access, full_name, restricted_lead_sources, page_access, can_login')
             .eq('username', parsedUser.username)
             .maybeSingle()
 
           // The stored username isn't in the login table (e.g. edited in
-          // DevTools, or the account was deleted): don't trust the session.
-          if (!error && !data) {
+          // DevTools, or the account was deleted) or sign-in was switched off: don't trust the session.
+          if (!error && (!data || data.can_login === false)) {
             endInvalidSession()
             return
           }
@@ -182,12 +182,12 @@ function App() {
       try {
         const { data, error } = await supabase
           .from('login')
-          .select('usertype, page_access')
+          .select('usertype, page_access, can_login')
           .eq('username', username)
           .maybeSingle()
         if (error) return
         if (data) applyPageAccess(data.page_access) // an admin's change reaches an open session on the next focus / check
-        if (!data) {
+        if (!data || data.can_login === false) {
           endInvalidSession()
         } else if ((data.usertype || null) !== userTypeRef.current) {
           setUserType(data.usertype || null)
@@ -323,13 +323,14 @@ function App() {
       // Query Supabase login table - now also fetching alternate_access + full_name + restricted_lead_sources
       const { data, error } = await supabase
         .from('login')
-        .select('username, usertype, alternate_access, full_name, restricted_lead_sources, page_access')
+        .select('username, usertype, alternate_access, full_name, restricted_lead_sources, page_access, can_login')
         .eq('username', username)
         .eq('password', password)
         .single()
 
-      if (error) {
-        console.error("Login error:", error);
+      // Contact-only entries (can_login = false) never sign in.
+      if (error || data?.can_login === false) {
+        if (error) console.error("Login error:", error);
         showNotification("Invalid credentials", "error");
         return false;
       }

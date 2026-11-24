@@ -1,8 +1,8 @@
 // Edge Function: send-duplicate-entry-notification
 //
-// WhatsApps the active rows of lto_whatsapp_recipients (Master Data >
-// WhatsApp Recipients) with the "lto_duplicate_entries" template when a
-// new duplicate enquiry/lead log is created in lto_duplicate_enquiry_logs.
+// Notifies the users who have the "duplicate_entry" event (Settings > user >
+// "Send this user messages for"; rules in lto_notification_rules, sent by
+// _shared/notify.ts) when a new duplicate enquiry/lead log is created in lto_duplicate_enquiry_logs.
 //
 // Template body:
 //   Hi {{1}},
@@ -20,8 +20,7 @@
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase itself.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const TEMPLATE_NAME = Deno.env.get("WHATSAPP_DUPLICATE_ENTRIES_TEMPLATE") ?? "lto_duplicate_entries";
+import { dispatch } from "../_shared/notify.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,22 +30,11 @@ const corsHeaders = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
-const param = (value: unknown) => {
-  const text = String(value ?? "").replace(/[\r\n\t]+/g, " ").replace(/ {2,}/g, " ").trim();
-  return { type: "text", text: text || "-" };
-};
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
     const { logId } = await req.json().catch(() => ({}));
-
-    const token = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
-    const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
-    if (!token || !phoneNumberId) {
-      return json({ success: false, error: "WhatsApp credentials are not configured" }, 500);
-    }
 
     const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
@@ -81,65 +69,19 @@ Deno.serve(async (req) => {
       }
     }
 
-    const { data: recipients, error: rErr } = await db
-      .from("lto_whatsapp_recipients")
-      .select("name, phone")
-      .eq("is_active", true);
+    const result = await dispatch(db, "duplicate_entry", {}, { dedupeKey: logId ?? null });
 
-    if (rErr) throw rErr;
-    if (!recipients?.length) {
-      if (logId) {
-        await db.from("lto_duplicate_enquiry_logs").update({ wa_notified_at: null }).eq("id", logId).catch(() => {});
-      }
-      return json({ success: true, sent: 0, skipped: "no_active_recipients" });
-    }
-
-    const url = `https://graph.facebook.com/${Deno.env.get("WHATSAPP_API_VERSION") ?? "v21.0"}/${phoneNumberId}/messages`;
-    const language = Deno.env.get("WHATSAPP_TEMPLATE_LANGUAGE") ?? "en";
-
-    const results = await Promise.all(
-      recipients.map(async (r) => {
-        try {
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              messaging_product: "whatsapp",
-              to: `91${r.phone}`,
-              type: "template",
-              template: {
-                name: TEMPLATE_NAME,
-                language: { code: language },
-                components: [
-                  {
-                    type: "body",
-                    parameters: [
-                      param(r.name),
-                    ],
-                  },
-                ],
-              },
-            }),
-          });
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) return { name: r.name, success: false, error: body?.error?.message ?? `HTTP ${res.status}` };
-          return { name: r.name, success: true };
-        } catch (e) {
-          return { name: r.name, success: false, error: (e as Error).message };
-        }
-      }),
-    );
-
-    const sent = results.filter((r) => r.success).length;
-    if (sent === 0 && logId) {
+    // Nobody got it: release the claim so a later call can try again.
+    if (!result.sent && logId) {
       await db.from("lto_duplicate_enquiry_logs").update({ wa_notified_at: null }).eq("id", logId).catch(() => {});
     }
 
     return json({
-      success: sent > 0,
-      sent,
-      failed: results.filter((r) => !r.success),
-      error: sent === 0 ? results[0]?.error ?? "No message could be sent" : undefined,
+      success: !!result.sent,
+      sent: result.sent ?? 0,
+      failed: result.failed ?? [],
+      skipped: result.skipped,
+      error: result.sent ? undefined : (result.failed?.[0]?.error ?? result.error ?? "No message could be sent"),
     });
   } catch (e) {
     return json({ success: false, error: (e as Error).message }, 500);

@@ -238,11 +238,11 @@ const FOS_METRIC_COLUMNS = [
     { key: "mdoF2FVisits", label: "MDO F2F Visits", format: "int" },
     { key: "enquiries", label: "Total Enquiries", format: "int" },
     { key: "quotationValue", label: "Total Quotation Value", format: "currency" },
+    { key: "pipelineCount", label: "Pipeline", format: "int" },
+    { key: "pipelineValue", label: "Pipeline Value", format: "currency" },
     { key: "ordersConverted", label: "Order Converted", format: "int" },
     { key: "orderConvertedValue", label: "Converted Order Value", format: "currency" },
     { key: "avgTicket", label: "Avg Ticket Size", format: "currency" },
-    { key: "pipelineCount", label: "Pipeline", format: "int" },
-    { key: "pipelineValue", label: "Pipeline Value", format: "currency" },
 ];
 
 // Renders one FOS Report table (Leads or Enquiries): one row per FOS team
@@ -1292,7 +1292,7 @@ function Report() {
                 // counts come from a SECURITY DEFINER RPC (see
                 // Database/11_fos_visit_counts_rpc.sql).
                 supabase.rpc("fos_visit_counts", { p_start: rangeStartISO, p_end: rangeEndISO }),
-                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_receiver_name, created_at")),
+                fetchAllRows(() => supabase.from("lto_enquiries").select("id, enquiry_receiver_name, enquiry_assign_to_person, created_at")),
                 // Quotations created (make-quotation stage) in range.
                 fetchAllRows(() => inRangeTracker(supabase.from("lto_enquiry_tracker")
                     .select("enquiry_id, quotation_number, quotation_value_without_tax, created_at")
@@ -1353,6 +1353,12 @@ function Report() {
             const receiverByEnquiryId = new Map();
             (allEnquiries || []).forEach(e => receiverByEnquiryId.set(e.id, e.enquiry_receiver_name));
             const personOfEnquiry = (enquiryId) => resolvePerson(receiverByEnquiryId.get(enquiryId));
+            // Pipeline follows enquiry_assign_to_person (multi-select): an enquiry assigned to
+            // several people counts in full for each of them, once per person.
+            const assignedByEnquiryId = new Map();
+            (allEnquiries || []).forEach(e => assignedByEnquiryId.set(e.id, e.enquiry_assign_to_person));
+            const assignedPersonsOfEnquiry = (enquiryId) =>
+                [...new Set(toPersonList(assignedByEnquiryId.get(enquiryId)).map(resolvePerson).filter(Boolean))];
 
             // Total Enquiries: enquiries created in range, by receiver name.
             (allEnquiries || []).forEach(e => {
@@ -1381,7 +1387,7 @@ function Report() {
                 stats.get(person).orderConvertedValue += orderValueByQuotationNo.get(String(row.quotation_number || "").trim()) || 0;
             });
 
-            // Pipeline: enquiries with a tracker row in range that has no
+            // Pipeline (credited by enquiry_assign_to_person, not the receiver): enquiries with a tracker row in range that has no
             // order status, and that never reached yes/no/hold on ANY tracker
             // row (so an enquiry that has since converted, been lost or been
             // put on hold drops out). Pipeline Value = their make-quotation values (latest
@@ -1403,16 +1409,15 @@ function Report() {
                 });
                 idChunk.forEach(id => {
                     if (resolved.has(id)) return;
-                    const person = personOfEnquiry(id);
-                    if (person) stats.get(person).pipelineCount++;
+                    assignedPersonsOfEnquiry(id).forEach(person => { stats.get(person).pipelineCount++; });
                 });
                 (rows || []).forEach(r => {
                     if (!resolved.has(r.enquiry_id) && r.current_stage === "make-quotation") pipelineQuotationRows.push(r);
                 });
             }
             latestQuotationPerFamily(pipelineQuotationRows, "enquiry_id").forEach(q => {
-                const person = personOfEnquiry(q.enquiry_id);
-                if (person) stats.get(person).pipelineValue += parseMoney(q.quotation_value_without_tax);
+                const amount = parseMoney(q.quotation_value_without_tax);
+                assignedPersonsOfEnquiry(q.enquiry_id).forEach(person => { stats.get(person).pipelineValue += amount; });
             });
 
             const rows = [...stats.values()]

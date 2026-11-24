@@ -13,7 +13,6 @@ import Consignors from "./Consignors";
 import Items from "./Items";
 import TatConfig from "./tatConfig";
 import ReportPersons from "./ReportPersons";
-import WhatsAppRecipients from "./WhatsAppRecipients";
 
 export default function Master() {
   const { substage } = useParams();
@@ -71,8 +70,6 @@ export default function Master() {
         return <TatConfig />;
       case "report-persons":
         return <ReportPersons />;
-      case "whatsapp-recipients":
-        return <WhatsAppRecipients />;
       default:
         return <ClientMaster />;
     }

@@ -200,7 +200,6 @@ function Sidebar({ mobileMenuOpen, setMobileMenuOpen }) {
         { href: "/master/items", label: "Items", id: "items", adminOnly: true },
         { href: "/master/tat-config", label: "TAT Configuration", id: "tat-config", adminOnly: true },
         { href: "/master/report-persons", label: "Report Persons", id: "report-persons", adminOnly: true },
-        { href: "/master/whatsapp-recipients", label: "WhatsApp Recipients", id: "whatsapp-recipients", adminOnly: true },
     ];
 
     // Master Data pages are granted one by one (page access "master:<id>").
